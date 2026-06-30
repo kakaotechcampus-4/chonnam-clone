@@ -91,6 +91,7 @@ def _validate_schedule_input(
     date: str,
     start_time: str,
     end_time: str,
+    end_date: str | None,
 ) -> dict[str, Any]:
     """일정 생성 입력의 누락값, 형식, 시간 순서를 검사합니다."""
 
@@ -122,13 +123,29 @@ def _validate_schedule_input(
     if end_time != "미정" and not _is_valid_time(end_time):
         invalid_fields["end_time"] = "HH:MM 형식의 실제 시간이거나 '미정'이어야 합니다."
 
+    if end_date is not None and not _is_valid_date(end_date):
+        invalid_fields["end_date"] = "YYYY-MM-DD 형식의 실제 날짜여야 합니다."
+
     times_are_valid = (
-        "start_time" not in missing_fields
+        "date" not in missing_fields
+        and "date" not in invalid_fields
+        and "start_time" not in missing_fields
         and "start_time" not in invalid_fields
         and "end_time" not in invalid_fields
+        and "end_date" not in invalid_fields
     )
-    if times_are_valid and end_time != "미정" and end_time <= start_time:
-        invalid_fields["end_time"] = "시작 시간보다 늦어야 합니다."
+    if times_are_valid and end_time != "미정":
+        normalized_end_date = end_date or date
+        start_at = datetime.strptime(f"{date} {start_time}", "%Y-%m-%d %H:%M")
+        end_at = datetime.strptime(f"{normalized_end_date} {end_time}", "%Y-%m-%d %H:%M")
+        if end_at <= start_at:
+            if end_date is None and end_time <= start_time:
+                invalid_fields["end_date"] = (
+                    "종료 시각이 시작 시각보다 빠르거나 같습니다. "
+                    "자정을 넘기는 일정인지 종료 날짜를 확인해 주세요."
+                )
+            else:
+                invalid_fields["end_date"] = "종료 일시는 시작 일시보다 늦어야 합니다."
 
     return {
         "valid": not missing_fields and not invalid_fields,
@@ -143,15 +160,17 @@ def personal_create_schedule(
     date: str,
     start_time: str,
     end_time: str = "미정",
+    end_date: str | None = None,
     attendees: list[str] | None = None,
 ) -> str:
     """새 개인 일정을 생성합니다.
 
     사용자가 일정을 만들거나 등록해 달라고 요청할 때 사용합니다.
-    date는 YYYY-MM-DD, start_time과 지정된 end_time은 HH:MM 형식으로 전달합니다.
+    date와 end_date는 YYYY-MM-DD, 시간은 HH:MM 형식으로 전달합니다.
+    end_date를 생략하면 date와 같은 날로 처리합니다.
     """
 
-    validation = _validate_schedule_input(title, date, start_time, end_time)
+    validation = _validate_schedule_input(title, date, start_time, end_time, end_date)
     if not validation["valid"]:
         return _json(
             {
@@ -168,6 +187,7 @@ def personal_create_schedule(
         "title": title.strip(),
         "date": date,
         "start_time": start_time,
+        "end_date": end_date or date,
         "end_time": end_time,
         "attendees": list(attendees or []),
         "created_at": _now_iso(),
@@ -261,6 +281,12 @@ def week01_prompt_parts() -> list[str]:
 
         날짜는 YYYY-MM-DD, 시간은 HH:MM 형식으로 tool에 전달한다.
         '오늘', '내일', '다음 주 화요일' 같은 상대 날짜는 현재 날짜를 기준으로 해석한다.
+        종료 시각이 시작 시각보다 늦으면 종료 날짜는 시작 날짜와 같은 날로 처리하고
+        end_date를 생략한다.
+        종료 시각이 시작 시각보다 빠르거나 같으면 자정을 넘기는 일정일 수 있으므로,
+        사용자가 다음 날이라고 말했더라도 계산한 종료 날짜를 한 번만 확인한다.
+        사용자가 그 날짜에 동의하면 이전 일정 정보와 확인한 end_date를 합쳐 즉시
+        personal_create_schedule을 호출하고, 종료 날짜를 다시 묻지 않는다.
 
         삭제에는 정확한 schedule_id가 필요하다.
         schedule_id를 모르면 먼저 personal_list_schedules를 사용한다.

@@ -7,7 +7,7 @@
 - Python validator: 문자열 형식, 실제 날짜·시간, 값 사이의 관계
 
 함수 시그니처에서 `title`, `date`, `start_time`은 필수이고 `end_time`,
-`attendees`는 선택이다. 필수 인자가 tool call에서 완전히 빠지면 LangChain의 schema
+`end_date`, `attendees`는 선택이다. 필수 인자가 tool call에서 완전히 빠지면 LangChain의 schema
 검증이 함수 실행 전에 실패할 수 있으므로, agent가 호출 전에 누락값을 질문하도록
 프롬프트에도 원칙을 둔다.
 
@@ -29,6 +29,7 @@ def _validate_schedule_input(
     date: str,
     start_time: str,
     end_time: str,
+    end_date: str | None,
 ) -> dict[str, Any]:
     ...
 ```
@@ -41,9 +42,10 @@ def _validate_schedule_input(
 1. `title`, `date`, `start_time`의 공백 여부를 확인한다.
 2. 값이 존재하는 날짜와 시간만 형식을 검증한다.
 3. `end_time != "미정"`일 때 종료 시간 형식을 검증한다.
-4. 시작과 종료가 모두 유효하면 `end_time > start_time`인지 확인한다.
-5. 오류가 하나라도 있으면 저장하지 않고 오류 payload를 반환한다.
-6. 오류가 없을 때만 일정 dict를 만들고 append한다.
+4. `end_date`가 없으면 시작일과 같은 날짜로 정규화한다.
+5. 시작과 종료가 모두 유효하면 종료 일시가 시작 일시보다 늦은지 확인한다.
+6. 오류가 하나라도 있으면 저장하지 않고 오류 payload를 반환한다.
+7. 오류가 없을 때만 일정 dict를 만들고 append한다.
 
 ## 필드별 정책
 
@@ -62,8 +64,9 @@ def _validate_schedule_input(
 
 - 24시간제 `HH:MM`을 사용한다.
 - `end_time`은 `"미정"`을 허용한다.
-- 종료 시간이 지정됐다면 시작 시간보다 늦어야 한다.
-- 자정을 넘기는 일정은 Week 1 범위에서 다루지 않고 재확인을 요청한다.
+- 종료 시각이 시작 시각보다 늦으면 종료일은 시작일과 같은 날로 처리한다.
+- 종료 시각이 시작 시각보다 빠르거나 같으면 종료 날짜를 한 번 확인한다.
+- 확인된 `end_date`를 포함한 종료 일시는 시작 일시보다 늦어야 한다.
 
 ### attendees
 
@@ -82,4 +85,3 @@ def _validate_schedule_input(
 입력 검증 helper는 학습 품질을 높이는 확장 구현이다. 우선 CRUD의 기본 반환 계약을
 완성한 뒤 추가한다. 자동 평가가 기본 payload만 엄격히 확인할 가능성에 대비해 성공
 payload의 키와 구조는 변경하지 않는다.
-
