@@ -17,6 +17,7 @@ Week 1 일정은 `PERSONAL_SCHEDULES` 전역 리스트에만 저장한다. 앱 S
     "title": "프로젝트 회의",
     "date": "2026-07-03",
     "start_time": "14:00",
+    "end_date": "2026-07-03",
     "end_time": "15:00",
     "attendees": ["민수"],
     "created_at": "2026-06-30T10:30:00.000000+09:00",
@@ -30,6 +31,7 @@ Week 1 일정은 `PERSONAL_SCHEDULES` 전역 리스트에만 저장한다. 앱 S
 - `title`: 공백을 제거한 비어 있지 않은 문자열이다.
 - `date`: `YYYY-MM-DD` 형식의 실제 날짜다.
 - `start_time`: `HH:MM` 형식의 실제 시간이다.
+- `end_date`: `YYYY-MM-DD` 형식의 실제 날짜다. 입력을 생략하면 `date`와 같다.
 - `end_time`: `HH:MM` 또는 `"미정"`이다.
 - `attendees`: 입력이 `None`이면 빈 리스트다.
 - `created_at`: `_now_iso()`로 생성한다.
@@ -108,4 +110,3 @@ PERSONAL_SCHEDULES[:] = remaining_schedules
 
 프롬프트는 오류 종류별 예외 문구를 모두 포함하지 않는다. 대신 `missing_fields`와
 `invalid_fields`를 읽고 해당 값만 사용자에게 요청한다는 일반 규칙을 둔다.
-
