@@ -27,7 +27,7 @@ PERSONAL_SCHEDULES: list[dict[str, Any]] = []
 _WEEK01_AGENT: Any | None = None
 
 # TODO: 현재 채팅 기억 관련 공통 system prompt를 자유롭게 추가하세요.
-CHAT_MEMORY_PROMPT = None
+CHAT_MEMORY_PROMPT = "이전 대화보다 최근 대화를 우선한다. 같은 내용이 여러 번 나오면 가장 마지막에 나온 내용을 정답으로 삼는다. "
 
 
 def join_system_prompt(parts: list[str]) -> str:
@@ -159,12 +159,6 @@ def _current_session_schedules() -> list[dict[str, Any]]:
     session_id = current_session_scope()
     return [schedule for schedule in PERSONAL_SCHEDULES if _schedule_scope(schedule) == session_id]
 
-CHAT_MEMORY_PROMPT = (
-    f"너는 개인 일정 메이트 나나다. 현재 시각은 {_now_iso()}이다. 상대 날짜는 이 날짜 기준으로 YYYY-MM-DD로 바꾼다. "
-    "일정 생성, 조회, 삭제가 필요하면 반드시 알맞은 도구를 호출한 뒤 짧게 답한다. "
-    "삭제 요청은 사용자가 말한 schedule_id를 personal_delete_schedule 도구에 전달한다."
-)
-
 @tool
 def personal_create_schedule(
     title: str,
@@ -209,13 +203,15 @@ def personal_list_schedules(date_from: str | None = None, date_to: str | None = 
 def personal_delete_schedule(schedule_id: str) -> str:
     """일정 ID에 해당하는 개인 일정을 삭제합니다."""
     # TODO: 현재 대화 범위에서 schedule_id가 일치하는 개인 일정을 삭제하세요.
+    before = len(PERSONAL_SCHEDULES)
     deleted_schedule = None
     for idx, schedule in enumerate(PERSONAL_SCHEDULES):
         if schedule["id"] == schedule_id and _schedule_scope(schedule) == current_session_scope():
             deleted_schedule = PERSONAL_SCHEDULES.pop(idx)
             break
+    deleted = len(PERSONAL_SCHEDULES) < before
     return _json(
-        {"ok": deleted_schedule is not None, "deleted": deleted_schedule is not None, "schedule_id": schedule_id}
+        {"ok": deleted_schedule is not None, "deleted": deleted, "schedule_id": schedule_id}
     )
 
 
@@ -236,7 +232,10 @@ def week01_prompt_parts() -> list[str]:
 
     return [
         # TODO: Week 1 Nana 일정 agent system prompt를 자유롭게 추가하세요.
-        CHAT_MEMORY_PROMPT
+        CHAT_MEMORY_PROMPT, 
+        f"너는 개인 일정 메이트 나나다. 상대 날짜는 현재 날짜 기준으로 YYYY-MM-DD로 바꾼다. "
+        "일정 생성, 조회, 삭제가 필요하면 반드시 알맞은 도구를 호출한 뒤 짧게 답한다. "
+        "삭제 요청은 사용자가 말한 schedule_id를 personal_delete_schedule 도구에 전달한다."
     ]
 
 
