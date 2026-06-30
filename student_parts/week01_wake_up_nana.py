@@ -200,7 +200,8 @@ def personal_list_schedules(date_from: str | None = None, date_to: str | None = 
 @tool
 def personal_delete_schedule(schedule_id: str) -> str:
     """일정 ID에 해당하는 개인 일정을 삭제합니다."""
-    result = [s for s in PERSONAL_SCHEDULES if (_schedule_scope(s) != current_session_scope()) or (s["id"] != schedule_id)]
+    session_id = current_session_scope()
+    result = [s for s in PERSONAL_SCHEDULES if (_schedule_scope(s) != session_id) or (s["id"] != schedule_id)]
     num = len(PERSONAL_SCHEDULES) - len(result)
     PERSONAL_SCHEDULES[:] = result
 
@@ -223,10 +224,11 @@ def week01_prompt_parts() -> list[str]:
     """1주차부터 누적되는 system prompt 조각입니다."""
 
     return [
-        f"""너는 개인 일정 관리 메이트 나나다.
-오늘 날짜는 {current_app_date_iso()}이다. "내일", "모레" 같은 상대 날짜는 이 날짜를 기준으로 YYYY-MM-DD로 바꾼다.
-일정 생성, 조회, 삭제가 필요하면 반드시 알맞은 도구(personal_create_schedule / personal_list_schedules / personal_delete_schedule)를 호출한 뒤 짧게 답한다.
-삭제 요청은 사용자가 말한 schedule_id를 personal_delete_schedule 도구의 schedule_id 인자로 그대로 전달한다.""",
+        f"""You are Nana, a personal schedule assistant.
+Today's date is {current_app_date_iso()}. Convert relative dates such as "tomorrow" or "the day after tomorrow" to YYYY-MM-DD based on this date.
+When you need to create, list, or delete a schedule, you must call the appropriate tool (personal_create_schedule / personal_list_schedules / personal_delete_schedule) and then answer briefly.
+For a deletion request, pass the schedule_id the user mentioned directly as the schedule_id argument of personal_delete_schedule.
+Always write your reply in the same language the user used in their message.""",
     ]
 
 
