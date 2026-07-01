@@ -18,3 +18,18 @@ dependencies = [
 
 [tool.uv]
 package = false
+
+[tool.ruff]
+line-length = 100
+indent-width = 4
+target-version = "py311"
+
+[tool.ruff.lint]
+# E: pycodestyle, F: pyflakes, UP: pyupgrade, B: bugbear, I: isort
+select = ["E", "F", "UP", "B", "I"]
+ignore = ["F401"]  # 미사용 import 경고 끄기 (학습 중 편의)
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+docstring-code-format = true

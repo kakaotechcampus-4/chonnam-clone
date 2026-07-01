@@ -9,19 +9,9 @@ from langchain.agents import create_agent
 from langchain.tools import tool
 
 from fixed.config import CONFIG
-from fixed.langchain_trace import (
-    extract_agent_events,
-    extract_final_text,
-    extract_langchain_trace,
-    message_content_to_text,
-    message_tool_call_names,
-    normalize_messages_value,
-    stream_chunk_messages,
-)
 from fixed.llm import chat_model
 from fixed.runtime_clock import current_app_date_iso, next_weekday_iso
 from fixed.session_scope import DEFAULT_SESSION_SCOPE, current_session_scope
-
 
 PERSONAL_SCHEDULES: list[dict[str, Any]] = []
 _WEEK01_AGENT: Any | None = None
@@ -160,12 +150,15 @@ def _current_session_schedules() -> list[dict[str, Any]]:
     return [schedule for schedule in PERSONAL_SCHEDULES if _schedule_scope(schedule) == session_id]
 
 
-@tool("personal_create_schedule", description="개인 일정을 생성한다. date는 YYYY-MM-DD, start_time은 HH:MM 형식이다.")
+@tool(
+    "personal_create_schedule",
+    description="개인 일정을 생성한다. date는 YYYY-MM-DD, start_time은 HH:MM 형식이다.",
+)
 def personal_create_schedule(
     title: str,
     date: str,
     start_time: str,
-    end_time: str = "미정",
+    end_time: str | None = None,
     attendees: list[str] | None = None,
 ) -> str:
     """Nana의 개인 일정을 현재 대화의 임시 메모리에 생성합니다."""
@@ -184,8 +177,13 @@ def personal_create_schedule(
         "created_at": created_at,
     }
     PERSONAL_SCHEDULES.append(schedule)
-    return _json({"ok": True,"tool_name": "personal_create_schedule" , "created_schedule": schedule })
-
+    return _json(
+        {
+            "ok": True,
+            "tool_name": "personal_create_schedule",
+            "created_schedule": schedule,
+        }
+    )
 
 
 @tool
@@ -193,19 +191,34 @@ def personal_list_schedules(date_from: str | None = None, date_to: str | None = 
     """선택한 시작일과 종료일 범위에 포함되는 Nana의 개인 일정을 조회합니다."""
 
     schedule_list = _current_session_schedules()
-    result = [s for s in schedule_list if (date_from is None or s["date"]>=date_from) and (date_to is None or s["date"]<= date_to)]
-    return _json({"ok": True,"tool_name": "personal_list_schedules" , "schedules": result })
+    result = [
+        s
+        for s in schedule_list
+        if (date_from is None or s["date"] >= date_from)
+        and (date_to is None or s["date"] <= date_to)
+    ]
+    display = []
+    for s in result:
+        s_copy = s.copy()
+        if s_copy["end_time"] is None:
+            s_copy["end_time"] = "미정"
+        display.append(s_copy)
+    return _json({"ok": True, "tool_name": "personal_list_schedules", "schedules": display})
 
 
 @tool
 def personal_delete_schedule(schedule_id: str) -> str:
     """일정 ID에 해당하는 개인 일정을 삭제합니다."""
     session_id = current_session_scope()
-    result = [s for s in PERSONAL_SCHEDULES if (_schedule_scope(s) != session_id) or (s["id"] != schedule_id)]
+    result = [
+        s
+        for s in PERSONAL_SCHEDULES
+        if (_schedule_scope(s) != session_id) or (s["id"] != schedule_id)
+    ]
     num = len(PERSONAL_SCHEDULES) - len(result)
     PERSONAL_SCHEDULES[:] = result
 
-    return _json({"ok": True,"tool_name": "personal_delete_schedule" , "deleted": num })
+    return _json({"ok": True, "tool_name": "personal_delete_schedule", "deleted": num})
 
 
 def week01_tools() -> list[Any]:
@@ -253,10 +266,14 @@ def build_week_agent() -> object:
     return build_week01_agent()
 
 
-def list_personal_schedule_dicts(date_from: str | None = None, date_to: str | None = None) -> list[dict[str, Any]]:
+def list_personal_schedule_dicts(
+    date_from: str | None = None, date_to: str | None = None
+) -> list[dict[str, Any]]:
     """개인 일정 dict 목록이 필요한 내부 코드에서 사용하는 비-도구 헬퍼입니다."""
 
-    schedules = json.loads(personal_list_schedules.invoke({"date_from": date_from, "date_to": date_to}))
+    schedules = json.loads(
+        personal_list_schedules.invoke({"date_from": date_from, "date_to": date_to})
+    )
     return schedules["schedules"]
 
 
