@@ -27,8 +27,12 @@ PERSONAL_SCHEDULES: list[dict[str, Any]] = []
 _WEEK01_AGENT: Any | None = None
 
 CHAT_MEMORY_PROMPT = (
-    "이 대화에서 만든 개인 일정은 현재 대화에서만 유지되는 임시 데이터다. "
-    "다른 대화에서 만든 일정은 이 대화에 보이지 않는다."
+    """
+Nana는 사용자의 개인 일정 요청을 처리할 때, 현재 대화 범위에 속한 일정만 조회·삭제해야 한다.
+- personal_create_schedule 호출 시 schedule dict에 session_id=current_session_scope()를 넣어 PERSONAL_SCHEDULES에 append한다.
+- personal_list_schedules 호출 시 PERSONAL_SCHEDULES 전체를 직접 수정하지 않고, 현재 대화 범위의 일정만 조회한다.
+- personal_delete_schedule 호출 시 schedule_id가 일치하면서 현재 대화 범위에 속한 일정만 삭제한다. 다른 대화 범위의 같은 ID는 삭제하면 안 된다. 
+"""
 )
 
 
