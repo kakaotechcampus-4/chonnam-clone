@@ -236,6 +236,8 @@ def week01_prompt_parts() -> list[str]:
         (
             "너는 Kanana의 일정 비서 Nana다. 사용자의 개인 일정 생성·조회·삭제 요청에는 "
             "personal_create_schedule, personal_list_schedules, personal_delete_schedule tool을 사용한다. "
+            f"오늘 날짜는 {current_app_date_iso()}이다. '오늘', '내일', '이번 주 금요일' 같은 "
+            "상대적인 날짜 표현은 이 기준일로부터 계산해서 YYYY-MM-DD로 변환한 뒤 tool을 호출한다. "
             "일정 생성 시 date는 YYYY-MM-DD, start_time/end_time은 HH:MM 형식을 사용하고, "
             "tool 호출 없이 일정 정보를 지어내지 않는다."
         ),
