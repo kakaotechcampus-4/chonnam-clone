@@ -171,7 +171,20 @@ def personal_create_schedule(
     """Nana의 개인 일정을 현재 대화의 임시 메모리에 생성합니다."""
 
     # TODO: PERSONAL_SCHEDULES에 현재 대화 범위의 개인 일정을 생성하세요.
-    ...
+    schedule = {
+        "id": _new_personal_id(),
+        "title": title,
+        "date": date,
+        "start_time": start_time,
+        "end_time":end_time,
+        "attendees": attendees or [],
+        "created_at":_now_iso(),
+        "session_id":current_session_scope(),
+    }
+    PERSONAL_SCHEDULES.append(schedule)
+    
+    
+    return _json({"ok": True, "tool_name": "personal_create_schedule", "created_schedule": schedule} )
 
 
 @tool
@@ -179,7 +192,18 @@ def personal_list_schedules(date_from: str | None = None, date_to: str | None = 
     """선택한 시작일과 종료일 범위에 포함되는 Nana의 개인 일정을 조회합니다."""
 
     # TODO: 현재 대화 범위의 PERSONAL_SCHEDULES를 날짜 조건으로 조회하세요.
-    ...
+    result = []
+    for schedule in _current_session_schedules():
+        if date_from and schedule['date'] < date_from:
+            continue
+        if date_to and schedule['date'] > date_to:
+            continue
+
+        result.append(schedule)
+
+    
+    return _json({"ok": True, "tool_name": "personal_list_schedules", "schedules": result} )
+
 
 
 @tool
@@ -187,7 +211,14 @@ def personal_delete_schedule(schedule_id: str) -> str:
     """일정 ID에 해당하는 개인 일정을 삭제합니다."""
 
     # TODO: 현재 대화 범위에서 schedule_id가 일치하는 개인 일정을 삭제하세요.
-    ...
+    deleted_schedule = None
+    deleted = 0
+    for idx, schedule in enumerate(PERSONAL_SCHEDULES):
+        if schedule['id']==schedule_id and schedule in _current_session_schedules() :
+            deleted_schedule = PERSONAL_SCHEDULES.pop(idx)
+            deleted=1
+    
+    return _json({"ok": deleted_schedule is not None, "tool_name": "personal_delete_schedule", "deleted": deleted})
 
 
 def week01_tools() -> list[Any]:
@@ -204,9 +235,12 @@ def week01_system_prompt() -> str:
 
 def week01_prompt_parts() -> list[str]:
     """1주차부터 누적되는 system prompt 조각입니다."""
-
+    today = current_app_date_iso()
     return [
         # TODO: Week 1 Nana 일정 agent system prompt를 자유롭게 추가하세요.
+        f"오늘 날짜는 {today}이야. 사용자 요청을 분석하다가 날짜에 대한 상대적인 개념(ex, 오늘, 내일)이 나오면 참고해서 판단해줘.",
+        "사용자가 키워드를 기준으로 삭제 요청을 하면 personal_list_schedules 을 수행한 결과에서 schedule_ID를 탐색할 때, 키워드를 title값과 비교하여 찾아줘.",
+        
     ]
 
 
