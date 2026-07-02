@@ -235,9 +235,12 @@ def week01_system_prompt() -> str:
 
 def week01_prompt_parts() -> list[str]:
     """1주차부터 누적되는 system prompt 조각입니다."""
-
+    today = current_app_date_iso()
     return [
         # TODO: Week 1 Nana 일정 agent system prompt를 자유롭게 추가하세요.
+        f"오늘 날짜는 {today}이야. 사용자 요청을 분석하다가 날짜에 대한 상대적인 개념(ex, 오늘, 내일)이 나오면 참고해서 판단해줘.",
+        "사용자가 키워드를 기준으로 삭제 요청을 하면 personal_list_schedules 을 수행한 결과에서 schedule_ID를 탐색할 때, 키워드를 title값과 비교하여 찾아줘.",
+        
     ]
 
 
