@@ -172,7 +172,13 @@ def personal_create_schedule(
     end_time: str = "미정",
     attendees: list[str] | None = None,
 ) -> str:
-    """Nana의 개인 일정을 현재 대화의 임시 메모리에 생성합니다."""
+    """Nana의 개인 일정을 현재 대화의 임시 메모리에 생성합니다.
+
+    - date: YYYY-MM-DD 형식. 상대 표현(예: '다음 주 수요일')은 오늘 날짜 기준으로 변환. 값이 없으면 사용자에게 확인.
+    - start_time: HH:MM 형식. 값이 없으면 임의로 채우지 말고 사용자에게 확인.
+    - end_time: HH:MM 형식. 명시되지 않으면 '미정'으로 설정.
+    - attendees: 참석자 이름 목록. 언급이 없으면 빈 리스트.
+    """
 
     schedule = {
         "id": _new_personal_id(),
@@ -190,7 +196,11 @@ def personal_create_schedule(
 
 @tool
 def personal_list_schedules(date_from: str | None = None, date_to: str | None = None) -> str:
-    """선택한 시작일과 종료일 범위에 포함되는 Nana의 개인 일정을 조회합니다."""
+    """선택한 시작일과 종료일 범위에 포함되는 Nana의 개인 일정을 조회합니다.
+
+    - date_from: YYYY-MM-DD 형식. 이 날짜 이상인 일정만 반환. 생략하면 시작일 제한 없음.
+    - date_to: YYYY-MM-DD 형식. 이 날짜 이하인 일정만 반환. 생략하면 종료일 제한 없음.
+    """
 
     schedules = [
         s for s in _current_session_schedules()
@@ -202,7 +212,10 @@ def personal_list_schedules(date_from: str | None = None, date_to: str | None = 
 
 @tool
 def personal_delete_schedule(schedule_id: str) -> str:
-    """일정 ID에 해당하는 개인 일정을 삭제합니다."""
+    """일정 ID에 해당하는 개인 일정을 삭제합니다.
+
+    - schedule_id: 삭제할 일정의 id 값. 모를 경우 personal_list_schedules로 먼저 조회 후 호출.
+    """
 
     session_id = current_session_scope()
     before = len(PERSONAL_SCHEDULES)
