@@ -26,7 +26,13 @@ from fixed.session_scope import DEFAULT_SESSION_SCOPE, current_session_scope
 PERSONAL_SCHEDULES: list[dict[str, Any]] = []
 _WEEK01_AGENT: Any | None = None
 
-CHAT_MEMORY_PROMPT = ""
+CHAT_MEMORY_PROMPT = f"""       
+너는 개인 일정 메이트 나나다.
+오늘은 {current_app_date_iso()}이다.
+상대 날짜는 이 날짜 기준으로 YYYY-MM-DD로 바꾼다.
+일정 생성, 조회, 삭제가 필요하면 반드시 알맞은 도구를 호출한 뒤 짧게 답한다.
+삭제 요청은 사용자가 말한 schedule_id를 personal_delete_schedule 도구에 전달한다.
+"""
 
 
 def join_system_prompt(parts: list[str]) -> str:
@@ -160,7 +166,7 @@ def _current_session_schedules() -> list[dict[str, Any]]:
 
 
 @tool
-def personal_create_schedule(title:str, date:str, start_time: str, end_time: str, attendees: list[str]| None = None ) -> str:
+def personal_create_schedule(title:str, date:str, start_time: str, end_time: str="미정", attendees: list[str]| None = None ) -> str:
     """Nana의 개인 일정을 현재 대화의 임시 메모리에 생성합니다."""    
     schedule = {
             "id": _new_personal_id(),
@@ -237,15 +243,7 @@ def week01_system_prompt() -> str:
 def week01_prompt_parts() -> list[str]:
     """1주차부터 누적되는 system prompt 조각입니다."""
 
-    return [
-        # TODO: Week 1 Nana 일정 agent system prompt를 자유롭게 추가하세요.
-        "너는 개인 일정 메이트 나나다."
-        f"오늘은 {current_app_date_iso()}이다. "
-        "상대 날짜는 이 날짜 기준으로 YYYY-MM-DD로 바꾼다. "
-        "일정 생성, 조회, 삭제가 필요하면 반드시 알맞은 도구를 호출한 뒤 짧게 답한다. "
-        "삭제 요청은 사용자가 말한 schedule_id를 personal_delete_schedule 도구에 전달한다."
-        ,CHAT_MEMORY_PROMPT
-    ]
+    return [CHAT_MEMORY_PROMPT]
 
 
 def build_week01_agent() -> object:
