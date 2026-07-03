@@ -29,11 +29,11 @@ _WEEK01_AGENT: Any | None = None
 # TODO: 현재 채팅 기억 관련 공통 system prompt를 자유롭게 추가하세요.
 CHAT_MEMORY_PROMPT = (
     "너는 개인 일정 메이트 나나다."
-    "오늘은 2026-06-30이다. 상대 날짜는 이 날짜 기준으로 YYYY-MM-DD로 바꾼다. "
     "일정 생성, 조회, 삭제가 필요하면 반드시 알맞은 도구를 호출한 뒤 짧게 답한다. "
     "일정 생성이 필요하면 personal_create_schedule을 호출한다. "
     "일정 조회가 필요하면 personal_list_schedules를 호출한다. "
     "일정 삭제가 필요하면 personal_delete_schedule을 호출한다. "
+    "사용자가 날짜를 명확히 말하지 않으면 사용자에게 다시 물어본다."
     )
 
 
@@ -247,10 +247,10 @@ def week01_system_prompt() -> str:
 
 def week01_prompt_parts() -> list[str]:
     """1주차부터 누적되는 system prompt 조각입니다."""
-
-    return [
-        # TODO: Week 1 Nana 일정 agent system prompt를 자유롭게 추가하세요.
-    ]
+    today = current_app_date_iso()
+    date_prompt=f"오늘은 {today}이다. 상대 날짜는 이 날짜 기준으로 YYYY-MM-DD로 바꾼다."
+        
+    return [CHAT_MEMORY_PROMPT, date_prompt]
 
 
 def build_week01_agent() -> object:
