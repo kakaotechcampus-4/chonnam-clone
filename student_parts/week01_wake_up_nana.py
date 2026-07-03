@@ -228,11 +228,11 @@ def personal_delete_schedule(schedule_id: str) -> str:
     """일정 ID에 해당하는 개인 일정을 삭제합니다."""
 
     session_id = current_session_scope()
-    deleted = [
-        schedule
-        for schedule in PERSONAL_SCHEDULES
-        if schedule.get("schedule_id") == schedule_id and _schedule_scope(schedule) == session_id
-    ]
+    deleted_schedule = None
+    for schedule in PERSONAL_SCHEDULES:
+        if schedule.get("schedule_id") == schedule_id and _schedule_scope(schedule) == session_id:
+            deleted_schedule = schedule
+            break
     PERSONAL_SCHEDULES[:] = [
         schedule
         for schedule in PERSONAL_SCHEDULES
@@ -243,7 +243,7 @@ def personal_delete_schedule(schedule_id: str) -> str:
         {
             "ok": True,
             "tool_name": "personal_delete_schedule",
-            "deleted": deleted,
+            "deleted_schedule": deleted_schedule,
         }
     )
 
@@ -264,6 +264,7 @@ def week01_prompt_parts() -> list[str]:
     """1주차부터 누적되는 system prompt 조각입니다."""
 
     return [
+        f'The app current date is {current_app_date_iso()}. Use this date to interpret relative dates like "today" and "tomorrow".',
         CHAT_MEMORY_PROMPT,
     ]
 
