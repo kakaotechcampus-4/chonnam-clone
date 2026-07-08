@@ -154,22 +154,25 @@ _WEEK02_AGENT: Any | None = None
 class StructuredRequest(BaseModel):
     """LLM structured output으로 추출되는 2주차 요청 스키마입니다."""
 
-    # TODO: kind 필드를 RequestKind 타입으로 선언하고 Field(description=...)를 붙이세요.
-    # TODO: title/date/start_time/end_time 필드를 str | None 타입으로 선언하고 기본값은 None으로 두세요.
-    # TODO: members 필드를 list[str] 타입으로 선언하고 default_factory=list를 사용하세요.
-    # TODO: priority/reason 필드를 str | None 타입으로 선언하고 기본값은 None으로 두세요.
-    # TODO: original_text 필드를 str 타입으로 선언하고 기본값은 ""로 두세요.
-    # TODO: 각 필드에는 LLM structured output이 이해할 수 있도록 한국어 description을 달아주세요.
-    ...
+    kind: RequestKind = Field(description="요청 종류: personal_schedule/group_schedule/todo/reminder/unknown 중 하나")
+    title: str | None = Field(default=None, description="일정 또는 할 일의 제목")
+    date: str | None = Field(default=None, description="YYYY-MM-DD 형식. 확실할 때만 채운다")
+    start_time: str | None = Field(default=None, description="HH:MM 형식. 확실할 때만 채운다")
+    end_time: str | None = Field(default=None, description="HH:MM 형식. 확실할 때만 채운다")
+    members: list[str] = Field(default_factory=list, description="참석자 또는 관련 인물 목록. 모르면 빈 리스트")
+    priority: str | None = Field(default=None, description="할 일의 우선순위")
+    reason: str | None = Field(default=None, description="이 kind/필드로 판단한 근거")
+    original_text: str = Field(default="", description="사용자가 입력한 원문 또는 원본 JSON 문자열")
 
 
 class StructuredRequestBatch(BaseModel):
     """여러 자연어 의도를 StructuredRequest 목록으로 나누는 메인과제 스키마입니다."""
 
-    # TODO: requests 필드를 list[StructuredRequest] 타입으로 선언하고 default_factory=list를 사용하세요.
-    # TODO: base_date 필드를 str 타입으로 선언하고 default_factory=current_app_date_iso를 사용하세요.
-    # TODO: 각 필드에는 Week 2 구조화 결과와 상대 날짜 기준일을 설명하는 한국어 description을 달아주세요.
-    ...
+    requests: list[StructuredRequest] = Field(default_factory=list, description="분리된 StructuredRequest 목록")
+    base_date: str = Field(
+        default_factory=current_app_date_iso,
+        description="상대 날짜 표현을 해석하는 기준일(YYYY-MM-DD)",
+    )
 
 
 def _coerce_structured_request(value: Any) -> StructuredRequest:
