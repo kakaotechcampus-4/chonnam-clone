@@ -27,3 +27,8 @@ student_parts/week03_build_nanas_logbook.py
 student_parts/week04_retrieve_nanas_memory.py
 student_parts/week05_load_kanas_past_conversations.py
 student_parts/week06_kanamate_decides_schedule.py
+
+# 개인 학습/구현 메모 — 저장소 제외(로컬 전용), PR 리뷰 범위 최소화
+docs/WEEK*_IMPLEMENTATION*.md
+docs/WEEK*_STUDY*.md
+docs/WEEK*_*PLAN*.md
