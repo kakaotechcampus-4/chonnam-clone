@@ -105,8 +105,15 @@ class StructuredRequest(BaseModel):
     # TODO: priority/reason 필드를 str | None 타입으로 선언하고 기본값은 None으로 두세요.
     # TODO: original_text 필드를 str 타입으로 선언하고 기본값은 ""로 두세요.
     # TODO: 각 필드에는 LLM structured output이 이해할 수 있도록 한국어 description을 달아주세요.
-    ...
-
+    kind: RequestKind = Field(description="요청 종류. 종류가 명확하지 않으면 unknown")
+    title: str | None = Field(default=None, description="제목. 명확하지 않으면 None")
+    date: str | None = Field(default=None, description="날짜. YYYY-MM-DD 형식. 명확하지 않으면 None")
+    start_time: str | None = Field(default=None, description="시작 시간. HH:MM 형식. 명확하지 않으면 None")
+    end_time: str | None = Field(default=None, description="종료 시간. HH:MM 형식. 명확하지 않으면 None")
+    members: list[str] = Field(default_factory=list, description="참석자 목록")
+    priority: str | None = Field(default=None, description="우선순위에 따라 high, medium, low로 표시. 명확하지 않으면 None")
+    reason: str | None = Field(default=None, description="판단 근거. 명확하지 않으면 None")
+    original_text: str = Field(default="", description="원문")
 
 class StructuredRequestBatch(BaseModel):
     """여러 자연어 의도를 StructuredRequest 목록으로 나누는 2차 과제 스키마입니다."""
