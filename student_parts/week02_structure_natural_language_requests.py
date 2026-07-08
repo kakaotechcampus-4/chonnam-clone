@@ -112,7 +112,10 @@ class StructuredRequest(BaseModel):
     )
     date: str | None = Field(
         None,
-        description="요청 날짜입니다. 확실할 때만 YYYY-MM-DD 형식으로 채우고, 알 수 없으면 None입니다.",
+        description=(
+            "요청 날짜입니다. 확실할 때만 YYYY-MM-DD 형식으로 채웁니다. "
+            "사용자가 날짜를 말하지 않았다면 base_date를 복사하지 말고 None입니다."
+        ),
     )
     start_time: str | None = Field(
         None,
@@ -202,9 +205,13 @@ def week02_system_prompt() -> str:
         [
             *week02_prompt_parts(),
             """
-            최종 응답은 반드시 StructuredRequestBatch structured_response로 만든다.
+            사용자의 요청이 구조화에 충분히 명확하면 StructuredRequestBatch structured_response로 만든다.
             요청이 하나뿐이어도 requests 목록에 StructuredRequest 하나를 담는다.
             base_date에는 현재 앱 기준 날짜를 YYYY-MM-DD 형식으로 담는다.
+
+            일정 생성 또는 등록 요청인데 title, date, start_time 중 부족한 값이 있으면
+            StructuredRequestBatch로 확정하지 말고 부족한 값만 한 번에 다시 질문한다.
+            base_date는 상대 날짜 해석 기준일일 뿐 요청 날짜가 자동으로 오늘이라는 뜻이 아니다.
 
             personal_create_schedule tool 결과가 있으면 created_schedule 값을 우선 근거로 사용한다.
             created_schedule.title은 title, date는 date, start_time은 start_time,
@@ -230,10 +237,16 @@ def week02_prompt_parts() -> list[str]:
         자연어 요청은 요청 단위로 나누어 requests 목록에 담는다.
         요청이 하나뿐이어도 requests에는 StructuredRequest 하나를 담은 list를 사용한다.
 
+        단, 사용자가 일정 생성 또는 등록을 요청했지만 title, date, start_time 중
+        필수값이 부족하거나 여러 의미로 해석될 수 있으면 구조화 결과를 확정하지 않는다.
+        그 경우 Week 1처럼 부족한 값만 모아 한국어로 한 번에 다시 질문한다.
+        예를 들어 사용자가 "외출"처럼 제목만 말하면 오늘 일정으로 추측하지 말고
+        날짜와 시작 시간을 물어본다.
+
         StructuredRequest 필드는 다음 기준으로 채운다.
         - kind: personal_schedule, group_schedule, todo, reminder, unknown 중 하나만 사용한다.
         - title: 일정, 할 일, 알림의 제목을 채운다. 확실하지 않으면 None이다.
-        - date: 확실할 때만 YYYY-MM-DD 형식으로 채운다.
+        - date: 확실할 때만 YYYY-MM-DD 형식으로 채운다. 날짜 언급이 없으면 base_date를 복사하지 않는다.
         - start_time/end_time: 확실할 때만 HH:MM 형식으로 채운다.
         - members: 참석자나 관련 멤버를 list로 채운다. 없거나 모르면 빈 list다.
         - priority: 사용자가 말한 우선순위가 있을 때만 채운다.
