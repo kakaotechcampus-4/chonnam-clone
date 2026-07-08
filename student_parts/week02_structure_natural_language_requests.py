@@ -16,6 +16,7 @@ from student_parts.week01_wake_up_nana import join_system_prompt, week01_prompt_
 RequestKind = Literal["personal_schedule", "group_schedule", "todo", "reminder", "unknown"]
 _WEEK02_AGENT: Any | None = None
 
+# [2주차 수강생 구현 가이드]
 #
 # 목표
 #   Week 2의 핵심은 사용자의 한국어 자연어 요청이나 Week 1 tool이 만든 JSON payload를
