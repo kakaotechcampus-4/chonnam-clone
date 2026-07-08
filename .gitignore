@@ -6,6 +6,8 @@ __pycache__/
 .env.*
 !.env.example
 
+.claude/
+
 data/
 .pytest_cache/
 .mypy_cache/
