@@ -206,17 +206,13 @@ def extract_schedule_request(query: str) -> str:
 def week02_tools() -> list[Any]:
     """Week 2 agent에 Week 1 도구를 노출해 tool JSON을 structured_response 근거로 씁니다."""
 
-    # TODO: Week 1에서 구현한 tool 목록을 그대로 반환하세요.
-    ...
+    return week01_tools()
 
 
 def week02_system_prompt() -> str:
     """2주차 agent가 따르는 시스템 프롬프트입니다."""
 
-    # TODO: join_system_prompt(...)로 week02_prompt_parts()와 Week 2 structured_response 최종 답변 규칙을 합치세요.
-    # TODO: StructuredRequestBatch에는 요청이 하나뿐이어도 requests 목록에 StructuredRequest 하나를 담도록 지시하세요.
-    # TODO: personal_create_schedule tool 결과 JSON의 created_schedule을 읽어 필드를 채우도록 지시하세요.
-    ...
+    return join_system_prompt(week02_prompt_parts())
 
 
 def week02_prompt_parts() -> list[str]:
@@ -224,22 +220,53 @@ def week02_prompt_parts() -> list[str]:
 
     return [
         *week01_prompt_parts(),
-        # TODO: Week 2 요청 구조화 agent 역할과 현재 날짜(current_app_date_iso()) 기준을 추가하세요.
-        # TODO: 자연어를 StructuredRequest 필드(kind/title/date/start_time/end_time/members 등)로 구조화하도록 지시하세요.
-        # TODO: Week 1 tool JSON을 받은 경우 다시 tool을 호출하지 않고 payload를 읽어 structured_response로 만들도록 지시하세요.
-        # TODO: Week 2에서는 SQLite 저장, RAG, 외부 멤버 일정 조율을 하지 않는다고 명시하세요.
+        (
+            "너는 이제 자연어 요청이나 Week 1 tool이 반환한 JSON을 StructuredRequestBatch로 "
+            "구조화하는 역할도 겸한다. "
+            f"오늘 날짜는 {current_app_date_iso()}이며, 상대 날짜(예: 내일, 다음 주 화요일)는 "
+            "이 날짜를 기준으로 계산해서 YYYY-MM-DD로 채운다. "
+            "한 문장에 여러 의도(예: 일정과 리마인더)가 섞여 있으면 각각을 별도의 StructuredRequest로 "
+            "나눠 requests 목록에 모두 담는다. "
+            "Week 1 tool의 created_schedule JSON을 입력으로 받은 경우에는 tool을 다시 호출하지 않고 "
+            "그 필드를 그대로 읽어 StructuredRequest로 옮긴다. "
+            "값이 확실하지 않으면 억지로 채우지 말고 None 또는 빈 리스트로 둔다. "
+            "Week 2는 SQLite 저장, RAG 조회, 외부 멤버 일정 조율을 하지 않는다."
+        ),
+        (
+            "예시 1) 입력: \"다음 주 화요일 오후 3시에 철수랑 회의 잡고, 어제 낸 과제 리마인더도 추가해줘\"\n"
+            "출력은 requests에 2개를 담는다:\n"
+            "  1) kind=group_schedule, title=\"회의\", "
+            "date=<다음 주 화요일을 오늘 날짜 기준으로 계산한 YYYY-MM-DD>, "
+            "start_time=\"15:00\", members=[\"철수\"], original_text=위 문장\n"
+            "  2) kind=reminder, title=\"과제 리마인더\", date=None, members=[], original_text=위 문장\n"
+            "(위 날짜 값은 형식을 보여주는 예시일 뿐이며, 실제 응답에서는 항상 위에서 안내한 오늘 날짜를 "
+            "기준으로 새로 계산한다.)\n\n"
+            "예시 2) 입력이 Week 1 personal_create_schedule 결과 JSON인 경우 "
+            "(예: {\"ok\": true, \"tool_name\": \"personal_create_schedule\", \"created_schedule\": "
+            "{\"title\": \"운동\", \"date\": \"2026-07-10\", \"start_time\": \"07:00\"}}):\n"
+            "출력은 requests에 1개만 담는다:\n"
+            "  kind=personal_schedule, title=\"운동\", date=\"2026-07-10\", start_time=\"07:00\", "
+            "original_text=입력 JSON 문자열 그대로\n"
+            "(tool을 다시 호출하지 않고 created_schedule 필드를 그대로 옮긴 것에 주의한다. "
+            "이 예시의 날짜도 형식 예시일 뿐이다.)"
+        ),
     ]
 
 
 def build_week02_agent() -> object:
     """Week 2 대화에서 structured_response를 직접 반환하는 단일 LangChain agent를 만듭니다."""
 
-    # TODO: CONFIG.has_openai_key가 없으면 RuntimeError("PROXY_TOKEN이 .env에 필요합니다.")를 발생시키세요.
-    # TODO: 전역 _WEEK02_AGENT를 재사용하고, 아직 없을 때만 create_agent(...)로 새 agent를 만드세요.
-    # TODO: create_agent에는 model=chat_model(), tools=week02_tools(), response_format=StructuredRequestBatch,
-    #       system_prompt=week02_system_prompt()를 연결하세요.
-    # TODO: 생성 또는 재사용한 _WEEK02_AGENT를 반환하세요.
-    ...
+    if not CONFIG.has_openai_key:
+        raise RuntimeError("PROXY_TOKEN이 .env에 필요합니다.")
+    global _WEEK02_AGENT
+    if _WEEK02_AGENT is None:
+        _WEEK02_AGENT = create_agent(
+            model=chat_model(),
+            tools=week02_tools(),
+            response_format=StructuredRequestBatch,
+            system_prompt=week02_system_prompt(),
+        )
+    return _WEEK02_AGENT
 
 
 def build_week_agent() -> object:
