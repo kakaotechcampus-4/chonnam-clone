@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, Literal
 
 from langchain.agents import create_agent
@@ -14,9 +15,10 @@ from student_parts.week01_wake_up_nana import join_system_prompt, week01_prompt_
 
 RequestKind = Literal["personal_schedule", "group_schedule", "todo", "reminder", "unknown"]
 PriorityKind = Literal["높음", "보통", "낮음"]
+logger = logging.getLogger(__name__)
 
 _WEEK02_AGENT: Any | None = None
-
+_STRUCTURED_LLM: Any | None = None
 
 # [2주차 수강생 구현 가이드]
 #
@@ -184,35 +186,58 @@ class StructuredRequestBatch(BaseModel):
 def _coerce_structured_request(value: Any) -> StructuredRequest:
     """LangChain structured output 결과를 StructuredRequest로 정규화합니다."""
 
-    # TODO: value가 이미 StructuredRequest이면 그대로 반환하세요.
-    # TODO: value가 dict이면 StructuredRequest.model_validate(...)로 검증해 반환하세요.
-    # TODO: 예상한 형태가 아니면 RuntimeError를 발생시켜 잘못된 LLM 응답을 조용히 통과시키지 마세요.
-    ...
+    if isinstance(value, StructuredRequest):
+        return value
+    elif isinstance(value, dict):
+        return StructuredRequest.model_validate(value)
+    else:
+        raise RuntimeError(
+            f"타입이 맞지 않습니다. value는 StructuredRequest, dict 여야 합니다. 현재 타입 : {type(value)}"
+        )
 
 
 def extract_structured_request(text: str) -> StructuredRequest:
     """Week 3 이상에서 agent를 새로 띄우지 않고 자연어를 StructuredRequest로 바꿉니다."""
 
-    # TODO: chat_model().with_structured_output(StructuredRequest, method="function_calling")로 structured LLM을 만드세요.
-    # TODO: system 메시지에는 join_system_prompt(week02_prompt_parts())를 넣고, user 메시지에는 text를 넣어 invoke하세요.
-    # TODO: LLM 결과를 _coerce_structured_request(...)로 정규화해 StructuredRequest 하나로 반환하세요.
-    ...
+    structured_llm = build_structured_llm()
+    messages = [
+        {"role": "system", "content": join_system_prompt(week02_prompt_parts())},
+        {"role": "user", "content": text},
+    ]
+    response = structured_llm.invoke(messages)
+    return _coerce_structured_request(response)
 
 
 @tool
 def extract_schedule_request(query: str) -> str:
     """Week 3 이상 agent가 저장/조율 전에 호출하는 구조화 bridge tool입니다."""
-
-    # TODO: extract_structured_request(query)를 호출해 자연어 또는 Week 1 JSON payload를 구조화하세요.
-    # TODO: ok/tool_name/base_date/structured_request 키를 가진 dict를 만들고 structured_request에는 model_dump() 결과를 넣으세요.
-    # TODO: json.dumps(..., ensure_ascii=False)로 JSON 문자열을 반환하세요.
-    ...
+    try:
+        payload = extract_structured_request(query).model_dump()
+        return json.dumps(
+            {
+                "ok": True,
+                "tool_name": "extract_schedule_request",
+                "base_date": current_app_date_iso(),
+                "structured_request": payload,
+            },
+            ensure_ascii=False,
+        )
+    except Exception as e:
+        logger.exception("extract_schedule_request 실패")
+        return json.dumps(
+            {
+                "ok": False,
+                "tool_name": "extract_schedule_request",
+                "base_date": current_app_date_iso(),
+                "error": str(e),
+            },
+            ensure_ascii=False,
+        )
 
 
 def week02_tools() -> list[Any]:
     """Week 2 agent에 Week 1 도구를 노출해 tool JSON을 structured_response 근거로 씁니다."""
 
-    # TODO: Week 1에서 구현한 tool 목록을 그대로 반환하세요.
     return week01_tools()
 
 
@@ -255,6 +280,15 @@ def build_week02_agent() -> object:
             system_prompt=week02_system_prompt(),
         )
     return _WEEK02_AGENT
+
+
+def build_structured_llm():
+    global _STRUCTURED_LLM
+    if _STRUCTURED_LLM is None:
+        _STRUCTURED_LLM = chat_model().with_structured_output(
+            StructuredRequest, method="function_calling"
+        )
+    return _STRUCTURED_LLM
 
 
 def build_week_agent() -> object:
