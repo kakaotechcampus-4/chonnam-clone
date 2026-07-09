@@ -4,6 +4,7 @@ import json
 from typing import Any, Literal
 
 from langchain.agents import create_agent
+from langchain.agents.structured_output import ToolStrategy
 from langchain.tools import tool
 from pydantic import BaseModel, Field
 
@@ -225,7 +226,12 @@ def extract_structured_request(text: str) -> StructuredRequest:
 
     result = structured_llm.invoke(
         [
-            ("system", join_system_prompt(week02_prompt_parts())),
+            ("system", week02_system_prompt()),
+            (
+                "system",
+                "이 호출은 StructuredRequestBatch가 아니라 StructuredRequest 하나만 반환합니다. "
+                "요청에 여러 의도가 섞여 있어도 가장 핵심적인 의도 하나만 골라 StructuredRequest 하나로 구조화하세요.",
+            ),
             ("user", text),
         ]
     )
@@ -237,7 +243,17 @@ def extract_structured_request(text: str) -> StructuredRequest:
 def extract_schedule_request(query: str) -> str:
     """Week 3 이상 agent가 저장/조율 전에 호출하는 구조화 bridge tool입니다."""
 
-    structured_request = extract_structured_request(query)
+    try:
+        structured_request = extract_structured_request(query)
+    except Exception as exc:
+        return json.dumps(
+            {
+                "ok": False,
+                "tool_name": "extract_schedule_request",
+                "error": str(exc),
+            },
+            ensure_ascii=False,
+        )
 
     payload = {
         "ok": True,
@@ -288,9 +304,13 @@ def week02_prompt_parts() -> list[str]:
 상대 날짜 표현은 현재 날짜를 기준으로 해석하세요.
 날짜나 시간이 불확실하면 억지로 만들지 말고 None으로 두세요.
 참석자나 멤버가 없으면 members는 빈 리스트로 두세요.
+created_schedule의 값이 "미정"처럼 아직 정해지지 않았다는 뜻이면 해당 필드는 None으로 처리하세요.
 
 Week 1 tool 결과 JSON이 입력으로 주어진 경우에는 다시 tool을 호출하지 말고,
 JSON 안의 created_schedule 값을 읽어 StructuredRequestBatch로 구조화하세요.
+아직 tool 결과 JSON이 없는 새로운 개인 일정 생성 요청이라면 personal_create_schedule을 호출해 일정을 만든 뒤
+그 결과로 구조화하세요. 개인 일정 생성이 필요 없는 요청(그룹 일정, 할 일, 알림, 조회 등)에는
+personal_create_schedule을 호출하지 마세요.
 
 Week 2에서는 SQLite 저장, RAG 검색, 외부 멤버 일정 조율을 하지 않습니다.
 최종 응답은 반드시 StructuredRequestBatch 형식의 structured_response로 반환하세요.
@@ -310,7 +330,7 @@ def build_week02_agent() -> object:
         _WEEK02_AGENT = create_agent(
             model=chat_model(),
             tools=week02_tools(),
-            response_format=StructuredRequestBatch,
+            response_format=ToolStrategy(StructuredRequestBatch),
             system_prompt=week02_system_prompt(),
         )
 
