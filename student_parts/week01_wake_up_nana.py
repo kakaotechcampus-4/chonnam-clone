@@ -105,6 +105,7 @@ def personal_create_schedule(
     현재 대화의 임시 메모리에 개인 일정을 생성합니다.
 
     title, date, start_time은 필수입니다.
+    누락시 사용자에게 요청합니다.
     date는 YYYY-MM-DD, 시간은 HH:MM 형식을 사용합니다.
     end_time을 생략하면 "미정"을 사용합니다.
     attendees를 생략하면 빈 목록을 사용합니다.
