@@ -108,17 +108,20 @@ class StructuredRequest(BaseModel):
     """LLM structured output으로 추출되는 2주차 요청 스키마입니다."""
 
     kind: RequestKind = Field(
-        description="요청 종류. personal_schedule·group_schedule·todo·reminder·unknown 중 하나."
+        description="요청 종류. personal_schedule·group_schedule·todo·reminder·unknown 중 하나. 분류 불가 → unknown."
     )
     title: str | None = Field(default=None, description="일정·할 일·리마인더 제목. 모르면 None.")
-    date: str | None = Field(default=None, description="날짜 (YYYY-MM-DD). 불확실하면 None.")
-    start_time: str | None = Field(default=None, description="시작 시간 (HH:MM). 불확실하면 None.")
-    end_time: str | None = Field(default=None, description="종료 시간 (HH:MM). 불확실하면 None.")
-    members: list[str] = Field(default_factory=list, description="참석자·관련 멤버 이름 목록. 없으면 빈 list.")
+    date: str | None = Field(default=None, description=""""내일"·"다음 주 화요일" 같은 상대 날짜는 base_date 기준으로 YYYY-MM-DD로 변환.
+        변환이 불가능하거나 언급이 없으면 None.""")
+    start_time: str | None = Field(default=None, description=""""오후 3시"→15:00, "점심"→12:00 등 합리적 추론 가능하면 HH:MM.
+                        불확실하면 None.""")
+    end_time: str | None = Field(default=None, description=""""오후 3시"→15:00, "점심"→12:00 등 합리적 추론 가능하면 HH:MM.
+                        불확실하면 None.""")
+    members: list[str] = Field(default_factory=list, description="참석자·관련 멤버 이름 목록. 이름이 언급되면 list에 담아. 없으면 빈 list.")
     priority: str | None = Field(default=None, description="우선순위 (todo일 때 사용). 없으면 None.")
     reason: str | None = Field(
         default=None,
-        description="판단 근거. 날짜·시간·kind가 불확실할 때 이유를 한 문장으로 남긴다.",
+        description="판단 근거. kind·날짜·시간이 불확실하거나 추정이 필요할 때 한 문장으로 이유를 남겨.",
     )
     original_text: str = Field(default="", description="사용자 원문. 감사 추적·디버깅용으로 반드시 보존한다.")
 

@@ -105,19 +105,9 @@ def week02_tools() -> list[Any]:
 사용자의 자연어 요청을 StructuredRequestBatch(requests, base_date) 형태로 구조화하는 게 네 역할이야.
 ```
 
-**조각 2 — 필드 채우기 규칙 (모호 처리 + kind별 필수 필드)**
+**조각 2 — kind별 필수 필드**
 ```
 자연어를 StructuredRequest 필드로 구조화할 때 아래 규칙을 따라.
-
-[필드 규칙]
-- kind : personal_schedule·group_schedule·todo·reminder·unknown 중 하나. 분류 불가 → unknown.
-- date : "내일"·"다음 주 화요일" 같은 상대 날짜는 base_date 기준으로 YYYY-MM-DD로 변환.
-         변환이 불가능하거나 언급이 없으면 None.
-- start_time/end_time : "오후 3시"→15:00, "점심"→12:00 등 합리적 추론 가능하면 HH:MM.
-                        불확실하면 None.
-- members : 이름이 언급되면 list에 담아. 없으면 빈 list.
-- reason  : kind·날짜·시간이 불확실하거나 추정이 필요할 때 한 문장으로 이유를 남겨.
-- original_text : 사용자 원문 그대로 보존.
 
 [kind별 필수 필드]
 - personal_schedule : title, date
