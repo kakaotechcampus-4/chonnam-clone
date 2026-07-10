@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from typing import Any, Literal
 
 from langchain.agents import create_agent
@@ -211,10 +212,17 @@ def extract_schedule_request(query: str) -> str:
     )
 
 
-def week02_tools() -> list[Any]:
-    """Week 2 agent에 Week 1 도구를 노출해 tool JSON을 structured_response 근거로 씁니다."""
+@tool
+def get_current_time() -> str:
+    """지금 이 순간의 실제 시각을 HH:MM으로 반환합니다. '~분 뒤', '~시간 뒤' 같은 상대 시각 표현을 계산하기 전에 먼저 호출한다."""
 
-    return week01_tools()
+    return datetime.now().astimezone().strftime("%H:%M")
+
+
+def week02_tools() -> list[Any]:
+    """Week 2 agent에 Week 1 도구와 현재 시각 조회 도구를 노출합니다."""
+
+    return [*week01_tools(), get_current_time]
 
 
 def week02_system_prompt() -> str:
@@ -229,6 +237,12 @@ def week02_prompt_parts() -> list[str]:
     return [
         *week01_prompt_parts(),
         (
+            "단, personal_create_schedule/personal_list_schedules/personal_delete_schedule tool은 "
+            "kind가 personal_schedule로 확정된 요청에만 사용한다. '깨워줘', '알림', '리마인더', "
+            "'잊지 말고' 같은 표현은 실제 개인 일정을 새로 만드는 것이 아니라 reminder로 분류해야 "
+            "하는 요청이므로, 이런 요청에는 Week 1 tool을 호출하지 않고 값만 구조화해서 담는다."
+        ),
+        (
             "너는 이제 자연어 요청이나 Week 1 tool이 반환한 JSON을 StructuredRequestBatch로 "
             "구조화하는 역할도 겸한다. "
             f"오늘 날짜는 {current_app_date_iso()}이며, 상대 날짜(예: 내일, 다음 주 화요일)는 "
@@ -238,6 +252,12 @@ def week02_prompt_parts() -> list[str]:
             "Week 1 tool의 created_schedule JSON을 입력으로 받은 경우에는 tool을 다시 호출하지 않고 "
             "그 필드를 그대로 읽어 StructuredRequest로 옮긴다. "
             "값이 확실하지 않으면 억지로 채우지 말고 None 또는 빈 리스트로 둔다. "
+            "'~분 뒤', '~시간 뒤'처럼 상대 시각 표현이 나오면 먼저 get_current_time tool을 호출해 "
+            "지금 시각을 확인하고, 그 시각에 오프셋을 더해 start_time을 HH:MM 형식으로 계산한다. "
+            "tool을 호출하지 않고 임의의 시각을 추측해서 채우지 않는다. "
+            "personal_create_schedule tool은 kind가 personal_schedule로 판단되는 요청에만 호출한다. "
+            "kind가 reminder/todo/group_schedule/unknown으로 판단되면 personal_create_schedule을 "
+            "호출하지 않고 구조화한 값만 StructuredRequest에 직접 담는다. "
             "Week 2는 SQLite 저장, RAG 조회, 외부 멤버 일정 조율을 하지 않는다."
         ),
         (
@@ -257,6 +277,28 @@ def week02_prompt_parts() -> list[str]:
             "original_text=입력 JSON 문자열 그대로\n"
             "(tool을 다시 호출하지 않고 created_schedule 필드를 그대로 옮긴 것에 주의한다. "
             "이 예시의 날짜도 형식 예시일 뿐이다.)"
+        ),
+        (
+            "예시 3) 입력: \"이번 주 안으로 보고서 초안 꼭 써야 해, 좀 급해\"\n"
+            "출력은 requests에 1개만 담는다:\n"
+            "  kind=todo, title=\"보고서 초안 작성\", priority=\"높음\", members=[], "
+            "original_text=위 문장\n"
+            "(특정 시각 약속이 아니라 완료해야 할 작업이므로 date/start_time은 채우지 않는다.)"
+        ),
+        (
+            "예시 4) 입력: \"음... 그거 있잖아, 그거 좀 처리해줘\"\n"
+            "출력은 requests에 1개만 담는다:\n"
+            "  kind=unknown, members=[], original_text=위 문장\n"
+            "(kind 외에 판단할 근거가 없으므로 title/date 등 나머지 필드는 모두 비워둔다.)"
+        ),
+        (
+            "예시 5) 입력: \"낮잠 좀 잘거니까 20분 뒤에 깨워줘\"\n"
+            "이 경우 먼저 get_current_time tool을 호출해 지금 시각을 확인한다. "
+            "tool 결과가 \"14:30\"이라면:\n"
+            "  kind=reminder, title=\"낮잠 알림\", start_time=\"14:50\", members=[], "
+            "original_text=위 문장\n"
+            "(14:30/14:50은 형식을 보여주는 예시일 뿐이며, 실제 응답에서는 get_current_time "
+            "tool을 호출해 얻은 실제 시각을 기준으로 새로 계산한다.)"
         ),
     ]
 
