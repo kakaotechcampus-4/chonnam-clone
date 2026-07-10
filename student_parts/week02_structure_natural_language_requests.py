@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 from fixed.config import CONFIG
 from fixed.llm import chat_model
-from fixed.runtime_clock import current_app_date_iso
+from fixed.runtime_clock import app_started_at_iso, current_app_date_iso
 from student_parts.week01_wake_up_nana import join_system_prompt, week01_prompt_parts, week01_tools
 
 
@@ -196,6 +196,10 @@ def week02_prompt_parts() -> list[str]:
         "자연어를 읽었을 경우, StructuredRequest 필드(kind/title/date/start_time/end_time/members/priority/reason/original_text)를 채우도록 한다. "
         "Week 1 tool JSON을 받은 경우, 다시 tool을 호출하지 않고 payload를 읽어 StructuredRequest 필드에 맞게 structured_response를 만들도록 한다. "
         "현재 Week 2 Agent에서는 SQLite 저장, RAG, 외부 멤버 일정 조율을 하지 않는다. ",
+        f"현재 시각은 {app_started_at_iso()}이다. '~분 뒤', '~시간 뒤' 같은 상대 시각 요청은 이 현재 시각을 기준으로 정확히 계산해 "
+        "start_time을 HH:MM 형식으로 채운다. 계산 결과 날짜가 자정을 넘기면 date도 다음 날로 조정한다.",
+        "자연어에 시간 정보가 없어 personal_create_schedule을 호출해야 할 경우, start_time='미정'으로 전달한다. "
+        "created_schedule의 start_time 또는 end_time이 '미정'이면 StructuredRequest의 해당 필드는 None으로 채운다.",
     ]
 
 
