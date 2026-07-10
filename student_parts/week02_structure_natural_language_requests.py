@@ -4,6 +4,7 @@ import json
 from typing import Any, Literal
 
 from langchain.agents import create_agent
+from langchain.agents.structured_output import ToolStrategy
 from langchain.tools import tool
 from pydantic import BaseModel, Field
 
@@ -120,7 +121,16 @@ class StructuredRequest(BaseModel):
     start_time: str | None = Field(default=None, description="시작 시간. HH:MM 형식. 명확하지 않으면 None")
     end_time: str | None = Field(default=None, description="종료 시간. HH:MM 형식. 명확하지 않으면 None")
     members: list[str] = Field(default_factory=list, description="참석자 목록")
-    priority: str | None = Field(default=None, description="우선순위에 따라 high, medium, low로 표시. 명확하지 않으면 None")
+    priority: str | None = Field(
+        default=None,
+        description=(
+            "우선순위. todo/reminder에서만 사용, personal_schedule/group_schedule에서는 None. "
+            "high: 마감 오늘/내일 또는 '급하게'/'무조건'/'꼭'/'당장' 같은 긴급 표현 있음. "
+            "medium: 마감 2~7일 내. 또는 마감/긴급 표현이 일부 있지만 긴급도 판단이 애매할 때 기본값. "
+            "low: 마감 명시 없고 '천천히'/'여유있게'/'시간 날 때' 표현. "
+            "todo/reminder인데도 마감·긴급 표현 등 판단 근거가 원문에 전혀 없으면 None."
+        ),
+    )
     reason: str | None = Field(default=None, description="판단 근거. 명확하지 않으면 None")
     original_text: str = Field(default="", description="원문")
 
@@ -185,9 +195,7 @@ def week02_prompt_parts() -> list[str]:
         "Week 2 agent는 personal_create_schedule tool의 결과 JSON 속 created_schedule 또는 자연어를 읽어 StructuredRequestBatch로 구조화한다. 현재 날짜는 current_app_date_iso() 함수를 기준으로 삼고, 상대 날짜 표기 시 현재 날짜를 기준으로 YYYY-MM-DD 형식으로 표현한다."
         "자연어를 읽었을 경우, StructuredRequest 필드(kind/title/date/start_time/end_time/members/priority/reason/original_text)를 채우도록 한다. "
         "Week 1 tool JSON을 받은 경우, 다시 tool을 호출하지 않고 payload를 읽어 StructuredRequest 필드에 맞게 structured_response를 만들도록 한다. "
-        "현재 Week 2 Agent에서는 SQLite 저장, RAG, 외부 멤버 일정 조율을 하지 않는다. "
-        "kind 판단 시: members가 존재하면 group_schedule, 본인 단독 일정이면 personal_schedule, "
-        "특정 시각 알림 요청이면 reminder, 시간 무관 처리할 일이면 todo, 판단 근거 부족하면 unknown으로 분류한다.",
+        "현재 Week 2 Agent에서는 SQLite 저장, RAG, 외부 멤버 일정 조율을 하지 않는다. ",
     ]
 
 
@@ -206,7 +214,7 @@ def build_week02_agent() -> object:
         _WEEK02_AGENT = create_agent(
             model=chat_model(),
             tools=week02_tools(),
-            response_format=StructuredRequestBatch,
+            response_format=ToolStrategy(StructuredRequestBatch),
             system_prompt=week02_system_prompt(),
         )
     return _WEEK02_AGENT
