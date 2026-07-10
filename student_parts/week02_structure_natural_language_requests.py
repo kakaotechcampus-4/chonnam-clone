@@ -5,7 +5,7 @@ from typing import Any, Literal
 
 from langchain.agents import create_agent
 from langchain.tools import tool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from fixed.config import CONFIG
 from fixed.llm import chat_model
@@ -163,22 +163,74 @@ class StructuredRequest(BaseModel):
     """LLM structured output으로 추출되는 2주차 요청 스키마입니다."""
 
     kind: RequestKind = Field(
-        description="요청 종류. personal_schedule·group_schedule·todo·reminder·unknown 중 하나. 분류 불가 → unknown."
+        description="요청 종류. personal_schedule·group_schedule·todo·reminder·unknown 중 하나."
+        " 여러 kind에 걸쳐 보이면 personal_schedule/group_schedule > todo > reminder > unknown 순으로 우선 판단하되,"
+        " \"알려줘\"·\"기억해놔\"·\"잊지마\"·\"까먹지 않게 해줘\"처럼 명시적으로 상기를 요청하는 표현이 있으면"
+        " 날짜가 있어도 reminder를 최우선으로 판단."
+        " 분류 불가 → unknown."
+        """
+        - personal_schedule : 사용자 본인이 참석·처리해야 하는, 날짜/시간이 정해진 개인 일정.
+        예) "내일 10시 치과 일정 잡아줘", "이번 주 토요일 결혼식 있어"
+        반복 일정이어도 반복 규칙을 담을 필드가 없으니 가장 가까운 날짜 하나만 채우고,
+        반복 여부는 reason에 한 문장으로 남겨.
+        
+        - group_schedule    : 사용자 외에 다른 참석자가 있는 일정. 참석자가 특정 인물이 아니라 소속 팀·모임 이름이어도 members에 그 이름을 담아. 참석자를 빼면 personal_schedule과 동일하게 판단해.
+        예) "다음 주 목요일 철수랑 일정 잡아줘"(members=["철수"]), "이번 주 일요일 S축구단 풋살 있어"(members=["S축구단"])
+        
+        - todo  : 날짜/시간이 정해지지 않고, 사용자가 스스로 알아서 처리하면 되는 개인 행동.
+        예) "우유 좀 사야겠다", "설거지 해야지"
+        주의: 날짜가 언급되면 todo가 아니라 personal_schedule/group_schedule로 분류해.
+        (예: "목요일 네일 예약하기"는 날짜가 있으므로 personal_schedule)
+        - reminder : "알려줘"·"기억해놔"·"잊지마"·"까먹지 않게 해줘"처럼 사용자가 잊지 않도록 상기시켜달라고
+        명시적으로 요청하는 표현이 있으면, 날짜가 있어도 personal_schedule/group_schedule보다 reminder를 우선한다.
+        예) "내일 기차 예약하는 거 알려줘", "낼 모레 새벽 2시 취소표 나오는 거 기억해놔", "모레까지 보고서 작성하는 거 잊지마"
+        - unknown : 위 4개에 속하지 않는 것. 과거 사실에 대한 진술, 잡담, 애매한 표현 등.
+        예) "오늘 저녁 약속 드럽게 재미없었어", "철수 걔를 봐 말아"
+
+        [kind별 필수 필드]
+        - personal_schedule : title, date
+        - group_schedule    : title, date, members (최소 1명)
+        - todo              : title
+        - reminder          : title, date
+        - unknown           : 없음 (original_text만 보존)
+
+        필수 필드가 불확실할 때는 억지로 만들지 않고 None으로 두되 reason에 이유를 남겨.
+        """
     )
-    title: str | None = Field(default=None, description="일정·할 일·리마인더 제목. 모르면 None.")
+    title: str | None = Field(
+        default=None,
+        description="일정·할 일·리마인더 제목. personal_schedule·group_schedule·todo·reminder에서는 필수이므로 최대한 채운다. 정말 알 수 없을 때만 None.",
+    )
     date: str | None = Field(default=None, description=""""내일"·"다음 주 화요일" 같은 상대 날짜는 base_date 기준으로 YYYY-MM-DD로 변환.
-        변환이 불가능하거나 언급이 없으면 None.""")
+        personal_schedule·group_schedule·reminder에서는 필수이므로 최대한 채운다.
+        todo이거나 변환이 불가능하거나 언급이 없으면 None.""")
     start_time: str | None = Field(default=None, description=""""오후 3시"→15:00, "점심"→12:00 등 합리적 추론 가능하면 HH:MM.
                         불확실하면 None.""")
     end_time: str | None = Field(default=None, description=""""오후 3시"→15:00, "점심"→12:00 등 합리적 추론 가능하면 HH:MM.
                         불확실하면 None.""")
-    members: list[str] = Field(default_factory=list, description="참석자·관련 멤버 이름 목록. 이름이 언급되면 list에 담아. 없으면 빈 list.")
+    members: list[str] = Field(
+        default_factory=list,
+        description="참석자·관련 멤버 이름 목록. 특정 인물이 아니라 소속 팀·모임 이름이 언급돼도 담을 수 있다."
+        " group_schedule에서는 최소 1명 필수이므로 언급되면 list에 담아. 그 외에는 없으면 빈 list.",
+    )
     priority: str | None = Field(default=None, description="우선순위 (todo일 때 사용). 없으면 None.")
     reason: str | None = Field(
         default=None,
         description="판단 근거. kind·날짜·시간이 불확실하거나 추정이 필요할 때 한 문장으로 이유를 남겨.",
     )
     original_text: str = Field(default="", description="사용자 원문. 감사 추적·디버깅용으로 반드시 보존한다.")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_none_defaults(cls, data: Any) -> Any:
+        """LLM이 optional 필드에 null을 채워 보내는 경우, 타입에 맞는 기본값으로 보정한다."""
+
+        if isinstance(data, dict):
+            if data.get("members") is None:
+                data["members"] = []
+            if data.get("original_text") is None:
+                data["original_text"] = ""
+        return data
 
 
 class StructuredRequestBatch(BaseModel):
@@ -194,14 +246,17 @@ class StructuredRequestBatch(BaseModel):
     )
 
 
-def missing_required_fields(req: StructuredRequest) -> list[str]:
-    """kind별 필수 필드 중 값이 없는 것을 반환한다. 빈 list면 완전한 요청."""
-    required = KIND_REQUIRED_FIELDS.get(req.kind, [])
-    return [
-        f for f in required
-        if not getattr(req, f, None)
-        or (isinstance(getattr(req, f), list) and not getattr(req, f))
-    ]
+# Week 3+ 저장 전 검증에서 재사용할 예약 함수. 지금은 KIND_REQUIRED_FIELDS의 kind별 필수 필드를
+# 위 StructuredRequest Field description에 직접 반영해 LLM이 채우도록 유도하므로 비활성화 상태로 둔다.
+#
+# def missing_required_fields(req: StructuredRequest) -> list[str]:
+#     """kind별 필수 필드 중 값이 없는 것을 반환한다. 빈 list면 완전한 요청."""
+#     required = KIND_REQUIRED_FIELDS.get(req.kind, [])
+#     return [
+#         f for f in required
+#         if not getattr(req, f, None)
+#         or (isinstance(getattr(req, f), list) and not getattr(req, f))
+#     ]
 
 
 def _coerce_structured_request(value: Any) -> StructuredRequest:
@@ -260,28 +315,6 @@ def week02_prompt_parts() -> list[str]:
         너는 Week 2 구조화 에이전트야.
         오늘 날짜(기준일)는 {current_app_date_iso()}이야.
         사용자의 자연어 요청을 StructuredRequestBatch(requests, base_date) 형태로 구조화하는 게 네 역할이야.
-        """,
-        """
-        자연어를 StructuredRequest 필드로 구조화할 때 아래 규칙을 따라.
-
-        [필드 규칙]
-        - kind : personal_schedule·group_schedule·todo·reminder·unknown 중 하나. 분류 불가 → unknown.
-        - date : "내일"·"다음 주 화요일" 같은 상대 날짜는 base_date 기준으로 YYYY-MM-DD로 변환.
-                변환이 불가능하거나 언급이 없으면 None.
-        - start_time/end_time : "오후 3시"→15:00, "점심"→12:00 등 합리적 추론이 가능하면 HH:MM.
-                                불확실하면 None.
-        - members : 이름이 언급되면 list에 담아. 없으면 빈 list.
-        - reason  : kind·날짜·시간이 불확실하거나 추정이 필요할 때 한 문장으로 이유를 남겨.
-        - original_text : 사용자 원문 그대로 보존.
-
-        [kind별 필수 필드]
-        - personal_schedule : title, date
-        - group_schedule    : title, date, members (최소 1명)
-        - todo              : title
-        - reminder          : title, date
-        - unknown           : 없음 (original_text만 보존)
-
-        필수 필드가 불확실할 때는 억지로 만들지 않고 None으로 두되 reason에 이유를 남겨.
         """,
         """
         personal_create_schedule tool을 호출한 뒤 결과 JSON이 있으면

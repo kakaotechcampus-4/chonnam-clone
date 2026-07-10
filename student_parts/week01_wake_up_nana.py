@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from datetime import date as date_cls
 from datetime import datetime
 from typing import Any
 
@@ -19,7 +20,7 @@ from fixed.langchain_trace import (
     stream_chunk_messages,
 )
 from fixed.llm import chat_model
-from fixed.runtime_clock import current_app_date_iso, next_weekday_iso
+from fixed.runtime_clock import current_app_date, current_app_date_iso, next_weekday_iso
 from fixed.session_scope import DEFAULT_SESSION_SCOPE, current_session_scope
 
 
@@ -164,6 +165,34 @@ def _current_session_schedules() -> list[dict[str, Any]]:
     return [schedule for schedule in PERSONAL_SCHEDULES if _schedule_scope(schedule) == session_id]
 
 
+def _parse_hhmm(value: str) -> datetime | None:
+    try:
+        return datetime.strptime(value, "%H:%M")
+    except (TypeError, ValueError):
+        return None
+
+
+def _validate_schedule_input(title: str, date: str, start_time: str, end_time: str) -> str | None:
+    """생성 요청이 논리적으로 성립할 수 없는 값인지 검증한다. 문제가 있으면 오류 메시지, 없으면 None."""
+
+    if not title.strip():
+        return "title이 비어 있습니다."
+
+    try:
+        parsed_date = date_cls.fromisoformat(date)
+    except (TypeError, ValueError):
+        parsed_date = None
+    if parsed_date is not None and parsed_date < current_app_date():
+        return f"date({date})는 오늘({current_app_date_iso()})보다 과거입니다."
+
+    parsed_start = _parse_hhmm(start_time)
+    parsed_end = _parse_hhmm(end_time) if end_time != "미정" else None
+    if parsed_start is not None and parsed_end is not None and parsed_end <= parsed_start:
+        return f"end_time({end_time})이 start_time({start_time})보다 빠르거나 같습니다."
+
+    return None
+
+
 @tool
 def personal_create_schedule(
     title: str,
@@ -173,6 +202,10 @@ def personal_create_schedule(
     attendees: list[str] | None = None,
 ) -> str:
     """Nana의 개인 일정을 현재 대화의 임시 메모리에 생성합니다."""
+
+    error = _validate_schedule_input(title, date, start_time, end_time)
+    if error:
+        return _json({"ok": False, "tool_name": "personal_create_schedule", "error": error})
 
     schedule = {
         "id": _new_personal_id(),
