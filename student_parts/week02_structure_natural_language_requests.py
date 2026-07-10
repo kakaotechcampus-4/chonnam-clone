@@ -161,7 +161,7 @@ class StructuredRequest(BaseModel):
     start_time: str | None  = Field(default=None, description="요청의 시작 시간을 나타내며, HH:MM 형식으로 표현됩니다. 확실하지 않으면 None으로 둡니다.")
     end_time:   str | None  = Field(default=None, description="요청의 종료 시간을 나타내며, HH:MM 형식으로 표현됩니다. 확실하지 않으면 None으로 둡니다.")
     members:    list[str]   = Field(default_factory=list, description="요청과 관련된 참석자나 멤버들의 목록을 나타내며, 모르면 빈 리스트로 둡니다.")
-    priority:   str | None  = Field(default=None, description="요청의 우선순위를 나타내며, 할 일의 중요도를 의미합니다. 확실하지 않으면 None으로 둡니다.")
+    priority:   Literal["low", "medium", "high"] = Field(default="medium", description="요청의 우선순위를 나타내며, 할 일의 중요도를 의미합니다.")
     reason:     str | None  = Field(default=None, description="요청의 판단 근거를 나타내며, LLM이 구조화한 이유를 설명합니다. 확실하지 않으면 None으로 둡니다.")
     original_text: str      = Field(default="", description="요청의 원문을 보존하기 위한 필드로, LLM이 구조화한 원문을 그대로 담습니다. 확실하지 않으면 빈 문자열로 둡니다.")
 
@@ -232,6 +232,31 @@ def week02_prompt_parts() -> list[str]:
         - 구조화 대상은 가장 마지막 사용자 메시지 하나로 한정하세요. 이전 대화는 대명사 해석 등 맥락 참고용일 뿐,
           이미 구조화한 과거 요청을 requests에 다시 포함하지 마세요.
         - 마지막 메시지의 표현(예: "급한 일정이야")을 이전 턴의 요청에 소급 적용하지 마세요.
+        """,
+
+        f"""
+        [필드 값 규칙]
+        - date/start_time/end_time 값을 원문에서 확실히 알 수 없으면 반드시 null로 두세요.
+          "미정", "모름", "추후 결정", 빈 문자열("") 같은 문자열로 채우는 것은 절대 금지입니다.
+        - date는 YYYY-MM-DD, start_time/end_time은 24시간제 HH:MM 형식만 허용됩니다.
+          이 형식으로 확정할 수 없는 값은 null로 두세요. ("오후 3시" -> "15:00")
+        - 상대 날짜 표현은 두 부류로 나누어 처리하세요.
+          * 계산 가능: "내일", "모레", "이번 주 금요일", "다음 주 화요일" 등 특정일이 정해지는 표현은
+            기준일로부터 YYYY-MM-DD를 계산해 채우세요.
+          * 계산 불가: "조만간", "나중에", "언젠가", "곧", "틈나면", "다음에" 등 시점이 특정되지 않는
+            표현은 날짜로 해석하지 말고 date=null로 두세요.
+        - 원문에 없는 날짜/시간/멤버를 추측해서 만들지 마세요.
+        - null로 둔 필드가 있으면 reason에 왜 비워 두었는지 근거를 함께 적으세요.
+        - original_text에는 LLM이 구조화한 원문을 그대로 담으세요. 원문이 확실하지 않으면 빈 문자열("")로 두세요.
+
+        [구조화 예시]
+        예시 1) 입력: "조만간 밥 한번 먹자"
+        출력: kind="personal_schedule", title="밥 약속", date=null, start_time=null, end_time=null,
+              members=[], reason="'조만간'은 특정 시점을 가리키지 않으므로 날짜/시간을 null로 둠"
+
+        예시 2) 입력: "언젠가 후쿠오카 여행 가고 싶다"
+        출력: kind="personal_schedule", title="후쿠오카 여행", date=null, start_time=null, end_time=null,
+              members=[], reason="'언젠가'는 시점 미상이므로 날짜를 정하지 않음"
         """,
     ]
 
