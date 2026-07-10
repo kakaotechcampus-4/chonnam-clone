@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date as date_cls, time as time_cls #가독성을 위해 date_cls, time_cls로 명명
 import json
 from typing import Any, Literal
 
@@ -112,13 +113,36 @@ class StructuredRequest(BaseModel):
     start_time: str | None = Field(default=None, description="사용자의 일정이 시작하는 시간을 저장하는 필드. 시간은 HH:MM 형식의 문자열로 저장할 것. 확실하지 않으면 None으로 둘 것.")
     end_time: str | None = Field(default=None, description="사용자의 일정이 끝나는 시간을 저장하는 필드. 시간은 HH:MM 형식의 문자열로 저장할 것. 확실하지 않으면 None으로 둘 것.")
     members: list[str] = Field(default_factory=list, description="사용자의 일정에 참여하는 사람들을 저장하는 리스트 필드. 각 참여자의 이름을 문자열로 저장할 것. 참여자를 따로 명시하지 않으면 그대로 둘 것.")
+    priority: str | None = Field(default=None, description="사용자 일정의 우선순위를 저장하는 필드. 일정의 우선순위를 직접 판단하여 '낮음', '중간', '높음'의 세 단계의 문자열중 하나로 저장하되, 확실한 근거가 있을 때만 판단하고 애매하면 None으로 둘 것.")
+    reason: str | None = Field(default=None, description="priority 필드에 매긴 우선순위의 근거를 설명하여 문자열로 저장할 것. 만약 priority 필드를 None으로 설정하였다면 reason 필드도 None으로 둘 것.")
+    original_text: str = Field(default="", description="사용자가 일정 추가를 요청했을 당시의 사용자 프롬프트 원문을 문자열로 저장할 것.")
+    
     @field_validator("members", mode="before")
     @classmethod
     def _default_members(cls, value: Any) -> Any:
         return value or []
-    priority: str | None = Field(default=None, description="사용자 일정의 우선순위를 저장하는 필드. 일정의 우선순위를 직접 판단하여 '낮음', '중간', '높음'의 세 단계의 문자열중 하나로 저장하되, 확실한 근거가 있을 때만 판단하고 애매하면 None으로 둘 것.")
-    reason: str | None = Field(default=None, description="priority 필드에 매긴 우선순위의 근거를 설명하여 문자열로 저장할 것. 만약 priority 필드를 None으로 설정하였다면 reason 필드도 None으로 둘 것.")
-    original_text: str = Field(default="", description="사용자가 일정 추가를 요청했을 당시의 사용자 프롬프트 원문을 문자열로 저장할 것.")
+    
+    @field_validator("date", mode="before")
+    @classmethod
+    def _normalize_date_format(cls, value: Any) -> Any:
+        if not isinstance(value, str):
+            return None
+        try:
+            #fromisoformat으로 value가 유효한 날짜인지 확인 후, isoformat으로 다시 문자열로 변환
+            return date_cls.fromisoformat(value.strip()).isoformat()
+        except ValueError:
+            return None
+
+    @field_validator("start_time", "end_time", mode="before")
+    @classmethod
+    def _normalize_time_format(cls, value: Any) -> Any:
+        if not isinstance(value, str):
+            return None
+        try:
+            #timespec="minutes"를 통해 time 객체에서 HH:MM 형식의 문자열로 변환
+            return time_cls.fromisoformat(value.strip()).isoformat(timespec="minutes")
+        except ValueError:
+            return None
 
 
 class StructuredRequestBatch(BaseModel):
