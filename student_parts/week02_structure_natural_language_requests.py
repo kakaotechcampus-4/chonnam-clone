@@ -124,11 +124,11 @@ class StructuredRequest(BaseModel):
     priority: str | None = Field(
         default=None,
         description=(
-            "우선순위. todo/reminder에서만 사용, personal_schedule/group_schedule에서는 None. "
-            "high: 마감 오늘/내일 또는 '급하게'/'무조건'/'꼭'/'당장' 같은 긴급 표현 있음. "
-            "medium: 마감 2~7일 내. 또는 마감/긴급 표현이 일부 있지만 긴급도 판단이 애매할 때 기본값. "
+            "우선순위. 'high', 'medium', 'low' 중 하나. "
+            "high: 마감 오늘/내일 또는 '중요한'/'급하게'/'무조건'/'꼭'/'당장' 같은 표현 있음. "
+            "medium: 마감 2~7일 내. 또는 중요도 신호가 일부 있지만 애매할 때 기본값. "
             "low: 마감 명시 없고 '천천히'/'여유있게'/'시간 날 때' 표현. "
-            "todo/reminder인데도 마감·긴급 표현 등 판단 근거가 원문에 전혀 없으면 None."
+            "원문에 중요도·긴급도 신호가 전혀 없으면 None."
         ),
     )
     reason: str | None = Field(default=None, description="판단 근거. 명확하지 않으면 None")
