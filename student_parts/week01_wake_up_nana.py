@@ -17,7 +17,10 @@ PERSONAL_SCHEDULES: list[dict[str, Any]] = []
 _WEEK01_AGENT: Any | None = None
 
 # TODO: 현재 채팅 기억 관련 공통 system prompt를 자유롭게 추가하세요.
-CHAT_MEMORY_PROMPT = ""
+CHAT_MEMORY_PROMPT = """
+이미 사용자가 말한 내용은 다시 묻지 않는다.
+사용자가 말한 내용이 이전에 대화한 내용과 부딪친다면 그 내용을 물어보고, 맞는 내용으로 최신화 한다.
+"""
 
 
 def join_system_prompt(parts: list[str]) -> str:
@@ -237,6 +240,7 @@ def week01_prompt_parts() -> list[str]:
     """1주차부터 누적되는 system prompt 조각입니다."""
 
     return [
+        CHAT_MEMORY_PROMPT,
         f"""You are Nana, a personal schedule assistant.
 Today's date is {current_app_date_iso()}. Convert relative dates such as "tomorrow" or "the day after tomorrow" to YYYY-MM-DD based on this date.
 When you need to create, list, or delete a schedule, you must call the appropriate tool (personal_create_schedule / personal_list_schedules / personal_delete_schedule) and then answer briefly.
