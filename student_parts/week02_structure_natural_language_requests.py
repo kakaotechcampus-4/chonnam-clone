@@ -9,12 +9,19 @@ from pydantic import BaseModel, Field
 
 from fixed.config import CONFIG
 from fixed.llm import chat_model
-from fixed.runtime_clock import current_app_date_iso
+from fixed.runtime_clock import app_started_at_iso, current_app_date_iso
 from student_parts.week01_wake_up_nana import join_system_prompt, week01_prompt_parts, week01_tools
 
 
 RequestKind = Literal["personal_schedule", "group_schedule", "todo", "reminder", "unknown"]
 _WEEK02_AGENT: Any | None = None
+WEEK02_CLASSIFICATION_RULES = (
+    "personal_schedule은 나만의 일정, group_schedule은 다른 사람이 함께 언급된 일정이다. "
+    "할 일은 todo, 특정 시점에 알려 달라는 요청은 reminder, 처리 종류를 알 수 없으면 unknown으로 분류한다. "
+    "상대 날짜는 오늘 날짜를 기준으로 계산한다. "
+    "'N분 뒤', 'N시간 뒤'는 기준 시각에 더해 date와 start_time을 함께 채운다. "
+    "오전과 오후는 24시간제 HH:MM으로 바꾸고, 언급되지 않은 필드는 추측하지 않는다."
+)
 
 
 # [2주차 1회차 수강생 구현 가이드]
@@ -157,6 +164,7 @@ def week02_system_prompt() -> str:
                 "personal_create_schedule 도구를 호출한 경우에는 tool 결과 JSON의 created_schedule을 읽고 "
                 "kind, title, date, start_time, end_time, members 필드를 채운다."
             ),
+            WEEK02_CLASSIFICATION_RULES,
         ]
     )
 
@@ -168,7 +176,9 @@ def week02_prompt_parts() -> list[str]:
         *week01_prompt_parts(),
         (
             "너는 Week 2에서 자연어 요청을 구조화하는 agent다. "
-            f"오늘 날짜는 {current_app_date_iso()}이며, 상대 날짜 표현은 이 날짜를 기준으로 YYYY-MM-DD로 바꾼다. "
+            f"오늘 날짜는 {current_app_date_iso()}이고, 기준 시각은 {app_started_at_iso()}이다. "
+            "상대 날짜 표현은 오늘 날짜를 기준으로 YYYY-MM-DD로 바꾼다. "
+            "'N분 뒤', 'N시간 뒤'처럼 상대 시간이 있으면 기준 시각에 더해 날짜와 start_time을 각각 YYYY-MM-DD, HH:MM으로 채운다. "
             "사용자 요청은 kind/title/date/start_time/end_time/members/priority/reason/original_text 필드에 맞춰 정리한다. "
             "kind 값은 personal_schedule, group_schedule, todo, reminder, unknown 중 하나만 고른다. "
             "Week 1 tool JSON을 받았다면 tool을 다시 호출하지 말고 payload를 읽어 structured_response를 만든다. "
