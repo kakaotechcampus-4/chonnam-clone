@@ -108,12 +108,13 @@ class StructuredRequest(BaseModel):
     # TODO: 각 필드에는 LLM structured output이 이해할 수 있도록 한국어 description을 달아주세요.
     kind: RequestKind = Field(
         description=(
-            "요청 종류. 예시: "
-            "'내일 병원 예약 있어' → personal_schedule. "
-            "'철수랑 회의 잡아줘' → group_schedule. "
-            "'보고서 제출하기' → todo. "
-            "'3시에 알려줘' → reminder. "
-            "판단 어려우면 unknown."
+            "요청 종류. 판단 전에 순서대로 생각한다: "
+            "1) members(참석자)가 있는지 확인한다. 있으면 group_schedule. "
+            "2) 없으면 본인 단독 일정인지 확인한다. 맞으면 personal_schedule. "
+            "3) 특정 시각 알림 요청인지 확인한다. 맞으면 reminder. "
+            "4) 시간 무관 처리할 일이면 todo. "
+            "5) 위 어느 것도 아니면 unknown. "
+            "이 순서로 판단한 뒤 최종 kind 값을 채운다."
         )
     )
     title: str | None = Field(default=None, description="제목. 명확하지 않으면 None")
