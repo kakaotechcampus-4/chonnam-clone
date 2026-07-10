@@ -107,14 +107,7 @@ class StructuredRequest(BaseModel):
     # TODO: original_text 필드를 str 타입으로 선언하고 기본값은 ""로 두세요.
     # TODO: 각 필드에는 LLM structured output이 이해할 수 있도록 한국어 description을 달아주세요.
     kind: RequestKind = Field(
-        description=(
-            "요청 종류 판단 기준. "
-            "personal_schedule: 본인 혼자 참여하는 일정/약속 (members 없음). "
-            "group_schedule: 다른 사람(members)과 함께하는 모임/회의 일정. "
-            "todo: 완료해야 할 작업/일. 특정 시각 약속이 아니라 처리할 일. "
-            "reminder: 특정 시각에 알려달라는 알림 요청. "
-            "unknown: 위 네 종류 중 어디에도 명확히 맞지 않을 때. 판단 근거 부족하면 unknown."
-        )
+        description="요청 종류. personal_schedule/group_schedule/todo/reminder/unknown 중 하나."
     )
     title: str | None = Field(default=None, description="제목. 명확하지 않으면 None")
     date: str | None = Field(default=None, description="날짜. YYYY-MM-DD 형식. 명확하지 않으면 None")
