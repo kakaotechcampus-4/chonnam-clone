@@ -105,7 +105,16 @@ class StructuredRequest(BaseModel):
     # TODO: priority/reason 필드를 str | None 타입으로 선언하고 기본값은 None으로 두세요.
     # TODO: original_text 필드를 str 타입으로 선언하고 기본값은 ""로 두세요.
     # TODO: 각 필드에는 LLM structured output이 이해할 수 있도록 한국어 description을 달아주세요.
-    kind: RequestKind = Field(description="요청 종류. 종류가 명확하지 않으면 unknown")
+    kind: RequestKind = Field(
+        description=(
+            "요청 종류 판단 기준. "
+            "personal_schedule: 본인 혼자 참여하는 일정/약속 (members 없음). "
+            "group_schedule: 다른 사람(members)과 함께하는 모임/회의 일정. "
+            "todo: 완료해야 할 작업/일. 특정 시각 약속이 아니라 처리할 일. "
+            "reminder: 특정 시각에 알려달라는 알림 요청. "
+            "unknown: 위 네 종류 중 어디에도 명확히 맞지 않을 때. 판단 근거 부족하면 unknown."
+        )
+    )
     title: str | None = Field(default=None, description="제목. 명확하지 않으면 None")
     date: str | None = Field(default=None, description="날짜. YYYY-MM-DD 형식. 명확하지 않으면 None")
     start_time: str | None = Field(default=None, description="시작 시간. HH:MM 형식. 명확하지 않으면 None")
@@ -176,7 +185,9 @@ def week02_prompt_parts() -> list[str]:
         "Week 2 agent는 personal_create_schedule tool의 결과 JSON 속 created_schedule 또는 자연어를 읽어 StructuredRequestBatch로 구조화한다. 현재 날짜는 current_app_date_iso() 함수를 기준으로 삼고, 상대 날짜 표기 시 현재 날짜를 기준으로 YYYY-MM-DD 형식으로 표현한다."
         "자연어를 읽었을 경우, StructuredRequest 필드(kind/title/date/start_time/end_time/members/priority/reason/original_text)를 채우도록 한다. "
         "Week 1 tool JSON을 받은 경우, 다시 tool을 호출하지 않고 payload를 읽어 StructuredRequest 필드에 맞게 structured_response를 만들도록 한다. "
-        "현재 Week 2 Agent에서는 SQLite 저장, RAG, 외부 멤버 일정 조율을 하지 않는다.",
+        "현재 Week 2 Agent에서는 SQLite 저장, RAG, 외부 멤버 일정 조율을 하지 않는다. "
+        "kind 판단 시: members가 존재하면 group_schedule, 본인 단독 일정이면 personal_schedule, "
+        "특정 시각 알림 요청이면 reminder, 시간 무관 처리할 일이면 todo, 판단 근거 부족하면 unknown으로 분류한다.",
     ]
 
 
