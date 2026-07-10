@@ -155,13 +155,22 @@ class StructuredRequest(BaseModel):
     """LLM structured output으로 추출되는 2주차 요청 스키마입니다."""
 
     kind: RequestKind = Field(description=(
-        "요청 종류입니다. 다음 중 하나로 분류합니다. "
-        "personal_schedule(개인 일정, 예: 회의·약속), "
-        "group_schedule(여러 사람이 함께하는 일정, 예: 회식·모임), "
-        "todo(할 일, 예: 보고서 작성), "
-        "reminder(알림, 예: 약 먹기 알림), "
-        "unknown(위에 해당하지 않거나 불명확). "
-        "확실하지 않으면 unknown으로 둡니다."
+        "이 요청 조각을 아래 다섯 종류 중 정확히 하나로 분류합니다. "
+        "판단이 겹칠 때는 사용자가 시킨 동작 동사를 우선합니다(동작 동사 우선 규칙).\n"
+        "- personal_schedule: 특정 시각/이벤트가 있는 일정이고 본인 외 다른 참석자가 전혀 없을 때만 사용합니다. "
+        "예: '내일 3시 병원 예약', '금요일 오후 2시 미용실'.\n"
+        "- group_schedule: 일정을 잡는 요청에서 본인 외 다른 참석자가 한 명이라도 있으면 personal_schedule이 아니라 group_schedule로 분류합니다. "
+        "구체적 이름(철수·영희)이든 '팀'·'가족'·'팀원들' 같은 그룹이든, members가 본인 외 인물로 채워지면 group_schedule입니다. "
+        "예: '철수랑 회의 잡아줘', '팀 회의', '팀원들이랑 회식하자, 영희랑 민수 부를게'.\n"
+        "- todo: 완료해야 할 작업입니다. 마감은 있을 수 있으나 특정 시각에 열리는 이벤트는 아닙니다. "
+        "예: '기말 보고서 작성해야 해', '장보기 등록해줘'.\n"
+        "- reminder: 특정 시점에 알려달라는 것 자체가 주 의도입니다(알림·알람·리마인드·~알려줘). "
+        "예: '오후 5시에 약 먹으라고 알려줘'.\n"
+        "- unknown: 위 기준에 맞지 않거나 불명확합니다. 확실하지 않으면 unknown으로 둡니다.\n"
+        "겹치는 예시) '내일 3시까지 보고서 작성해야하는 거 알람해줘' -> reminder. "
+        "내용은 보고서 작성(todo)이지만 사용자가 시킨 동작이 '알람해줘'이므로 reminder가 이깁니다. "
+        "이때 마감 3시는 date/start_time에 보존하고, reason에 'todo에 대한 알림'이라고 근거를 남깁니다.\n"
+        "요청 조각 하나는 반드시 하나의 kind만 가집니다."
     ))
     title: str | None = Field(default=None, description="요청의 제목 또는 할 일 이름입니다. 모르면 None으로 둡니다.")
     date: str | None = Field(default=None, description="일정 날짜입니다. 확실할 때만 YYYY-MM-DD 형식으로 채우고 모르면 None으로 둡니다.")
@@ -241,6 +250,16 @@ def week02_prompt_parts() -> list[str]:
             "현재 날짜를 기준으로 상대 날짜를 해석하고, 요청이 하나뿐이어도 requests 목록에 StructuredRequest 하나를 담는다. "
             "personal_create_schedule tool 결과 JSON의 created_schedule을 읽어 각 필드를 채우되, tool을 다시 호출하지 않고 payload를 읽어 structured_response로 만든다. "
             "SQLite 저장, RAG, 외부 멤버 일정 조율은 수행하지 않는다."
+        ),
+        (
+            "kind 분류 규칙(반드시 지킨다): 각 요청 조각은 정확히 하나의 kind만 가진다. 아래 순서대로 판단한다. "
+            "① 먼저 사용자가 시킨 동작 동사로 큰 갈래를 정한다. "
+            "'알려줘'·'알람'·'리마인드'처럼 특정 시점에 알려달라는 것이 주 의도이면 reminder, 완료해야 할 작업이면 todo이다. "
+            "이 단계가 일정 여부보다 우선한다(예: '철수랑 회의 있는 거 알람해줘'는 동작이 알람이므로 group_schedule이 아니라 reminder). "
+            "② 일정(회의·약속·회식·모임 등)을 잡는 것이 주 의도이면, 참석자로 group과 personal을 가른다. "
+            "본인 외 다른 참석자가 한 명이라도 있으면(구체적 이름 철수·영희든 '팀'·'가족'·'팀원들' 같은 그룹이든) group_schedule, "
+            "다른 참석자가 전혀 없으면 personal_schedule이다. "
+            "③ 위 어디에도 맞지 않거나 불명확하면 unknown으로 둔다."
         )
     ]
 
