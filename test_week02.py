@@ -182,6 +182,51 @@ SCENARIOS: list[dict[str, Any]] = [
             first_start_is("09:00"),
         ],
     },
+    {
+        "desc": "⑨ 그룹(팀) 참석자 + 알림 동사 → 동작 동사 우선으로 reminder",
+        "input": "팀 회의 있는 거 잊지 않게 알려줘",
+        "checks": [
+            first_kind_is("reminder"),
+        ],
+    },
+    {
+        "desc": "⑩ 참석자 없는 todo 성격 + 알람 동사 → reminder",
+        "input": "장보기 목록 만드는 거 깜빡하지 않게 알람 맞춰줘",
+        "checks": [
+            first_kind_is("reminder"),
+        ],
+    },
+    {
+        "desc": "⑪ 참석자 있음 + 알림 동사 없음 → 참석자 기준 그대로 group_schedule",
+        "input": "다음 주 월요일에 영희랑 저녁 약속 있어",
+        "checks": [
+            first_kind_is("group_schedule"),
+            first_date_is(next_week(0)),  # 다음 주 월요일
+            first_member_contains("영희"),
+        ],
+    },
+    {
+        "desc": "⑫ 참석자 없음 + 알림 동사 → personal_schedule로 새지 않고 reminder",
+        "input": "이번 주말에 헬스장 예약 알림 설정해줘",
+        "checks": [
+            first_kind_is("reminder"),
+        ],
+    },
+    {
+        "desc": "⑬ 구체적 이름이 아닌 그룹 표현(동아리 사람들) → group_schedule",
+        "input": "동아리 사람들이랑 스터디 모임 잡아줘",
+        "checks": [
+            first_kind_is("group_schedule"),
+        ],
+    },
+    {
+        "desc": "⑭ 참석자 없는 개인 일정 대조군",
+        "input": "나 혼자 헬스장 갈 거야, 저녁 7시에",
+        "checks": [
+            first_kind_is("personal_schedule"),
+            first_start_is("19:00"),
+        ],
+    },
 ]
 
 
