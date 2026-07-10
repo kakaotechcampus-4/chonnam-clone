@@ -258,29 +258,21 @@ def _field_catalog(model: type[BaseModel]) -> str:
 
 
 _EXAMPLE_BATCH_FILLED = StructuredRequestBatch(
-    requests=[
-        StructuredRequest(
-            kind="personal_schedule",
-            title="회의",
-            date="2026-01-13",
-            start_time="15:00",
-            members=["철수"],
-            reason="특정 날짜·시간의 개인 일정 생성 요청",
-            original_text="다음 주 화요일 오후 3시에 철수랑 회의 잡아줘",
-        )
-    ],
+    requests=[StructuredRequest(
+        kind="personal_schedule", title="회의", date="2026-01-13",
+        start_time="15:00", members=["철수"],
+        reason="특정 날짜·시간의 개인 일정 생성 요청",
+        original_text="다음 주 화요일 오후 3시에 철수랑 회의 잡아줘",
+    )],
     base_date="2026-01-05",
 )
 
 _EXAMPLE_BATCH_NONE = StructuredRequestBatch(
-    requests=[
-        StructuredRequest(
-            kind="todo",
-            title="보고서 마무리",
-            reason="기한이 정해진 할 일 요청",
-            original_text="이번 주 안에 보고서 마무리해야 해",
-        )
-    ],
+    requests=[StructuredRequest(
+        kind="todo", title="보고서 마무리",
+        reason="기한이 정해진 할 일 요청",
+        original_text="이번 주 안에 보고서 마무리해야 해",
+    )],
     base_date="2026-01-05",
 )
 
@@ -306,9 +298,9 @@ def week02_prompt_parts() -> list[str]:
         (
             "다음은 구조화 예시다. 실제 base_date는 오늘 날짜를 쓰되, 아래 형태를 참고한다.\n"
             "[예시 1] 입력: \"다음 주 화요일 오후 3시에 철수랑 회의 잡아줘\" (base_date=2026-01-05 기준)\n"
-            f"출력: {_EXAMPLE_BATCH_FILLED.model_dump_json()}\n"
+            f"출력: {_EXAMPLE_BATCH_FILLED.model_dump_json(indent=2)}\n"
             "[예시 2] 입력: \"이번 주 안에 보고서 마무리해야 해\"\n"
-            f"출력: {_EXAMPLE_BATCH_NONE.model_dump_json()}"
+            f"출력: {_EXAMPLE_BATCH_NONE.model_dump_json(indent=2)}"
         ),
         "이번 주에는 SQLite 저장, RAG, 외부 멤버 일정 조율을 하지 않는다.",
     ]
