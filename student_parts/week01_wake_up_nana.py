@@ -34,7 +34,7 @@ CHAT_MEMORY_PROMPT = (
     "사용자가 삭제를 요청하면 아래 지시사항에 따라서 처리해줘."
     "1. personal list schedules을 활용해서 일정을 조회한다."
     "2. 사용자가 삭제 요청한 일정의 아이디를 검색한다."
-    "3. personal_delete_schedules를 활용해서 일정을 삭제한다."
+    "3. personal_delete_schedule를 활용해서 일정을 삭제한다."
 )
 
 
