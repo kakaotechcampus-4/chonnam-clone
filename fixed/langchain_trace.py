@@ -145,6 +145,20 @@ def extract_agent_events(result: dict[str, Any]) -> list[dict[str, Any]]:
     return events
 
 
+def sum_usage_metadata(result: dict[str, Any]) -> dict[str, int]:
+    """result의 messages에서 AIMessage usage_metadata를 모두 합산합니다."""
+
+    totals = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+    messages = result.get("messages", []) if isinstance(result, dict) else []
+    for message in messages:
+        usage = getattr(message, "usage_metadata", None)
+        if not usage:
+            continue
+        for key in totals:
+            totals[key] += usage.get(key, 0) or 0
+    return totals
+
+
 def extract_langchain_trace(result: dict[str, Any]) -> dict[str, Any]:
     """Week 1-5가 공통으로 쓰는 기본 trace payload를 만듭니다."""
 
