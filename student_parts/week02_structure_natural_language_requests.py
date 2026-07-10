@@ -25,6 +25,9 @@ CHAT_MEMORY_PROMPT_WEEK_02 = f"""
 StructuredRequestBatch에는 요청이 하나뿐이어도 requests 목록에 StructuredRequest 하나를 담는다.
 Week 1 tool(personal_create_schedule 등)의 결과 JSON을 이미 받은 경우 다시 tool을 호출하지 않고, payload의 created_schedule를 읽어 구조화 결과를 채워라.
 Week 2에서는 SQLite 저장, RAG, 외부 멤버 일정 조율을 하지 않는다.
+날짜나 시간이 확정되지 않은 요청에는 personal_create_schedule 같은 생성 tool을 호출하지 말고, structured_response만 만든다.
+예시1: "내일 오후 3시에 치과" -> 오후가 명시됐으므로 start_time="15:00"
+예시2: "다음 주 화요일 3시에 철수랑 회의 잡아줘" -> 오전/오후가 없으므로 start_time=None (임의로 오후로 단정하지 않는다)
 """
 
 # [2주차 수강생 구현 가이드]
@@ -166,9 +169,9 @@ class StructuredRequest(BaseModel):
 
     kind: RequestKind = Field(description="요청 종류: personal_schedule/group_schedule/todo/reminder/unknown 중 하나")
     title: str | None = Field(default=None, description="일정 제목")
-    date: str | None = Field(default=None, description="YYYY-MM-DD")
-    start_time: str | None = Field(default=None, description="HH:MM")
-    end_time: str | None = Field(default=None, description="HH:MM")
+    date: str | None = Field(default=None, description="확실할 때만 YYYY-MM-DD 형식으로 채운다. 확실하지 않을 때에는 값을 None으로 둔다.")
+    start_time: str | None = Field(default=None, description="확실할 때만 HH:MM 형식으로 채운다. 확실하지 않을 때에는 값을 None으로 둔다. 오전/오후가 명시되지 않은 시각 표현(예: '3시')은 확정된 시각으로 보지 않고 None으로 둔다.")
+    end_time: str | None = Field(default=None, description="확실할 때만 HH:MM 형식으로 채운다. 확실하지 않을 때에는 값을 None으로 둔다. 오전/오후가 명시되지 않은 시각 표현(예: '3시')은 확정된 시각으로 보지 않고 None으로 둔다.")
     members: list[str] = Field(default_factory=list, description="참석자/관련 멤버")
     priority: str | None = Field(default=None, description="우선 순위")
     reason: str | None = Field(default=None, description="판단 근거")
