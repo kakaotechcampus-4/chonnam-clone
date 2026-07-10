@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 from langchain.agents import create_agent
 from langchain.tools import tool
@@ -230,6 +230,61 @@ def week02_system_prompt() -> str:
     )
 
 
+def _nested_model(annotation: Any) -> type[BaseModel] | None:
+    """annotation이 BaseModel이거나 그 리스트/컨테이너면 내부 모델 타입을 반환합니다."""
+
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        return annotation
+    for arg in get_args(annotation):
+        if isinstance(arg, type) and issubclass(arg, BaseModel):
+            return arg
+    return None
+
+
+def _field_catalog(model: type[BaseModel]) -> str:
+    """스키마의 필드명·설명을 런타임에 추출합니다. 중첩 모델은 재귀적으로 펼칩니다."""
+
+    parts = []
+    for name, info in model.model_fields.items():
+        nested = _nested_model(info.annotation)
+        if nested is not None:
+            inner = _field_catalog(nested)
+            parts.append(f"{name}({info.description}: {inner})" if info.description else f"{name}({inner})")
+        elif info.description:
+            parts.append(f"{name}({info.description})")
+        else:
+            parts.append(name)
+    return ", ".join(parts)
+
+
+_EXAMPLE_BATCH_FILLED = StructuredRequestBatch(
+    requests=[
+        StructuredRequest(
+            kind="personal_schedule",
+            title="회의",
+            date="2026-01-13",
+            start_time="15:00",
+            members=["철수"],
+            reason="특정 날짜·시간의 개인 일정 생성 요청",
+            original_text="다음 주 화요일 오후 3시에 철수랑 회의 잡아줘",
+        )
+    ],
+    base_date="2026-01-05",
+)
+
+_EXAMPLE_BATCH_NONE = StructuredRequestBatch(
+    requests=[
+        StructuredRequest(
+            kind="todo",
+            title="보고서 마무리",
+            reason="기한이 정해진 할 일 요청",
+            original_text="이번 주 안에 보고서 마무리해야 해",
+        )
+    ],
+    base_date="2026-01-05",
+)
+
+
 def week02_prompt_parts() -> list[str]:
     """2주차 structured output agent가 따르는 system prompt 조각입니다."""
 
@@ -240,8 +295,8 @@ def week02_prompt_parts() -> list[str]:
             "'내일', '다음 주 화요일' 같은 상대 날짜는 이 날짜를 기준으로 YYYY-MM-DD로 계산한다."
         ),
         (
-            "사용자의 요청을 StructuredRequest 필드(kind/title/date/start_time/end_time/members/priority/reason 등)로 "
-            "구조화한다. 모르는 값은 억지로 만들지 말고 None 또는 빈 리스트로 둔다. "
+            f"사용자의 요청을 다음 필드로 구조화한다: {_field_catalog(StructuredRequestBatch)}. "
+            "모르는 값은 억지로 만들지 말고 None 또는 빈 리스트로 둔다. "
             "original_text에는 구조화 전 사용자의 원문을 그대로 담는다."
         ),
         (
@@ -251,15 +306,9 @@ def week02_prompt_parts() -> list[str]:
         (
             "다음은 구조화 예시다. 실제 base_date는 오늘 날짜를 쓰되, 아래 형태를 참고한다.\n"
             "[예시 1] 입력: \"다음 주 화요일 오후 3시에 철수랑 회의 잡아줘\" (base_date=2026-01-05 기준)\n"
-            "출력: {\"requests\": [{\"kind\": \"personal_schedule\", \"title\": \"회의\", "
-            "\"date\": \"2026-01-13\", \"start_time\": \"15:00\", \"end_time\": null, "
-            "\"members\": [\"철수\"], \"priority\": null, \"reason\": \"특정 날짜·시간의 개인 일정 생성 요청\", "
-            "\"original_text\": \"다음 주 화요일 오후 3시에 철수랑 회의 잡아줘\"}], \"base_date\": \"2026-01-05\"}\n"
+            f"출력: {_EXAMPLE_BATCH_FILLED.model_dump_json()}\n"
             "[예시 2] 입력: \"이번 주 안에 보고서 마무리해야 해\"\n"
-            "출력: {\"requests\": [{\"kind\": \"todo\", \"title\": \"보고서 마무리\", "
-            "\"date\": null, \"start_time\": null, \"end_time\": null, \"members\": [], "
-            "\"priority\": null, \"reason\": \"기한이 정해진 할 일 요청\", "
-            "\"original_text\": \"이번 주 안에 보고서 마무리해야 해\"}], \"base_date\": \"2026-01-05\"}"
+            f"출력: {_EXAMPLE_BATCH_NONE.model_dump_json()}"
         ),
         "이번 주에는 SQLite 저장, RAG, 외부 멤버 일정 조율을 하지 않는다.",
     ]
