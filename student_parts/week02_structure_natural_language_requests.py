@@ -165,7 +165,12 @@ class StructuredRequest(BaseModel):
     )
     title: str | None = Field(
         default=None,
-        description="요청에서 제목이 명확히 확인될 때만 짧게 작성. 제목이 없거나 애매하면 None으로 둠.",
+        description=(
+            "요청 또는 tool 결과에서 일정명, 할 일명, 알림명이 명확히 확인되면 반드시 짧게 작성. "
+            "created_schedule.title이 있으면 그 값을 그대로 사용. "
+            "예: '롤약속', '회식', '병원 예약', '회의'. "
+            "정말 제목을 알 수 없을 때만 None으로 둠."
+        ),
     )
     date: str | None = Field(
         default=None,
@@ -258,10 +263,19 @@ def week02_system_prompt() -> str:
         [
             *week02_prompt_parts(),
             """
-Final Week 2 structured response rules:
-- The final response must be StructuredRequestBatch.
-- Even a single request must be returned as one StructuredRequest inside the requests list.
-- When personal_create_schedule returns JSON, read created_schedule and use it to fill StructuredRequest fields.
+도구 결과 처리 규칙:
+- Week 1 도구 결과는 최종 답변이 아니라 구조화를 위한 중간 근거입니다.
+- personal_create_schedule이 JSON을 반환하면 created_schedule을 읽어 StructuredRequest 필드를 채웁니다.
+- created_schedule.title 값이 있으면 StructuredRequest.title에 반드시 그대로 복사합니다. title을 None으로 두지 않습니다.
+- created_schedule.date는 date로, start_time은 start_time으로, end_time은 end_time으로, attendees는 members로 매핑합니다.
+- 원본 도구 JSON을 최종 답변으로 반환하지 않습니다.
+
+최종 출력 계약:
+- 최종 응답은 반드시 StructuredRequestBatch 하나여야 합니다.
+- 최종 응답에는 StructuredRequestBatch 스키마의 필드만 포함합니다.
+- 요청이 하나뿐이어도 requests 목록 안에 StructuredRequest 하나를 넣어 반환합니다.
+- StructuredRequest 하나만 단독으로 반환하지 않습니다.
+- 자연어 설명, markdown, 코드블록, 도구 호출 결과, 추가 JSON 객체를 최종 응답에 포함하지 않습니다.
 """.strip(),
         ]
     )
@@ -272,18 +286,17 @@ def week02_prompt_parts() -> list[str]:
 
     return [
         *week01_prompt_parts(),
-        f"The Week 2 structuring base date is {current_app_date_iso()}. Set StructuredRequestBatch.base_date to this date.",
+        f"Week 2 구조화 기준 날짜는 {current_app_date_iso()}입니다. StructuredRequestBatch.base_date를 이 날짜로 설정하세요.",
         """
-You are Nana's Week 2 request structuring agent.
+당신은 Nana의 Week 2 요청 구조화 agent입니다.
 
-You can use the Week 1 personal schedule tools. When a Week 1 tool returns JSON,
-read its payload and convert the result into StructuredRequestBatch.
+개인 일정을 해석하거나 생성해야 할 때 Week 1 개인 일정 도구를 사용할 수 있습니다.
+단, 도구 결과는 최종 답변이 아니라 구조화를 위한 근거로만 사용합니다.
 
-Follow the StructuredRequest field descriptions. Do not invent missing values;
-leave unclear fields as None or empty lists as defined by the schema.
+StructuredRequest 필드 설명을 따르세요. 누락된 값을 임의로 만들지 마세요.
+명확하지 않은 필드는 스키마 정의에 따라 None 또는 빈 리스트로 둡니다.
 
-In Week 2, do not save to SQLite, use RAG, search memory, or coordinate external
-member calendars.
+Week 2에서는 SQLite 저장, RAG, 메모리 검색, 외부 멤버 일정 조율을 하지 않습니다.
 """.strip(),
         # TODO: Week 2 요청 구조화 agent 역할과 현재 날짜(current_app_date_iso()) 기준을 추가하세요.
         # TODO: 자연어를 StructuredRequest 필드(kind/title/date/start_time/end_time/members 등)로 구조화하도록 지시하세요.
