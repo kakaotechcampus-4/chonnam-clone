@@ -156,7 +156,7 @@ def week02_system_prompt() -> str:
         "사용자의 요청이 1개뿐이더라도 requests 필드는 반드시 리스트([]) 형태로 담아야 합니다. "
         "personal_create_schedule 도구의 결과로 반환된 JSON에서 'created_schedule' 부분을 꼼꼼히 읽어 필드를 채우세요."
     )
-    return join_system_prompt(*week02_prompt_parts(), final_instruction)
+    return join_system_prompt([*week02_prompt_parts(), final_instruction])
 
     ...
 
