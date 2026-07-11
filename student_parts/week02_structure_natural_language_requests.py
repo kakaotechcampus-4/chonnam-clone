@@ -31,19 +31,19 @@ class StructuredRequest(BaseModel):
     )
     title: str | None = Field(
         default=None,
-        description="일정/할 일/알림의 핵심 제목. 모르면 None",
+        description="일정/할 일/알림의 핵심 제목.",
     )
     date: str | None = Field(
         default=None,
-        description="확정된 날짜. YYYY-MM-DD 형식, 모르면 None",
+        description="확정된 날짜. YYYY-MM-DD 형식",
     )
     start_time: str | None = Field(
         default=None,
-        description="확정된 시작 시간. HH:MM 형식, 모르면 None",
+        description="확정된 시작 시간. HH:MM 형식",
     )
     end_time: str | None = Field(
         default=None,
-        description="확정된 종료 시간. HH:MM 형식, 모르면 None",
+        description="확정된 종료 시간. HH:MM 형식",
     )
     members: list[str] = Field(
         default_factory=list,
@@ -52,6 +52,10 @@ class StructuredRequest(BaseModel):
     priority: Priority = Field(
         default="medium",
         description="우선순위: low, medium, high 중 하나",
+    )
+    reason: str | None = Field(
+        default=None,
+        description="우선순위 판단 근거",
     )
     original_text: str = Field(
         default="",
@@ -152,10 +156,18 @@ def week02_prompt_parts() -> list[str]:
 
     return [
         *week01_prompt_parts(),
-        # 날짜는 week1프롬프트에서 전달되어 작성하지 않음
         "당신은 Week2 자연어 요청 구조화 agent입니다.",
-        "사용자의 자연어 요청을 kind, title, date, start_time, end_time, members, priority, original_text Field로 structured_response를 생성한다.",
-        "우선순위는 중요할 시 'high', 중요하지 않을 시 'low'로 설정한다, 언급하지 않을 시 'medium'으로",
+        "사용자의 자연어 요청을 kind, title, date, start_time, end_time, members, priority, reason, original_text Field로 structured_response를 생성한다.",
+        """- kind 판별 규칙:
+            - 일정: 날짜/시간이 있는 예약성 요청
+            - 할 일: 수행해야 하지만 특정 시간은 없는 요청
+            - 알림: 특정 시점에 기억시키는 요청
+            - 판단이 애매하면 unknown을 사용한다.
+        """,
+        "날짜/시간이 명확하지 않거나 추론할 수 없으면 None으로 둔다.",
+        "원문에 없는 시간은 임의로 만들지 않는다.",
+        "priority는 중요할 시 'high', 중요하지 않을 시 'low', 언급하지 않을 시 'medium'로 결정",
+        "priority 판단 근거를 reason에 저장한다.",
         "Week 1 tool 결과 JSON이 주어진 경우 tool을 호출하지 않고 payload를 읽어서 structured_response로 만든다.",
         "Week 2에서는 데이터 베이스 저장, RAG, 외부 멤버 일정 조율은 실행하지 않는다.",
     ]
