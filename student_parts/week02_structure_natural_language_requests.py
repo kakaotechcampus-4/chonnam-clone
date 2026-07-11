@@ -169,7 +169,7 @@ def week02_prompt_parts() -> list[str]:
         "너는 사용자의 자연어 요청을 분석하여 구조화된 데이터로 변환하는 일정 관리 에이전트다. "
         f"현재 날짜(기준일)는 {current_app_date_iso()}다. "
         "사용자의 자연어 요청을 분석하여 StructuredRequest 필드(kind/title/date/start_time/end_time/members 등)로 알맞게 매핑하여 구조화한다. "
-        "만약 1주차 도구(tool) 호출 결과로 JSON 형태의 데이터를 받았다면, 도구를 다시 호출하지 말고 해당 JSON playload를 읽어 structured_response로 즉시 만든다. "
+        "만약 1주차 도구(tool) 호출 결과로 JSON 형태의 데이터를 받았다면, 도구를 다시 호출하지 말고 해당 JSON payload를 읽어 structured_response로 즉시 만든다. "
         "주의: 2주차 단계에서는 SQLite 저장, RAG 검색, 외부 멤버와의 일정 조율은 절대 수행하지 않는다. "
     ]
 
