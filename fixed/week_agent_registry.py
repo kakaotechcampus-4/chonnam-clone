@@ -18,6 +18,7 @@ from fixed.langchain_trace import (
     extract_langchain_trace as extract_common_langchain_trace,
     message_tool_call_names,
     stream_chunk_messages,
+    sum_usage_metadata,
 )
 
 
@@ -105,6 +106,11 @@ def run_active_week_agent(active_week: int | str | None, messages: list[dict[str
         builder = getattr(module, "build_week_agent")
         agent = builder()
         result = agent.invoke({"messages": messages})
+        usage = sum_usage_metadata(result)
+        print(
+            f"[Week {week}] 토큰 사용량 — input: {usage['input_tokens']}, "
+            f"output: {usage['output_tokens']}, total: {usage['total_tokens']}"
+        )
         trace = _extract_trace(module, result)
         trace["mode"] = "active_week_agent"
         trace["active_week"] = week
@@ -156,6 +162,11 @@ def stream_active_week_agent(
         result = {"messages": collected_messages}
         if structured_response is not None:
             result["structured_response"] = structured_response
+        usage = sum_usage_metadata(result)
+        print(
+            f"[Week {week}] 토큰 사용량 — input: {usage['input_tokens']}, "
+            f"output: {usage['output_tokens']}, total: {usage['total_tokens']}"
+        )
         trace = _extract_trace(module, result)
         trace["mode"] = "active_week_agent"
         trace["active_week"] = week
