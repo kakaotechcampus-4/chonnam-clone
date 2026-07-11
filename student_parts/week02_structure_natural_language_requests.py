@@ -125,21 +125,27 @@ class StructuredRequestBatch(BaseModel):
 
 def _coerce_structured_request(value: Any) -> StructuredRequest:
     """이후 회차에서 사용할 StructuredRequest 정규화 예약 함수입니다."""
-
-    ...
+    if isinstance(value, StructuredRequest):
+        return value
+        
+    if isinstance(value, dict):
+        return StructuredRequest(**value)
+        
+    raise ValueError(f"StructuredRequest로 변환할 수 없는 데이터입니다: {type(value)}")
 
 
 def extract_structured_request(text: str) -> StructuredRequest:
     """이후 회차에서 사용할 단건 구조화 예약 함수입니다."""
-
-    ...
+    agent = build_week02_agent()
+    response_batch = agent.invoke({"input": text})
+    return response_batch.requests[0]
 
 
 @tool
 def extract_schedule_request(query: str) -> str:
     """이후 회차에서 저장 흐름과 연결할 예약 tool입니다."""
-
-    ...
+    request_obj = extract_structured_request(query)
+    return request_obj.model_dump_json()
 
 
 def week02_tools() -> list[Any]:
@@ -156,7 +162,7 @@ def week02_system_prompt() -> str:
         "사용자의 요청이 1개뿐이더라도 requests 필드는 반드시 리스트([]) 형태로 담아야 합니다. "
         "personal_create_schedule 도구의 결과로 반환된 JSON에서 'created_schedule' 부분을 꼼꼼히 읽어 필드를 채우세요."
     )
-    return join_system_prompt(*week02_prompt_parts(), final_instruction)
+    return join_system_prompt([*week02_prompt_parts(), final_instruction])
 
     ...
 
@@ -169,7 +175,7 @@ def week02_prompt_parts() -> list[str]:
         "너는 사용자의 자연어 요청을 분석하여 구조화된 데이터로 변환하는 일정 관리 에이전트다. "
         f"현재 날짜(기준일)는 {current_app_date_iso()}다. "
         "사용자의 자연어 요청을 분석하여 StructuredRequest 필드(kind/title/date/start_time/end_time/members 등)로 알맞게 매핑하여 구조화한다. "
-        "만약 1주차 도구(tool) 호출 결과로 JSON 형태의 데이터를 받았다면, 도구를 다시 호출하지 말고 해당 JSON playload를 읽어 structured_response로 즉시 만든다. "
+        "만약 1주차 도구(tool) 호출 결과로 JSON 형태의 데이터를 받았다면, 도구를 다시 호출하지 말고 해당 JSON payload를 읽어 structured_response로 즉시 만든다. "
         "주의: 2주차 단계에서는 SQLite 저장, RAG 검색, 외부 멤버와의 일정 조율은 절대 수행하지 않는다. "
     ]
 
