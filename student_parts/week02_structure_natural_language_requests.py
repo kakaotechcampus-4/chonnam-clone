@@ -183,6 +183,8 @@ class StructuredRequest(BaseModel):
 
         if self.kind == "group_schedule" and not self.members:
             raise ValueError("group_schedule은 members(참석자 최소 1명)가 필요합니다. 없으면 kind=unknown으로 두세요.")
+        if self.kind == "personal_schedule" and self.members:
+            raise ValueError("members에 실제 참석자가 있으면 personal_schedule이 아니라 group_schedule로 분류하세요.")
         if self.kind == "todo" and self.date is None:
             raise ValueError("todo는 date(마감일)가 필요합니다. 확인되지 않았으면 kind=unknown으로 두세요.")
         if self.kind == "reminder" and (self.date is None or self.start_time is None):
@@ -257,34 +259,46 @@ def week02_tools() -> list[Any]:
 
 
 def week02_system_prompt() -> str:
-    """2주차 agent가 따르는 시스템 프롬프트입니다."""
+    """2주차 agent(tool + 대화 history + StructuredRequestBatch 출력)가 따르는 시스템 프롬프트입니다.
 
-    return join_system_prompt(week02_prompt_parts())
-
-
-def week02_prompt_parts() -> list[str]:
-    """2주차 structured output agent가 따르는 system prompt 조각입니다."""
+    week02_prompt_parts()의 구조화 규칙 위에, tool을 가진 agent에만 필요한 두 가지(tool 결과
+    처리, 최종 출력 형식)를 얹어서 조립합니다. 이 두 조각을 week02_prompt_parts()가 아니라
+    여기서 추가하는 이유는 extract_structured_request() bridge가 week02_prompt_parts()만
+    그대로 재사용하기 때문입니다 — bridge에는 tool도 대화 history도 없어서, 여기 있는 지시를
+    그쪽에 섞으면 오히려 맞지 않는 지시가 됩니다.
+    """
 
     today = current_app_date_iso()
-    today_date = date.fromisoformat(today)
-    today_weekday = _KOREAN_WEEKDAYS[today_date.weekday()]
+    return join_system_prompt(
+        [*week02_prompt_parts(), _week02_tool_result_rules(), _week02_output_format_rules(today)]
+    )
 
-    past_offset = min(4, today_date.day - 1) if today_date.day > 1 else 1
-    past_example_date = today_date - timedelta(days=past_offset)
-    future_example_date = today_date + timedelta(days=1)
-    next_month = today_date.month + 1 if today_date.month < 12 else 1
-    next_month_year = today_date.year if today_date.month < 12 else today_date.year + 1
-    past_example_answer = date(next_month_year, next_month, past_example_date.day)
 
-    return [
-        *week01_prompt_parts(),
-        f"""## Week 2 · 자연어 요청을 StructuredRequestBatch로 구조화
+def _week02_tool_result_rules() -> str:
+    """personal_create_schedule tool 결과를 읽는 규칙.
 
-오늘 날짜는 {today}({today_weekday})입니다. 이번 주차는 개인 일정 tool 호출에서 한 걸음 더 나아가, 사용자의
-자연어 요청이나 Week 1 tool이 반환한 JSON payload를 최종적으로 StructuredRequestBatch 형태로
-구조화해 답하는 것이 목표입니다.
+    tool을 가진 build_week02_agent()에서만 필요합니다 — extract_structured_request()
+    bridge는 tool 없이 문장만 구조화하므로 이 지시를 받으면 오히려 맞지 않습니다.
+    """
 
-### 최종 답변 규칙
+    return """### personal_create_schedule tool 결과 처리
+- 개인 일정 생성 요청이면 먼저 personal_create_schedule tool을 호출해 임시 일정을 만듭니다.
+- tool이 반환한 created_schedule JSON은 다시 tool을 호출하지 않고 그대로 읽어, 그 안의
+  title/date/start_time/end_time/attendees 값으로 StructuredRequest 필드를 채웁니다.
+  attendees는 members 필드로 옮깁니다.
+- created_schedule의 end_time이 "미정"이면 아직 시간이 정해지지 않았다는 뜻이므로,
+  StructuredRequest의 end_time은 문자열 "미정"이 아니라 None으로 둡니다."""
+
+
+def _week02_output_format_rules(today: str) -> str:
+    """최종 답변을 StructuredRequestBatch로 반환하는 규칙.
+
+    여러 요청으로 나누기·멀티턴 유지처럼 "대화 전체"를 보는 build_week02_agent()에서만
+    의미가 있습니다 — extract_structured_request() bridge는 문장 하나만 StructuredRequest
+    하나로 구조화하고 대화 history도 없어서, 이 지시는 필요하지도 맞지도 않습니다.
+    """
+
+    return f"""### 최종 답변 규칙
 - 최종 답변은 반드시 StructuredRequestBatch 형태의 structured_response로 반환합니다.
 - requests 목록에는 요청이 하나뿐이어도 StructuredRequest 하나를 담습니다.
 - 한 문장에 여러 일정/할 일/알림 의도가 섞여 있으면 각각을 별도 StructuredRequest로 나눠 requests에 담습니다.
@@ -292,15 +306,52 @@ def week02_prompt_parts() -> list[str]:
 - 대화에 여러 turn이 있으면, 이전 turn에서 kind=unknown으로 되물었던 원래 의도(personal_schedule/
   group_schedule/todo/reminder 중 무엇이었는지)는 유지한 채, 이번 turn에서 사용자가 답한 정보로
   빠졌던 필드만 채워 완성합니다. 예를 들어 reminder로 되물은 뒤 날짜/시간을 답 받았다면, kind를
-  personal_schedule 같은 다른 종류로 바꾸지 말고 reminder를 유지하며 완성합니다.
+  personal_schedule 같은 다른 종류로 바꾸지 말고 reminder를 유지하며 완성합니다."""
 
-### personal_create_schedule tool 결과 처리
-- 개인 일정 생성 요청이면 먼저 personal_create_schedule tool을 호출해 임시 일정을 만듭니다.
-- tool이 반환한 created_schedule JSON은 다시 tool을 호출하지 않고 그대로 읽어, 그 안의
-  title/date/start_time/end_time/attendees 값으로 StructuredRequest 필드를 채웁니다.
-  attendees는 members 필드로 옮깁니다.
-- created_schedule의 end_time이 "미정"이면 아직 시간이 정해지지 않았다는 뜻이므로,
-  StructuredRequest의 end_time은 문자열 "미정"이 아니라 None으로 둡니다.
+
+_WEEK02_SCOPE_LIMITS = """### 이번 주차에서 하지 않는 것
+- SQLite 저장, RAG 검색, 외부 멤버 일정 조율은 Week 2에서 다루지 않습니다. 구조화 결과를 만드는 것까지만 합니다."""
+
+
+def week02_prompt_parts() -> list[str]:
+    """StructuredRequest 필드를 채우는 구조화 규칙 조각입니다.
+
+    build_week02_agent()의 system prompt뿐 아니라 extract_structured_request() bridge의
+    system 메시지로도 그대로 재사용됩니다(가이드에 명시된 사용법). 그래서 여기에는 "필드를
+    어떻게 채울지"에 대한 규칙만 담고, tool 결과 처리나 최종 출력 형식처럼 tool·대화 history가
+    있는 agent에서만 필요한 지시는 week02_system_prompt()에서 따로 추가합니다.
+    """
+
+    today = current_app_date_iso()
+    today_date = date.fromisoformat(today)
+    today_weekday = _KOREAN_WEEKDAYS[today_date.weekday()]
+    future_example_date = today_date + timedelta(days=1)
+
+    if today_date.day > 1:
+        # offset을 today_date.day - 1 이하로 제한하면 이번 달 안에서만 며칠 전 날짜를 고르게 되므로
+        # (전달로 넘어가지 않음), "다음 달 = 오늘이 속한 달 + 1"이 항상 유효합니다.
+        past_offset = min(4, today_date.day - 1)
+        past_example_date = today_date - timedelta(days=past_offset)
+        next_month = today_date.month + 1 if today_date.month < 12 else 1
+        next_month_year = today_date.year if today_date.month < 12 else today_date.year + 1
+        past_example_answer = date(next_month_year, next_month, past_example_date.day)
+        past_example_line = (
+            f"월 없이 '{past_example_date.day}일까지'라고만 말한 것은 이번 달 {past_example_date.day}일이 "
+            f"이미 지났으므로 {past_example_answer.isoformat()}로 계산해야 하고, "
+        )
+    else:
+        # 오늘이 이번 달 1일이면 이번 달 안에 "이미 지난 날짜"가 존재할 수 없어(전달로 넘어가면
+        # 다음 달 계산 기준이 오늘이 아니라 전달이 되어버려 날짜가 깨질 수 있음) 예시를 만들지 않고,
+        # 이번 달 1일이라는 사실 자체로 규칙을 설명합니다.
+        past_example_line = "오늘이 이번 달 1일이라 이번 달 안에는 아직 지난 날짜가 없으므로, "
+
+    return [
+        *week01_prompt_parts(),
+        f"""## Week 2 · 자연어 요청을 StructuredRequest 필드로 구조화
+
+오늘 날짜는 {today}({today_weekday})입니다. 이번 주차는 개인 일정 tool 호출에서 한 걸음 더 나아가, 사용자의
+자연어 요청이나 Week 1 tool이 반환한 JSON payload를 StructuredRequest 필드(kind/title/date/start_time/
+end_time/members/priority/reason)로 구조화하는 것이 목표입니다.
 
 ### 구조화 규칙
 - kind는 personal_schedule/group_schedule/todo/reminder/unknown 중 하나입니다.
@@ -308,10 +359,12 @@ def week02_prompt_parts() -> list[str]:
   '팀', '다같이'처럼 뭉뚱그린 표현은 참석자로 인정하지 않습니다.
 - 날짜가 '다음 주 수요일'처럼 상대적으로 표현되면 오늘({today}) 기준으로 계산해 YYYY-MM-DD로 변환합니다.
   연도는 항상 오늘과 같은 {today[:4]}년을 사용하며, 학습 데이터에 익숙한 다른 연도로 절대 바꾸지 않습니다.
-- 사용자가 월을 말하지 않고 '일'만 말하면(예: 'N일까지', 'N일에 만나'), 그 일(day)이 이번 달 기준으로
-  이미 지났으면 다음 달 같은 일로 계산하고, 아직 지나지 않았으면 이번 달 같은 일로 계산합니다. 예를 들어
-  오늘이 {today}이면, 월 없이 '{past_example_date.day}일까지'라고만 말한 것은 이번 달 {past_example_date.day}일이
-  이미 지났으므로 {past_example_answer.isoformat()}로 계산해야 하고, '{future_example_date.day}일까지'라고만
+- 사용자가 월을 말하지 않고 '일'만 말하면(예: 'N일까지', 'N일에 만나'), 오늘의 일(day) 숫자인
+  {today_date.day}과 N을 직접 숫자로 비교합니다: N이 {today_date.day}보다 작으면(이미 지났으면)
+  다음 달 같은 일로, N이 {today_date.day} 이상이면(아직 지나지 않았으면) 이번 달 같은 일로
+  계산합니다. 아래 예시는 특정 숫자 하나를 외우라는 뜻이 아니라, 이 비교 방식 자체를 보여주는
+  것입니다 — N이 아래 예시와 다른 숫자여도 항상 오늘의 일({today_date.day})과 직접 비교해서
+  판단하세요. 예를 들어 오늘이 {today}이면, {past_example_line}'{future_example_date.day}일까지'라고만
   말한 것은 아직 지나지 않았으므로 {future_example_date.isoformat()}로 계산해야 합니다. 이 예시의 숫자가
   아니라 '이미 지났는지 여부로 이번 달/다음 달을 판단한다'는 원리를 모든 날짜 계산에 적용합니다.
 - todo는 date 필드에 마감일(due date)을 담습니다. 마감일이 대화에서 확인되지 않으면 임의로
@@ -320,10 +373,8 @@ def week02_prompt_parts() -> list[str]:
   되는 사건의 날짜와 시간이 대화에서 확인되지 않았다면 reminder로 확정하지 말고 kind를 unknown으로
   두고 reason에 그 사건이 정확히 언제인지 되묻는 질문을 남깁니다.
 - 확실하지 않은 값은 임의로 채우지 말고 None 또는 빈 list로 둡니다. kind를 unknown으로 둘 때는
-  reason에 사용자에게 되물을 질문 문장을 남깁니다.
-
-### 이번 주차에서 하지 않는 것
-- SQLite 저장, RAG 검색, 외부 멤버 일정 조율은 Week 2에서 다루지 않습니다. 구조화 결과를 만드는 것까지만 합니다.""",
+  reason에 사용자에게 되물을 질문 문장을 남깁니다.""",
+        _WEEK02_SCOPE_LIMITS,
     ]
 
 
