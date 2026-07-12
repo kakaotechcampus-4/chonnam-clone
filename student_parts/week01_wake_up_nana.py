@@ -167,6 +167,27 @@ def _current_session_schedules() -> list[dict[str, Any]]:
     return [schedule for schedule in PERSONAL_SCHEDULES if _schedule_scope(schedule) == session_id]
 
 
+def _matches_format(value: str, fmt: str) -> bool:
+    """strptime round-trip으로 값이 포맷과 정확히 일치하는지 확인합니다 (2026-7-8, 9:5 같은 비정규 표기 거부)."""
+
+    try:
+        return datetime.strptime(value, fmt).strftime(fmt) == value
+    except (ValueError, TypeError):
+        return False
+
+
+def _validate_schedule_params(date: str, start_time: str, end_time: str) -> str | None:
+    """일정 인자 형식을 검증하고, 문제가 있으면 한국어 오류 메시지를 반환합니다 (Week 3 스키마 검증에서 재사용)."""
+
+    if not _matches_format(date, "%Y-%m-%d"):
+        return f"date는 YYYY-MM-DD 형식의 실제 달력 날짜여야 합니다. 받은 값: {date!r}"
+    if not _matches_format(start_time, "%H:%M"):
+        return f"start_time은 HH:MM(24시간제) 형식이어야 합니다. 받은 값: {start_time!r}"
+    if end_time != "미정" and not _matches_format(end_time, "%H:%M"):
+        return f"end_time은 HH:MM(24시간제) 형식이거나 \"미정\"이어야 합니다. 받은 값: {end_time!r}"
+    return None
+
+
 @tool
 def personal_create_schedule(
     title: str,
@@ -175,8 +196,20 @@ def personal_create_schedule(
     end_time: str = "미정",
     attendees: list[str] | None = None,
 ) -> str:
-    """Nana의 개인 일정을 현재 대화의 임시 메모리에 생성합니다."""
+    """Nana의 개인 일정을 현재 대화의 임시 메모리에 생성합니다.
 
+    - date는 YYYY-MM-DD 형식의 실제 달력 날짜여야 합니다.
+    - start_time/end_time은 HH:MM(24시간제) 형식이며, end_time은 "미정"도 허용합니다.
+    - 형식이 잘못되면 일정을 만들지 않고 ok=false와 error 메시지를 반환합니다.
+    """
+
+    error = _validate_schedule_params(date, start_time, end_time)
+    if error is not None:
+        return _json({
+            "ok": False,
+            "tool_name": "personal_create_schedule",
+            "error": error,
+        })
     schedule = {
         "id": _new_personal_id(),
         "title": title,
@@ -197,7 +230,10 @@ def personal_create_schedule(
 
 @tool
 def personal_list_schedules(date_from: str | None = None, date_to: str | None = None) -> str:
-    """선택한 시작일과 종료일 범위에 포함되는 Nana의 개인 일정을 조회합니다."""
+    """선택한 시작일과 종료일 범위에 포함되는 Nana의 개인 일정을 조회합니다.
+
+    - date_from/date_to는 YYYY-MM-DD 형식이며, 생략하면 전체 기간을 조회합니다.
+    """
 
     schedules = _current_session_schedules()
     if date_from is not None:
@@ -213,7 +249,11 @@ def personal_list_schedules(date_from: str | None = None, date_to: str | None = 
 
 @tool
 def personal_delete_schedule(schedule_id: str) -> str:
-    """일정 ID에 해당하는 개인 일정을 삭제합니다."""
+    """일정 ID에 해당하는 개인 일정을 삭제합니다.
+
+    - schedule_id는 personal_list_schedules 결과의 id 값("personal_" 접두어)을 사용합니다.
+    - ID를 모르면 먼저 조회 tool로 확인한 뒤 삭제합니다.
+    """
 
     session_id = current_session_scope()
     before = len(PERSONAL_SCHEDULES)
