@@ -4,6 +4,7 @@ import json
 from typing import Any, Literal
 
 from langchain.agents import create_agent
+from langchain.agents.structured_output import ToolStrategy
 from langchain.tools import tool
 from pydantic import BaseModel, Field, model_validator
 
@@ -328,7 +329,7 @@ def build_week02_agent() -> object:
             model=chat_model(),
             tools=week02_tools(),
             system_prompt=week02_system_prompt(),
-            response_format=Week02Response,
+            response_format=ToolStrategy(Week02Response),
         )
         _WEEK02_AGENT = Week02ResponseAgent(structured_agent)
     return _WEEK02_AGENT
