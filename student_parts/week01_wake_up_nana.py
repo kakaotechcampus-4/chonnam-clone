@@ -98,16 +98,15 @@ def personal_create_schedule(
     title: str,
     date: str,
     start_time: str,
-    end_time: str = "미정",
+    end_time: str | None = None,
     attendees: list[str] | None = None,
 ) -> str:
     """
     현재 대화의 임시 메모리에 개인 일정을 생성합니다.
 
-    title, date, start_time은 필수입니다.
+    title, date, start_time은 필수입니다. 필수 값은 누락시 사용자에게 요청한다.
     date는 YYYY-MM-DD, 시간은 HH:MM 형식을 사용합니다.
-    end_time을 생략하면 "미정"을 사용합니다.
-    attendees를 생략하면 빈 목록을 사용합니다.
+    필수 정보 외 누락된 값은 None으로 설정한다.
     생성된 일정 정보를 created_schedule로 반환합니다.
     """
 
