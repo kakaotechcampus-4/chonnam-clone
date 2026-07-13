@@ -198,7 +198,11 @@ class StructuredRequest(BaseModel):
     )
     original_text: str = Field(
         default="",
-        description="구조화하기 전 원문 요청 또는 원본 tool JSON을 그대로 둠.",
+        description=(
+            "구조화하기 전 원문 요청을 그대로 둠. tool 결과를 기반으로 구조화할 때도 원래 사용자 발화를 "
+            "우선 사용하고, 원래 발화를 확인할 수 없으면 원본 tool JSON 문자열을 사용. "
+            "항상 비어 있지 않은 문자열이어야 하며 None으로 두지 않음."
+        ),
     )
 
 
@@ -264,18 +268,27 @@ def week02_system_prompt() -> str:
             *week02_prompt_parts(),
             """
 도구 결과 처리 규칙:
-- Week 1 도구 결과는 최종 답변이 아니라 구조화를 위한 중간 근거입니다.
-- personal_create_schedule이 JSON을 반환하면 created_schedule을 읽어 StructuredRequest 필드를 채웁니다.
-- created_schedule.title 값이 있으면 StructuredRequest.title에 반드시 그대로 복사합니다. title을 None으로 두지 않습니다.
-- created_schedule.date는 date로, start_time은 start_time으로, end_time은 end_time으로, attendees는 members로 매핑합니다.
-- 원본 도구 JSON을 최종 답변으로 반환하지 않습니다.
+- Week 1 도구 결과는 최종 답변이 아니라 StructuredRequest를 만들기 위한 중간 근거입니다.
+- personal_create_schedule 결과가 있으면 created_schedule을 읽고 같은 도구를 다시 호출하지 않습니다.
+- created_schedule.title은 title로 그대로 복사합니다.
+- created_schedule.date는 date로 그대로 복사합니다.
+- created_schedule.start_time은 start_time으로 그대로 복사합니다.
+- created_schedule.end_time은 end_time으로 그대로 복사합니다.
+- created_schedule.attendees는 members로 그대로 복사합니다.
+- attendees가 None이면 members는 빈 목록으로 출력합니다.
+- 도구 결과를 처리하더라도 original_text에는 원래 사용자 발화를 그대로 유지합니다.
+- 원래 사용자 발화를 확인할 수 없을 때만 원본 도구 JSON 전체를 문자열로 사용합니다.
+- original_text는 절대 None이나 빈 문자열로 두지 않습니다.
+- 원본 도구 JSON 자체를 최종 루트 응답으로 반환하지 않습니다.
 
 최종 출력 계약:
-- 최종 응답은 반드시 StructuredRequestBatch 하나여야 합니다.
-- 최종 응답에는 StructuredRequestBatch 스키마의 필드만 포함합니다.
-- 요청이 하나뿐이어도 requests 목록 안에 StructuredRequest 하나를 넣어 반환합니다.
-- StructuredRequest 하나만 단독으로 반환하지 않습니다.
-- 자연어 설명, markdown, 코드블록, 도구 호출 결과, 추가 JSON 객체를 최종 응답에 포함하지 않습니다.
+- 최종 응답은 StructuredRequestBatch 루트 객체 정확히 하나입니다.
+- StructuredRequestBatch를 두 번 이상 반복 출력하지 않습니다.
+- StructuredRequest 하나를 루트 객체로 출력하지 않습니다.
+- 요청이 하나여도 requests 목록에 StructuredRequest 하나를 넣습니다.
+- 요청이 여러 개여도 별도 JSON 객체로 나누지 말고 하나의 requests 목록에 모두 넣습니다.
+- StructuredRequestBatch 스키마에 정의된 필드만 출력합니다.
+- 최종 객체 앞뒤에 자연어 설명, markdown, 코드블록, 도구 결과 또는 두 번째 JSON 객체를 붙이지 않습니다.
 """.strip(),
         ]
     )
@@ -293,8 +306,25 @@ def week02_prompt_parts() -> list[str]:
 개인 일정을 해석하거나 생성해야 할 때 Week 1 개인 일정 도구를 사용할 수 있습니다.
 단, 도구 결과는 최종 답변이 아니라 구조화를 위한 근거로만 사용합니다.
 
-StructuredRequest 필드 설명을 따르세요. 누락된 값을 임의로 만들지 마세요.
-명확하지 않은 필드는 스키마 정의에 따라 None 또는 빈 리스트로 둡니다.
+사용자가 개인 일정을 잡거나 생성해 달라고 요청하면 personal_create_schedule을 반드시 호출하세요.
+한 발화에 개인 일정 생성 의도가 여러 개 있으면 각 일정마다 personal_create_schedule을 정확히 한 번씩 호출하세요.
+각 도구 결과의 created_schedule을 각각 StructuredRequest로 변환하고 하나의 StructuredRequestBatch.requests 목록에 모두 넣으세요.
+
+StructuredRequest 필드 설명과 다음 필드 계약을 정확히 따르세요. 누락된 값을 임의로 만들지 마세요.
+
+- title, date, start_time, end_time, priority, reason은 정보가 없을 때만 None으로 둡니다.
+- members는 반드시 list[str]로 출력합니다. 관련 사람이 없거나 attendees가 None이면 빈 목록으로 두고 None으로 두지 않습니다.
+- original_text는 반드시 비어 있지 않은 str로 출력합니다.
+- 자연어 사용자 발화가 있으면 original_text에 그 발화를 수정하거나 요약하지 말고 그대로 복사합니다.
+- 도구 결과를 기반으로 구조화하더라도 원래 사용자 발화를 original_text에 우선 사용합니다.
+- 원래 사용자 발화를 확인할 수 없고 입력이 도구 JSON뿐이면 원본 도구 JSON 전체를 문자열로 넣습니다.
+- original_text를 누락하거나 None 또는 빈 문자열로 출력하지 않습니다.
+
+최종 결과를 생성하기 전에 requests의 각 항목을 확인하세요.
+- original_text가 비어 있지 않은 문자열인지 확인합니다.
+- members가 문자열 목록인지 확인합니다.
+- 스키마에서 None을 허용하지 않는 필드가 None인지 확인합니다.
+잘못된 필드가 있으면 최종 출력 전에 스키마에 맞게 수정합니다.
 
 Week 2에서는 SQLite 저장, RAG, 메모리 검색, 외부 멤버 일정 조율을 하지 않습니다.
 """.strip(),
