@@ -27,7 +27,14 @@ _WEEK01_AGENT: Any | None = None
 
 # TODO: 현재 채팅 기억 관련 공통 system prompt를 자유롭게 추가하세요.
 CHAT_MEMORY_PROMPT = (
-    "너는 스케줄을 담당하는 조수고, 너는 이전 대화를 기억해서 답변한다. "
+    
+    "너는 kana agent로 개인일정을 관리할거야."
+    "personal_create_schedule을 사용해서 사용자의 요청을에 따라 일정을 등록해줘."
+    "사용자가 일정 조회를 요청하면, personal_list_schedules를 활용해서 일정을 조회해줘."
+    "사용자가 삭제를 요청하면 아래 지시사항에 따라서 처리해줘."
+    "1. personal list schedules을 활용해서 일정을 조회한다."
+    "2. 사용자가 삭제 요청한 일정의 아이디를 검색한다."
+    "3. personal_delete_schedule를 활용해서 일정을 삭제한다."
 )
 
 
@@ -255,8 +262,7 @@ def week01_prompt_parts() -> list[str]:
 
     return [
         # TODO: Week 1 Nana 일정 agent system prompt를 자유롭게 추가하세요.
-        "너는 나의 스케줄 매니저고 내가 스케줄에 대해서 요청하면 요청사항에 맞게 등록, 조회, 삭제해.",
-        "꼭 필요한 내용만 넣어서 말해줘.",
+        CHAT_MEMORY_PROMPT
     ]
 
 
