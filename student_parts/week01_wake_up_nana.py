@@ -162,12 +162,12 @@ def _current_session_schedules() -> list[dict[str, Any]]:
     return [schedule for schedule in PERSONAL_SCHEDULES if _schedule_scope(schedule) == session_id]
 
 
-@tool("personal_create_schedule", description="개인 일정을 생성합니다. date는 YYYY-MM-DD, start_time과 end_time은 HH:MM 형식으로 입력합니다.")
+@tool("personal_create_schedule", description="개인 일정을 생성합니다. date는 YYYY-MM-DD, start_time은 HH:MM 형식으로 입력합니다. end_time은 알면 HH:MM으로 입력하고 모르면 비워 둡니다.")
 def personal_create_schedule(
     title: str,
     date: str,
     start_time: str,
-    end_time: str = "미정",
+    end_time: str | None = None,
     attendees: list[str] | None = None,
 ) -> str:
     """Nana의 개인 일정을 현재 대화의 임시 메모리에 생성합니다."""
