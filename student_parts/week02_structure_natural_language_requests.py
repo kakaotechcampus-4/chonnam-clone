@@ -5,7 +5,7 @@ from typing import Any, Literal
 
 from langchain.agents import create_agent
 from langchain.tools import tool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from fixed.config import CONFIG
 from fixed.llm import chat_model
@@ -155,43 +155,29 @@ class StructuredRequest(BaseModel):
     """LLM structured output으로 추출되는 2주차 요청 스키마입니다."""
 
     kind: RequestKind = Field(description=(
-        "이 요청 조각을 아래 다섯 종류 중 정확히 하나로 분류합니다. "
-        "판단이 겹칠 때는 사용자가 시킨 동작 동사를 우선합니다(동작 동사 우선 규칙).\n"
-        "- personal_schedule: 본인 외 다른 참석자가 전혀 없는 일정입니다. 시각이 있는지 없는지는 판단 기준이 아닙니다 — "
-        "'이 날 뭐 해?'라는 질문에 대한 답이 되는 활동(예약, 약속, 모임, 방문, ~하러 가다 등)이면 personal_schedule입니다. "
-        "예: '내일 3시 병원 예약'(시각 있음), '다음 주 월요일에 치과 예약 잡아줘'(시각 없어도 personal_schedule).\n"
-        "- group_schedule: 일정에서 본인 외 다른 참석자가 한 명이라도 있으면 personal_schedule이 아니라 group_schedule로 분류합니다. "
-        "이 판단은 문장이 요청형인지 진술형인지와 무관하게, 오직 참석자 유무만으로 합니다. "
-        "구체적 이름(철수·영희)이든 '팀'·'가족'·'팀원들' 같은 그룹이든, members가 본인 외 인물로 채워지면 group_schedule입니다. "
-        "예: '철수랑 회의 잡아줘', '팀 회의', '팀원들이랑 회식하자, 영희랑 민수 부를게', '영희랑 저녁 약속 있어'.\n"
-        "- todo: 완료해야 할 작업입니다. 시각이 있는지 없는지는 판단 기준이 아닙니다 — "
-        "'언제까지 끝내야 해?'라는 질문에 대한 답이 되는, 마감을 향한 의무·작업(끝내다, 제출하다, 작성하다, 마감 등)이면 todo입니다. "
-        "참석자가 없다는 이유만으로 personal_schedule로 분류하지 않습니다. 마감 날짜는 date에 보존합니다. "
-        "예: '기말 보고서 작성해야 해', '장보기 등록해줘', '나 혼자 이 프로젝트 끝내야 해, 마감 다음 주 금요일'.\n"
-        "- reminder: 특정 시점에 알려달라는 것 자체가 주 의도입니다(알림·알람·리마인드·~알려줘). "
-        "예: '오후 5시에 약 먹으라고 알려줘'.\n"
-        "- unknown: 위 기준에 맞지 않거나 불명확합니다. 확실하지 않으면 unknown으로 둡니다.\n"
-        "겹치는 예시1) '내일 3시까지 보고서 작성해야하는 거 알람해줘' -> reminder. "
-        "내용은 보고서 작성(todo)이지만 사용자가 시킨 동작이 '알람해줘'이므로 reminder가 이깁니다. "
-        "이때 마감 3시는 date/start_time에 보존하고, reason에 'todo에 대한 알림'이라고 근거를 남깁니다.\n"
-        "겹치는 예시2) '철수랑 회의 있는 거 알람해줘' -> reminder. "
-        "참석자(철수)가 있어 group_schedule로 보일 수 있지만, 사용자가 시킨 동작이 '알람해줘'이므로 reminder가 이깁니다. "
-        "이때 참석자 정보는 members에 보존합니다.\n"
-        "겹치는 예시3) '영희랑 저녁 약속 있어' -> group_schedule. "
-        "'잡아줘' 같은 요청형이 아니라 이미 있는 약속을 진술하는 문장이지만, 참석자(영희)가 있으므로 personal_schedule이 아니라 group_schedule입니다.\n"
-        "겹치는 예시4) '나 혼자 이 프로젝트 끝내야 해, 마감 다음 주 금요일' -> todo. "
-        "날짜(다음 주 금요일)가 있어 personal_schedule로 보일 수 있지만, '이 날 뭐 해?'의 답이 아니라 '언제까지 끝내야 해?'의 답이므로 todo입니다. "
-        "date에는 마감일을 보존합니다.\n"
-        "요청 조각 하나는 반드시 하나의 kind만 가집니다."
+        "요청 조각의 종류입니다. 정확히 하나만 고릅니다.\n"
+        "- personal_schedule: 본인 혼자 하는 일정.\n"
+        "- group_schedule: 본인 외 참석자가 있는 일정.\n"
+        "- todo: 마감을 향해 완료해야 할 작업.\n"
+        "- reminder: 특정 시점에 알려달라는 요청.\n"
+        "- unknown: 위에 해당하지 않거나 불명확한 경우.\n"
+        "구체적인 판단 순서와 우선순위는 system prompt의 kind 결정 절차를 따릅니다."
     ))
     title: str | None = Field(default=None, description="요청의 제목 또는 할 일 이름입니다. 모르면 None으로 둡니다.")
     date: str | None = Field(default=None, description="일정 날짜입니다. 확실할 때만 YYYY-MM-DD 형식으로 채우고 모르면 None으로 둡니다.")
-    start_time: str | None = Field(default=None, description="일정 시작 시간입니다. 확실할 때만 HH:MM 형식으로 채웁니다. '오전'·'오후'·'아침'·'점심'·'저녁'·'밤'·'미정'처럼 정확한 시각이 아닌 표현이거나 아예 시간 언급이 없으면, 그 단어를 값으로 그대로 옮기지 말고 이 필드 자체를 반드시 None(빈 값)으로 둡니다.")
-    end_time: str | None = Field(default=None, description="일정 종료 시간입니다. 확실할 때만 HH:MM 형식으로 채웁니다. '오전'·'오후'·'아침'·'점심'·'저녁'·'밤'·'미정'처럼 정확한 시각이 아닌 표현이거나 아예 시간 언급이 없으면, 그 단어를 값으로 그대로 옮기지 말고 이 필드 자체를 반드시 None(빈 값)으로 둡니다.")
-    members: list[str] = Field(default_factory=list, description="일정 참석자/관련 멤버 목록입니다. 모르면 빈 list로 둡니다.")
+    start_time: str | None = Field(default=None, description="일정 시작 시간(HH:MM)입니다. 확실할 때만 채우고 모르면 None으로 둡니다.")
+    end_time: str | None = Field(default=None, description="일정 종료 시간(HH:MM)입니다. 확실할 때만 채우고 모르면 None으로 둡니다.")
+    members: list[str] = Field(default_factory=list, description="본인을 제외한 일정 참석자/관련 멤버 목록입니다. 모르면 빈 list로 둡니다.")
     priority: str | None = Field(default=None, description="이번 요청의 우선순위입니다. 급함/보통/낮음처럼 원문에 긴급함이나 중요도가 드러날 때 채우고 모르면 None으로 둡니다.")
     reason: str | None = Field(default=None, description="이번 요청을 해당 kind로 분류하거나 필드를 채운 판단 근거입니다. 모르면 None으로 둡니다.")
     original_text: str = Field(default="", description="이번 요청에 해당하는 사용자 원문 문장입니다. 원문을 그대로 담습니다.")
+
+    @field_validator("members", mode="before")
+    @classmethod
+    def _members_none_to_list(cls, value: Any) -> Any:
+        """LLM이 빈 목록을 None으로 내도 검증이 깨지지 않도록 빈 list로 정규화합니다."""
+
+        return [] if value is None else value
 
 
 class StructuredRequestBatch(BaseModel):
@@ -260,18 +246,21 @@ def week02_prompt_parts() -> list[str]:
         (
             "이번 회차에서는 자연어 요청을 StructuredRequestBatch 형식의 structured_response로 구조화하는 agent 역할을 수행한다. "
             "현재 날짜를 기준으로 상대 날짜를 해석하고, 요청이 하나뿐이어도 requests 목록에 StructuredRequest 하나를 담는다. "
-            "personal_create_schedule tool 결과 JSON의 created_schedule을 읽어 각 필드를 채우되, tool을 다시 호출하지 않고 payload를 읽어 structured_response로 만든다. "
-            "personal_create_schedule tool의 이름·설명('개인 일정')·end_time 기본값('미정')은 전부 Week 1의 저장 관례일 뿐이며, "
-            "kind·start_time·end_time 등 Week 2 필드 규칙과는 무관하다: attendees(참석자)가 있으면 이 도구를 썼더라도 kind는 group_schedule로 분류하고, "
-            "'오전'·'오후'·'아침'·'점심'·'저녁'·'밤'·'미정'처럼 정확한 시각이 아닌 단어는 start_time/end_time 값으로 그대로 옮기지 않고 반드시 null(None)로 남긴다. "
+            "personal_create_schedule tool을 호출한 경우에는 그 결과 JSON의 created_schedule을 읽어 각 필드를 채우되, tool을 다시 호출하지 않고 payload를 읽어 structured_response로 만든다. "
             "SQLite 저장, RAG, 외부 멤버 일정 조율은 수행하지 않는다."
         ),
         (
-            "kind 판단 순서(반드시 지킨다): ① 사용자가 시킨 동작 동사(알려줘·알람·리마인드 vs 완료해야 할 작업)를 "
-            "일정 여부보다 먼저 확인해 reminder/todo인지 정한다. ② 여기 해당하지 않고 일정을 잡는 것이 주 의도이면 "
-            "참석자 유무로 group_schedule/personal_schedule을 가른다. ③ 위 어디에도 맞지 않으면 unknown이다. "
-            "구체적 분류 기준과 예시는 kind 필드 설명을 따른다."
-        )
+            "kind 결정 절차(반드시 이 순서로 판단한다):\n"
+            "① 사용자가 시킨 동작이 '알려줘·알람·리마인드'이면 내용과 무관하게 reminder, "
+            "'끝내다·제출·작성·마감'처럼 완료해야 할 작업이면 todo다. 이 동작 동사가 일정 여부보다 우선한다.\n"
+            "② ①이 아니고 일정을 잡는 것이 주 의도이면, members만으로 가른다: 본인 외 사람이 한 명이라도 있으면 "
+            "— '철수랑'·'영희랑'처럼 이름이 하나여도, '팀'·'동아리 사람들' 같은 그룹이어도 — 무조건 group_schedule이고, "
+            "아무도 없으면 personal_schedule이다.\n"
+            "③ 위 어디에도 맞지 않으면 unknown이다.\n"
+            "date·start_time·end_time은 원문에서 확실할 때만 채우고(YYYY-MM-DD, HH:MM), "
+            "'오전·오후·저녁·미정'처럼 정확한 시각이 아니거나 시간 언급이 없으면 추측하지 말고 null로 둔다. "
+            "members에는 본인(나)을 넣지 않는다."
+        ),
     ]
 
 
