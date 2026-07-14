@@ -19,29 +19,30 @@ from fixed.langchain_trace import (
     stream_chunk_messages,
 )
 from fixed.llm import chat_model
-from fixed.runtime_clock import current_app_date_iso, next_weekday_iso
+from fixed.runtime_clock import next_weekday_iso
 from fixed.session_scope import DEFAULT_SESSION_SCOPE, current_session_scope
+from student_parts.prompts.common import (
+    CHAT_MEMORY_PROMPT,
+    NANA_IDENTITY_PROMPT,
+    NO_GUESSING_PROMPT,
+    date_time_prompt,
+    join_system_prompt,
+)
+from student_parts.prompts.week01 import (
+    WEEK01_DELETE_SCHEDULE_PROMPT,
+    WEEK01_OVERNIGHT_SCHEDULE_PROMPT,
+    WEEK01_TOOL_RESULT_PROMPT,
+    WEEK01_TOOL_SELECTION_PROMPT,
+)
+from student_parts.schedule_clarification import (
+    is_valid_date as _is_valid_date,
+    is_valid_time as _is_valid_time,
+    validate_schedule_input as _validate_schedule_input,
+)
 
 
 PERSONAL_SCHEDULES: list[dict[str, Any]] = []
 _WEEK01_AGENT: Any | None = None
-
-CHAT_MEMORY_PROMPT = """
-현재 대화에서 사용자가 이미 제공한 일정 정보를 기억한다.
-후속 답변을 받으면 이전 정보와 합쳐 누락된 값만 보완하고, 이미 받은 값을 다시 묻지 않는다.
-"""
-
-
-def join_system_prompt(parts: list[str]) -> str:
-    """주차별 prompt 조각을 읽기 쉬운 누적 system prompt로 합칩니다."""
-
-    header = (
-        "아래 system prompt는 주차별로 누적된 안내다. "
-        "같은 주제의 지시가 여러 번 나오면 더 높은 주차 또는 더 뒤에 있는 지시를 우선한다."
-    )
-    return "\n\n".join([header, *[part.strip() for part in parts if part.strip()]])
-
-
 
 def _json(payload: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False)
@@ -64,94 +65,6 @@ def _schedule_scope(schedule: dict[str, Any]) -> str:
 def _current_session_schedules() -> list[dict[str, Any]]:
     session_id = current_session_scope()
     return [schedule for schedule in PERSONAL_SCHEDULES if _schedule_scope(schedule) == session_id]
-
-
-def _is_valid_date(value: str) -> bool:
-    """값이 YYYY-MM-DD 형식의 실제 날짜인지 확인합니다."""
-
-    try:
-        parsed = datetime.strptime(value, "%Y-%m-%d")
-    except (TypeError, ValueError):
-        return False
-    return parsed.strftime("%Y-%m-%d") == value
-
-
-def _is_valid_time(value: str) -> bool:
-    """값이 24시간제 HH:MM 형식의 실제 시간인지 확인합니다."""
-
-    try:
-        parsed = datetime.strptime(value, "%H:%M")
-    except (TypeError, ValueError):
-        return False
-    return parsed.strftime("%H:%M") == value
-
-
-def _validate_schedule_input(
-    title: str,
-    date: str,
-    start_time: str,
-    end_time: str,
-    end_date: str | None,
-) -> dict[str, Any]:
-    """일정 생성 입력의 누락값, 형식, 시간 순서를 검사합니다."""
-
-    required_fields = {
-        "title": title,
-        "date": date,
-        "start_time": start_time,
-    }
-    missing_fields = [field_name for field_name, value in required_fields.items() if not value.strip()]
-
-    format_rules = {
-        "date": (
-            date,
-            _is_valid_date,
-            "YYYY-MM-DD 형식의 실제 날짜여야 합니다.",
-        ),
-        "start_time": (
-            start_time,
-            _is_valid_time,
-            "HH:MM 형식의 실제 시간이어야 합니다.",
-        ),
-    }
-    invalid_fields = {
-        field_name: error_message
-        for field_name, (value, validator, error_message) in format_rules.items()
-        if field_name not in missing_fields and not validator(value)
-    }
-
-    if end_time != "미정" and not _is_valid_time(end_time):
-        invalid_fields["end_time"] = "HH:MM 형식의 실제 시간이거나 '미정'이어야 합니다."
-
-    if end_date is not None and not _is_valid_date(end_date):
-        invalid_fields["end_date"] = "YYYY-MM-DD 형식의 실제 날짜여야 합니다."
-
-    times_are_valid = (
-        "date" not in missing_fields
-        and "date" not in invalid_fields
-        and "start_time" not in missing_fields
-        and "start_time" not in invalid_fields
-        and "end_time" not in invalid_fields
-        and "end_date" not in invalid_fields
-    )
-    if times_are_valid and end_time != "미정":
-        normalized_end_date = end_date or date
-        start_at = datetime.strptime(f"{date} {start_time}", "%Y-%m-%d %H:%M")
-        end_at = datetime.strptime(f"{normalized_end_date} {end_time}", "%Y-%m-%d %H:%M")
-        if end_at <= start_at:
-            if end_date is None and end_time <= start_time:
-                invalid_fields["end_date"] = (
-                    "종료 시각이 시작 시각보다 빠르거나 같습니다. "
-                    "자정을 넘기는 일정인지 종료 날짜를 확인해 주세요."
-                )
-            else:
-                invalid_fields["end_date"] = "종료 일시는 시작 일시보다 늦어야 합니다."
-
-    return {
-        "valid": not missing_fields and not invalid_fields,
-        "missing_fields": missing_fields,
-        "invalid_fields": invalid_fields,
-    }
 
 
 @tool
@@ -265,40 +178,17 @@ def week01_system_prompt() -> str:
 
 
 def week01_prompt_parts() -> list[str]:
-    """1주차부터 누적되는 system prompt 조각입니다."""
+    """공통 정책과 Week 1 일정 CRUD 정책을 명시적으로 조합합니다."""
 
     return [
-        f"""
-        너는 개인 일정 관리 비서 Nana다.
-        현재 날짜는 {current_app_date_iso()}다.
-
-        사용자의 실제 의도를 기준으로 개인 일정 생성, 조회, 삭제 tool을 선택한다.
-        일정과 관계없는 일반 대화에는 tool을 호출하지 않는다.
-
-        tool 호출 전에 tool schema의 필수 인자를 확인한다.
-        필수값이 없거나 여러 의미로 해석될 수 있으면 값을 추측하지 말고,
-        확인이 필요한 항목만 모아 사용자에게 한 번에 질문한다.
-
-        날짜는 YYYY-MM-DD, 시간은 HH:MM 형식으로 tool에 전달한다.
-        '오늘', '내일', '다음 주 화요일' 같은 상대 날짜는 현재 날짜를 기준으로 해석한다.
-        종료 시각이 시작 시각보다 늦으면 종료 날짜는 시작 날짜와 같은 날로 처리하고
-        end_date를 생략한다.
-        종료 시각이 시작 시각보다 빠르거나 같으면 자정을 넘기는 일정일 수 있으므로,
-        사용자가 다음 날이라고 말했더라도 계산한 종료 날짜를 한 번만 확인한다.
-        사용자가 그 날짜에 동의하면 이전 일정 정보와 확인한 end_date를 합쳐 즉시
-        personal_create_schedule을 호출하고, 종료 날짜를 다시 묻지 않는다.
-
-        삭제에는 정확한 schedule_id가 필요하다.
-        schedule_id를 모르면 먼저 personal_list_schedules를 사용한다.
-        후보가 하나로 명확할 때만 personal_delete_schedule을 호출하고,
-        후보가 여러 개면 임의로 삭제하지 말고 사용자에게 선택을 요청한다.
-
-        tool 결과를 확인한 뒤 답한다.
-        ok가 false이면 완료했다고 말하지 말고 missing_fields와 invalid_fields를 바탕으로
-        필요한 값만 다시 질문한다.
-        사용자에게는 한국어로 간결하고 친절하게 답한다.
-        """,
+        NANA_IDENTITY_PROMPT,
+        date_time_prompt(),
+        NO_GUESSING_PROMPT,
         CHAT_MEMORY_PROMPT,
+        WEEK01_TOOL_SELECTION_PROMPT,
+        WEEK01_OVERNIGHT_SCHEDULE_PROMPT,
+        WEEK01_DELETE_SCHEDULE_PROMPT,
+        WEEK01_TOOL_RESULT_PROMPT,
     ]
 
 
