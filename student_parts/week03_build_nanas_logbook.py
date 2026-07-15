@@ -47,7 +47,11 @@ WEEK03_TOOL_CALL_PROMPT = (
     "저장된 일정을 수정하거나 삭제할 때는 먼저 personal_list_saved_schedules로 대상 schedule_id를 "
     "확인한 뒤, personal_update_saved_schedule 또는 personal_delete_saved_schedules에 "
     "schedule_id(들) 또는 명확한 필터를 전달한다. "
-    "삭제 조건이 불명확하거나 사용자가 명시하지 않았다면 임의로 전체 삭제를 시도하지 않는다."
+    "삭제 조건이 불명확하거나 사용자가 명시하지 않았다면 임의로 전체 삭제를 시도하지 않는다. "
+    "personal_list_schedules와 personal_delete_schedule은 Week 1에서 만든 임시 tool로, 현재 대화 세션에서 "
+    "만든 일정만 보이고 새 대화나 이전 세션에 저장한 일정은 절대 보이지 않는다. 일정이 저장돼 있는지 "
+    "확인하거나 저장된 일정을 지울 때는 이 두 tool을 호출하지 않고, 반드시 personal_list_saved_schedules와 "
+    "personal_delete_saved_schedules를 사용한다."
 )
 
 
