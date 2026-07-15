@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-from datetime import date, timedelta
+from calendar import monthrange
+from datetime import date
 from typing import Any, Literal
 
 from langchain.agents import create_agent
@@ -252,10 +253,46 @@ def extract_schedule_request(query: str) -> str:
     return json.dumps(payload, ensure_ascii=False)
 
 
-def week02_tools() -> list[Any]:
-    """Week 2 agent에 Week 1 도구를 노출해 tool JSON을 structured_response 근거로 씁니다."""
+@tool
+def resolve_relative_day_date(day: int) -> str:
+    """월 없이 '일'만 말한 날짜 표현(예: '4일까지')을 오늘 날짜 기준 YYYY-MM-DD로 계산합니다.
 
-    return week01_tools()
+    LLM이 이 계산을 직접 암산하면 프롬프트 예시로 든 숫자에서만 맞고 다른 숫자에는
+    일관되게 틀리므로(리뷰에서 지적된 한계), '이번 달/다음 달 판단'은 항상 이 tool에 위임합니다.
+    day가 계산된 달에 존재하지 않으면(예: 2월에 30일) ok=False를 반환하니, LLM은 임의로
+    날짜를 보정하지 말고 사용자에게 되물어야 합니다.
+    """
+
+    today = date.fromisoformat(current_app_date_iso())
+    if day < today.day:
+        target_month = today.month + 1 if today.month < 12 else 1
+        target_year = today.year if today.month < 12 else today.year + 1
+    else:
+        target_month = today.month
+        target_year = today.year
+
+    days_in_target_month = monthrange(target_year, target_month)[1]
+    if day < 1 or day > days_in_target_month:
+        return json.dumps(
+            {
+                "ok": False,
+                "tool_name": "resolve_relative_day_date",
+                "reason": f"{target_year}년 {target_month}월에는 {day}일이 없습니다. 날짜를 다시 확인해주세요.",
+            },
+            ensure_ascii=False,
+        )
+
+    resolved_date = date(target_year, target_month, day)
+    return json.dumps(
+        {"ok": True, "tool_name": "resolve_relative_day_date", "date": resolved_date.isoformat()},
+        ensure_ascii=False,
+    )
+
+
+def week02_tools() -> list[Any]:
+    """Week 2 agent에 Week 1 도구와 날짜 계산 tool을 노출해 structured_response 근거로 씁니다."""
+
+    return [*week01_tools(), resolve_relative_day_date]
 
 
 def week02_system_prompt() -> str:
@@ -287,7 +324,16 @@ def _week02_tool_result_rules() -> str:
   title/date/start_time/end_time/attendees 값으로 StructuredRequest 필드를 채웁니다.
   attendees는 members 필드로 옮깁니다.
 - created_schedule의 end_time이 "미정"이면 아직 시간이 정해지지 않았다는 뜻이므로,
-  StructuredRequest의 end_time은 문자열 "미정"이 아니라 None으로 둡니다."""
+  StructuredRequest의 end_time은 문자열 "미정"이 아니라 None으로 둡니다.
+
+### 월 없이 '일'만 말한 날짜 처리
+- 사용자가 월을 말하지 않고 '일'만 말하면(예: 'N일까지', 'N일에 만나'), 이번 달인지 다음 달인지를
+  직접 암산하지 말고 반드시 resolve_relative_day_date(day=N) tool을 호출해 정확한 YYYY-MM-DD를
+  받습니다. 이 판단은 예시로 든 숫자에서만 맞고 다른 숫자에는 일관되게 틀리는 계산이라, 전부
+  tool에 위임합니다.
+- resolve_relative_day_date가 ok=False를 반환하면(계산된 달에 그 일이 없는 경우, 예: '31일까지'인데
+  다음 달이 30일까지만 있음) 임의로 날짜를 보정하지 말고 kind를 unknown으로 두고 reason에 tool이
+  알려준 이유로 사용자에게 되묻는 질문을 남깁니다."""
 
 
 def _week02_output_format_rules(today: str) -> str:
@@ -313,67 +359,68 @@ _WEEK02_SCOPE_LIMITS = """### 이번 주차에서 하지 않는 것
 - SQLite 저장, RAG 검색, 외부 멤버 일정 조율은 Week 2에서 다루지 않습니다. 구조화 결과를 만드는 것까지만 합니다."""
 
 
+def _week02_intro(today: str, today_weekday: str) -> str:
+    """Week 2의 목표를 한 문단으로 소개합니다. StructuredRequest 필드를 채우는 개별 규칙은 담지 않습니다."""
+
+    return f"""## Week 2 · 자연어 요청을 StructuredRequest 필드로 구조화
+
+오늘 날짜는 {today}({today_weekday})입니다. 이번 주차는 개인 일정 tool 호출에서 한 걸음 더 나아가, 사용자의
+자연어 요청이나 Week 1 tool이 반환한 JSON payload를 StructuredRequest 필드(kind/title/date/start_time/
+end_time/members/priority/reason)로 구조화하는 것이 목표입니다."""
+
+
+def _week02_date_rules(today: str, today_date: date) -> str:
+    """날짜 필드(date)를 채우는 규칙만 담습니다. kind 분류나 unknown 처리는 다른 조각에서 다룹니다."""
+
+    return f"""### 날짜 해석 규칙
+- 날짜가 '다음 주 수요일'처럼 상대적으로 표현되면 오늘({today}) 기준으로 계산해 YYYY-MM-DD로 변환합니다.
+  연도는 항상 오늘과 같은 {today[:4]}년을 사용하며, 학습 데이터에 익숙한 다른 연도로 절대 바꾸지 않습니다.
+- 사용자가 월을 말하지 않고 '일'만 말하면(예: 'N일까지', 'N일에 만나'), 원리는 "N이 오늘의 일({today_date.day})
+  보다 작으면(이미 지났으면) 다음 달 같은 일로, N이 {today_date.day} 이상이면(아직 지나지 않았으면) 이번 달
+  같은 일로 계산한다"입니다. tool을 호출할 수 있는 경우에는 이 계산을 직접 암산하지 말고 반드시
+  resolve_relative_day_date(day=N) tool 결과를 사용합니다(암산은 특정 숫자에서만 맞고 다른 숫자에는
+  일관되게 틀립니다)."""
+
+
+def _week02_kind_rules() -> str:
+    """kind(personal_schedule/group_schedule/todo/reminder) 분류 규칙만 담습니다."""
+
+    return """### kind 분류 규칙
+- kind는 personal_schedule/group_schedule/todo/reminder/unknown 중 하나입니다.
+- 참석자(실제 이름)가 구체적으로 언급되면 group_schedule, 없으면 personal_schedule로 분류합니다.
+  '팀', '다같이'처럼 뭉뚱그린 표현은 참석자로 인정하지 않습니다.
+- todo는 date 필드에 마감일(due date)을 담습니다. 마감일이 대화에서 확인되지 않으면 임의로
+  채우지 말고 kind를 unknown으로 두고 reason에 마감일을 되묻는 질문을 남깁니다.
+- reminder는 몇 분 전에 알릴지(예: "30분 전")만으로는 실제로 언제 울릴지 알 수 없습니다. 기준이
+  되는 사건의 날짜와 시간이 대화에서 확인되지 않았다면 reminder로 확정하지 말고 kind를 unknown으로
+  두고 reason에 그 사건이 정확히 언제인지 되묻는 질문을 남깁니다."""
+
+
+_WEEK02_UNKNOWN_VALUE_RULES = """### 확실하지 않은 값 처리
+- 확실하지 않은 값은 임의로 채우지 말고 None 또는 빈 list로 둡니다. kind를 unknown으로 둘 때는
+  reason에 사용자에게 되물을 질문 문장을 남깁니다."""
+
+
 def week02_prompt_parts() -> list[str]:
-    """StructuredRequest 필드를 채우는 구조화 규칙 조각입니다.
+    """StructuredRequest 필드를 채우는 구조화 규칙 조각들입니다.
 
     build_week02_agent()의 system prompt뿐 아니라 extract_structured_request() bridge의
     system 메시지로도 그대로 재사용됩니다(가이드에 명시된 사용법). 그래서 여기에는 "필드를
-    어떻게 채울지"에 대한 규칙만 담고, tool 결과 처리나 최종 출력 형식처럼 tool·대화 history가
-    있는 agent에서만 필요한 지시는 week02_system_prompt()에서 따로 추가합니다.
+    어떻게 채울지"에 대한 규칙(날짜 해석/kind 분류/unknown 처리)만 조각별로 나눠 담고, tool 결과
+    처리나 최종 출력 형식처럼 tool·대화 history가 있는 agent 전체에만 적용되는 지시는
+    week02_system_prompt()에서 별도로 조립합니다.
     """
 
     today = current_app_date_iso()
     today_date = date.fromisoformat(today)
     today_weekday = _KOREAN_WEEKDAYS[today_date.weekday()]
-    future_example_date = today_date + timedelta(days=1)
-
-    if today_date.day > 1:
-        # offset을 today_date.day - 1 이하로 제한하면 이번 달 안에서만 며칠 전 날짜를 고르게 되므로
-        # (전달로 넘어가지 않음), "다음 달 = 오늘이 속한 달 + 1"이 항상 유효합니다.
-        past_offset = min(4, today_date.day - 1)
-        past_example_date = today_date - timedelta(days=past_offset)
-        next_month = today_date.month + 1 if today_date.month < 12 else 1
-        next_month_year = today_date.year if today_date.month < 12 else today_date.year + 1
-        past_example_answer = date(next_month_year, next_month, past_example_date.day)
-        past_example_line = (
-            f"월 없이 '{past_example_date.day}일까지'라고만 말한 것은 이번 달 {past_example_date.day}일이 "
-            f"이미 지났으므로 {past_example_answer.isoformat()}로 계산해야 하고, "
-        )
-    else:
-        # 오늘이 이번 달 1일이면 이번 달 안에 "이미 지난 날짜"가 존재할 수 없어(전달로 넘어가면
-        # 다음 달 계산 기준이 오늘이 아니라 전달이 되어버려 날짜가 깨질 수 있음) 예시를 만들지 않고,
-        # 이번 달 1일이라는 사실 자체로 규칙을 설명합니다.
-        past_example_line = "오늘이 이번 달 1일이라 이번 달 안에는 아직 지난 날짜가 없으므로, "
 
     return [
         *week01_prompt_parts(),
-        f"""## Week 2 · 자연어 요청을 StructuredRequest 필드로 구조화
-
-오늘 날짜는 {today}({today_weekday})입니다. 이번 주차는 개인 일정 tool 호출에서 한 걸음 더 나아가, 사용자의
-자연어 요청이나 Week 1 tool이 반환한 JSON payload를 StructuredRequest 필드(kind/title/date/start_time/
-end_time/members/priority/reason)로 구조화하는 것이 목표입니다.
-
-### 구조화 규칙
-- kind는 personal_schedule/group_schedule/todo/reminder/unknown 중 하나입니다.
-- 참석자(실제 이름)가 구체적으로 언급되면 group_schedule, 없으면 personal_schedule로 분류합니다.
-  '팀', '다같이'처럼 뭉뚱그린 표현은 참석자로 인정하지 않습니다.
-- 날짜가 '다음 주 수요일'처럼 상대적으로 표현되면 오늘({today}) 기준으로 계산해 YYYY-MM-DD로 변환합니다.
-  연도는 항상 오늘과 같은 {today[:4]}년을 사용하며, 학습 데이터에 익숙한 다른 연도로 절대 바꾸지 않습니다.
-- 사용자가 월을 말하지 않고 '일'만 말하면(예: 'N일까지', 'N일에 만나'), 오늘의 일(day) 숫자인
-  {today_date.day}과 N을 직접 숫자로 비교합니다: N이 {today_date.day}보다 작으면(이미 지났으면)
-  다음 달 같은 일로, N이 {today_date.day} 이상이면(아직 지나지 않았으면) 이번 달 같은 일로
-  계산합니다. 아래 예시는 특정 숫자 하나를 외우라는 뜻이 아니라, 이 비교 방식 자체를 보여주는
-  것입니다 — N이 아래 예시와 다른 숫자여도 항상 오늘의 일({today_date.day})과 직접 비교해서
-  판단하세요. 예를 들어 오늘이 {today}이면, {past_example_line}'{future_example_date.day}일까지'라고만
-  말한 것은 아직 지나지 않았으므로 {future_example_date.isoformat()}로 계산해야 합니다. 이 예시의 숫자가
-  아니라 '이미 지났는지 여부로 이번 달/다음 달을 판단한다'는 원리를 모든 날짜 계산에 적용합니다.
-- todo는 date 필드에 마감일(due date)을 담습니다. 마감일이 대화에서 확인되지 않으면 임의로
-  채우지 말고 kind를 unknown으로 두고 reason에 마감일을 되묻는 질문을 남깁니다.
-- reminder는 몇 분 전에 알릴지(예: "30분 전")만으로는 실제로 언제 울릴지 알 수 없습니다. 기준이
-  되는 사건의 날짜와 시간이 대화에서 확인되지 않았다면 reminder로 확정하지 말고 kind를 unknown으로
-  두고 reason에 그 사건이 정확히 언제인지 되묻는 질문을 남깁니다.
-- 확실하지 않은 값은 임의로 채우지 말고 None 또는 빈 list로 둡니다. kind를 unknown으로 둘 때는
-  reason에 사용자에게 되물을 질문 문장을 남깁니다.""",
+        _week02_intro(today, today_weekday),
+        _week02_date_rules(today, today_date),
+        _week02_kind_rules(),
+        _WEEK02_UNKNOWN_VALUE_RULES,
         _WEEK02_SCOPE_LIMITS,
     ]
 
