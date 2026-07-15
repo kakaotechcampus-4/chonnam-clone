@@ -55,7 +55,15 @@ WEEK03_TOOL_CALL_PROMPT = (
     "'지난 일정'이나 '이미 지난 일정' 같은 과거 여부를 묻는 질문에는 date_to를 어제가 아니라 오늘 날짜로 "
     "지정해 오늘 일정도 함께 조회한다. personal_list_saved_schedules는 날짜 단위로만 필터링하므로, 오늘 "
     "날짜의 일정은 시스템 프롬프트에 있는 현재 시각과 각 일정의 start_time을 직접 비교해 이미 지난 시각인 "
-    "것만 '지난 일정'으로 판단하고, 아직 시각이 안 된 오늘 일정은 지난 일정에서 제외한다."
+    "것만 '지난 일정'으로 판단하고, 아직 시각이 안 된 오늘 일정은 지난 일정에서 제외한다. "
+    "schedule_id는 절대 추측하거나 지어내지 않는다. 사용자가 schedule_id를 직접 말하지 않았다면 "
+    "(예: 제목/날짜/시간으로만 일정을 지칭한 경우), personal_update_saved_schedule이나 "
+    "personal_delete_saved_schedules를 호출하기 전에 반드시 personal_list_saved_schedules를 먼저 호출해서 "
+    "그 결과에 실제로 나온 schedule_id만 사용한다. "
+    "예시: 사용자가 '내일 모각코 2시 말고 2시 반으로 바꿔줘'라고 하면, 먼저 personal_list_saved_schedules로 "
+    "내일 날짜 일정을 조회해 제목이 '모각코'인 행을 찾고, 그 행의 schedule_id를 그대로 "
+    "personal_update_saved_schedule의 schedule_id 인자로 사용한다. 후보가 여러 개거나 제목이 일치하는 "
+    "일정을 찾지 못하면 임의로 아무 ID나 사용하지 않고 사용자에게 확인을 요청한다."
 )
 
 
