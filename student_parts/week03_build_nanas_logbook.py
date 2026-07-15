@@ -9,10 +9,26 @@ from pydantic import BaseModel, Field, model_validator
 
 from fixed.config import CONFIG
 from fixed.llm import chat_model
-from fixed.runtime_clock import current_app_date_iso
 from fixed.app_store import AppSQLiteStore
-from student_parts.week01_wake_up_nana import (
+from student_parts.prompts.common import (
+    CHAT_MEMORY_PROMPT,
+    NANA_IDENTITY_PROMPT,
+    NO_GUESSING_PROMPT,
+    date_time_prompt,
     join_system_prompt,
+)
+from student_parts.prompts.week02 import (
+    WEEK02_CLASSIFICATION_PROMPT,
+    WEEK02_PERSONAL_CREATE_TOOL_PROMPT,
+    WEEK02_TOOL_PAYLOAD_MAPPING_PROMPT,
+)
+from student_parts.prompts.week03 import (
+    SQLITE_MEMORY_PROMPT,
+    WEEK03_FIELD_FILLING_PROMPT,
+    WEEK03_SCOPE_PROMPT,
+    WEEK03_TOOL_CALL_PROMPT,
+)
+from student_parts.week01_wake_up_nana import (
     personal_create_schedule as week01_personal_create_schedule,
     week01_tools,
 )
@@ -21,17 +37,10 @@ from student_parts.week02_structure_natural_language_requests import (
     StructuredRequest,
     extract_schedule_request,
     extract_structured_request,
-    week02_prompt_parts,
 )
 
 
 _WEEK03_AGENT: Any | None = None
-
-# TODO: 새 대화에서도 SQLite 일정/할 일/알림을 조회할 수 있도록 Week 3 영속 메모리 규칙을 작성하세요.
-SQLITE_MEMORY_PROMPT = ""
-
-# TODO: 자연어 구조화 → SQLite 저장과 조회/수정/삭제 tool 호출 순서를 안내하는 규칙을 작성하세요.
-WEEK03_TOOL_CALL_PROMPT = ""
 
 
 # [3주차 수강생 구현 가이드]
@@ -451,14 +460,20 @@ def week03_system_prompt() -> str:
 
 
 def week03_prompt_parts() -> list[str]:
-    """1~3주차 system prompt 조각을 누적합니다."""
+    """공통 정책과 Week 2·Week 3 전용 정책 중 필요한 조각만 명시적으로 선택합니다."""
 
     return [
-        *week02_prompt_parts(),
-        # TODO: Week 2 구조화 결과를 Week 3 SQLite 저장 흐름으로 연결하는 지시를 추가하세요.
+        NANA_IDENTITY_PROMPT,
+        date_time_prompt(),
+        NO_GUESSING_PROMPT,
+        CHAT_MEMORY_PROMPT,
+        WEEK02_CLASSIFICATION_PROMPT,
+        WEEK02_PERSONAL_CREATE_TOOL_PROMPT,
+        WEEK02_TOOL_PAYLOAD_MAPPING_PROMPT,
+        WEEK03_FIELD_FILLING_PROMPT,
         SQLITE_MEMORY_PROMPT,
         WEEK03_TOOL_CALL_PROMPT,
-        # TODO: 현재 날짜, Week 3 tool 선택 기준, 이번 주차의 범위를 설명하는 agent 지시를 추가하세요.
+        WEEK03_SCOPE_PROMPT,
     ]
 
 
