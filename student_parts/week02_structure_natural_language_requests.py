@@ -204,16 +204,17 @@ class StructuredRequest(BaseModel):
     date: str | None = Field(default=None, description=""""내일"·"다음 주 화요일" 같은 상대 날짜는 base_date 기준으로 YYYY-MM-DD로 변환.
         personal_schedule·group_schedule·reminder에서는 필수이므로 최대한 채운다.
         todo이거나 변환이 불가능하거나 언급이 없으면 None.""")
-    start_time: str | None = Field(default=None, description=""""오후 3시"→15:00, "점심"→12:00 등 합리적 추론 가능하면 HH:MM.
-                        불확실하면 None.""")
-    end_time: str | None = Field(default=None, description=""""오후 3시"→15:00, "점심"→12:00 등 합리적 추론 가능하면 HH:MM.
-                        불확실하면 None.""")
+    start_time: str | None = Field(default=None, description=""""일정/할일의 시작 시각. "오후 3시"→15:00, "점심"→12:00처럼
+    합리적으로 추론 가능하면 24시간제 HH:MM으로 채운다.
+    시각이 전혀 언급되지 않았으면 None (임의로 추정하지 않는다).""")
+    end_time: str | None = Field(default=None, description=""""일정의 종료 시각. 명시적으로 언급됐거나 ("2시부터 4시까지") 관례상 기본 소요시간(예: 회의 1시간)을 적용할 만큼 맥락이 뚜렷할 때만 채운다.
+    끝나는 시각이 불명확하면 start_time만 채우고 end_time은 None으로 둔다.""")
     members: list[str] = Field(
         default_factory=list,
         description="참석자·관련 멤버 이름 목록. 특정 인물이 아니라 소속 팀·모임 이름이 언급돼도 담을 수 있다."
         " group_schedule에서는 최소 1명 필수이므로 언급되면 list에 담아. 그 외에는 없으면 빈 list.",
     )
-    priority: str | None = Field(default=None, description="우선순위 (todo일 때 사용). 없으면 None.")
+    priority: str | None = Field(default=None, description="""todo의 우선순위. "high"/"medium"/"low" 중 하나만 사용. 사용자가 명시적으로 급함/여유를 언급하지 않으면 None으로 둔다.""")
     reason: str | None = Field(
         default=None,
         description="판단 근거. kind·날짜·시간이 불확실하거나 추정이 필요할 때 한 문장으로 이유를 남겨.",
@@ -246,45 +247,49 @@ class StructuredRequestBatch(BaseModel):
     )
 
 
-# Week 3+ 저장 전 검증에서 재사용할 예약 함수. 지금은 KIND_REQUIRED_FIELDS의 kind별 필수 필드를
-# 위 StructuredRequest Field description에 직접 반영해 LLM이 채우도록 유도하므로 비활성화 상태로 둔다.
-#
-# def missing_required_fields(req: StructuredRequest) -> list[str]:
-#     """kind별 필수 필드 중 값이 없는 것을 반환한다. 빈 list면 완전한 요청."""
-#     required = KIND_REQUIRED_FIELDS.get(req.kind, [])
-#     return [
-#         f for f in required
-#         if not getattr(req, f, None)
-#         or (isinstance(getattr(req, f), list) and not getattr(req, f))
-#     ]
+def missing_required_fields(req: StructuredRequest) -> list[str]:
+    """kind별 필수 필드 중 값이 없는 것을 반환한다. 빈 list면 완전한 요청."""
+    required = KIND_REQUIRED_FIELDS.get(req.kind, [])
+    return [
+        f for f in required
+        if not getattr(req, f, None)
+        or (isinstance(getattr(req, f), list) and not getattr(req, f))
+    ]
 
 
 def _coerce_structured_request(value: Any) -> StructuredRequest:
     """LangChain structured output 결과를 StructuredRequest로 정규화합니다."""
 
-    # TODO: value가 이미 StructuredRequest이면 그대로 반환하세요.
-    # TODO: value가 dict이면 StructuredRequest.model_validate(...)로 검증해 반환하세요.
-    # TODO: 예상한 형태가 아니면 RuntimeError를 발생시켜 잘못된 LLM 응답을 조용히 통과시키지 마세요.
-    ...
+    if isinstance(value, StructuredRequest):
+        return value
+    if isinstance(value, dict):
+        return StructuredRequest.model_validate(value)
+    raise RuntimeError(f"예상치 못한 structured output 형식: {type(value)!r}")
 
 
 def extract_structured_request(text: str) -> StructuredRequest:
     """Week 3 이상에서 agent를 새로 띄우지 않고 자연어를 StructuredRequest로 바꿉니다."""
 
-    # TODO: chat_model().with_structured_output(StructuredRequest, method="function_calling")로 structured LLM을 만드세요.
-    # TODO: system 메시지에는 join_system_prompt(week02_prompt_parts())를 넣고, user 메시지에는 text를 넣어 invoke하세요.
-    # TODO: LLM 결과를 _coerce_structured_request(...)로 정규화해 StructuredRequest 하나로 반환하세요.
-    ...
+    structured_llm = chat_model().with_structured_output(StructuredRequest, method="function_calling")
+    result = structured_llm.invoke([
+        {"role": "system", "content": join_system_prompt(week02_prompt_parts())},
+        {"role": "user", "content": text},
+    ])
+    return _coerce_structured_request(result)
 
 
 @tool
 def extract_schedule_request(query: str) -> str:
     """Week 3 이상 agent가 저장/조율 전에 호출하는 구조화 bridge tool입니다."""
 
-    # TODO: extract_structured_request(query)를 호출해 자연어 또는 Week 1 JSON payload를 구조화하세요.
-    # TODO: ok/tool_name/base_date/structured_request 키를 가진 dict를 만들고 structured_request에는 model_dump() 결과를 넣으세요.
-    # TODO: json.dumps(..., ensure_ascii=False)로 JSON 문자열을 반환하세요.
-    ...
+    structured = extract_structured_request(query)
+    payload = {
+        "ok": True,
+        "tool_name": "extract_schedule_request",
+        "base_date": current_app_date_iso(),
+        "structured_request": structured.model_dump(),
+    }
+    return json.dumps(payload, ensure_ascii=False)
 
 
 def week02_tools() -> list[Any]:
