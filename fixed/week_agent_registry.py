@@ -24,6 +24,7 @@ from fixed.langchain_trace import (
 WEEK_AGENT_MODULES = {
     1: "student_parts.week01_wake_up_nana",
     2: "student_parts.week02_structure_natural_language_requests",
+    3: "student_parts.week03_persist_structured_requests",
 }
 
 
