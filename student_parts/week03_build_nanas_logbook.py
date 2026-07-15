@@ -27,8 +27,14 @@ from student_parts.week02_structure_natural_language_requests import (
 
 _WEEK03_AGENT: Any | None = None
 
-# TODO: 새 대화에서도 SQLite 일정/할 일/알림을 조회할 수 있도록 Week 3 영속 메모리 규칙을 작성하세요.
-SQLITE_MEMORY_PROMPT = ""
+SQLITE_MEMORY_PROMPT = (
+    """
+save_structured_request로 저장한 일정/할 일/알림은 앱 SQLite DB(schedules/todos/reminders)에 남는다.
+Week 1의 PERSONAL_SCHEDULES 임시 메모리와 달리, 대화가 끝나거나 앱을 재시작해도 사라지지 않는다.
+그러므로 "내 일정 보여줘", "저번에 저장한 할 일 있어?" 같은 질문에는 현재 대화 기록이 아니라
+list_saved_requests/get_saved_request/personal_list_saved_schedules로 SQLite를 조회해 답한다.
+"""
+)
 
 # TODO: 자연어 구조화 → SQLite 저장과 조회/수정/삭제 tool 호출 순서를 안내하는 규칙을 작성하세요.
 WEEK03_TOOL_CALL_PROMPT = ""
