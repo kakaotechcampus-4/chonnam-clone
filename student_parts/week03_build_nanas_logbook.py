@@ -46,6 +46,9 @@ Week 3 tool은 다음 순서로 호출한다.
    그 필드를 그대로 save_structured_request 인자로 넘겨 SQLite에 저장한다.
 2. 저장된 내용을 조회할 때는 list_saved_requests/get_saved_request(원본 구조화 요청 조회) 또는
    personal_list_saved_schedules(정규화된 일정 후보 조회)를 사용한다.
+   "내 일정 보여줘"처럼 종류를 콕 집지 않은 조회는 personal_list_saved_schedules를
+   kind 인자 없이 호출한다(kind='personal_schedule'로 스스로 채우지 않는다).
+   그러면 개인 일정과 할 일이 함께 반환되며, 사용자에게는 이 둘을 구분해서 안내한다.
 3. 일정을 수정하거나 삭제하기 전에는 먼저 personal_list_saved_schedules로 대상 후보를 확인하고,
    확인된 schedule_id를 personal_update_saved_schedule 또는 personal_delete_saved_schedules에 넘긴다.
 """
@@ -297,7 +300,12 @@ class SavedScheduleListInput(BaseModel):
     """저장 일정 목록 조회 입력입니다."""
 
     limit: int = Field(default=50, ge=1, le=200)
-    kind: RequestKind | None = None
+    kind: RequestKind | None = Field(
+        default=None,
+        description="personal_schedule/group_schedule/todo/reminder 중 사용자가 특정 종류만 콕 집어 "
+        "물었을 때만 채운다. '내 일정 보여줘'처럼 종류를 특정하지 않으면 비워 둔다 — 그러면 개인 일정과 "
+        "할 일을 함께 조회해서 보여준다.",
+    )
     date_from: str | None = Field(
         default=None,
         description="YYYY-MM-DD. 사용자가 날짜/범위를 명시한 경우에만 채운다. '내 일정 보여줘'처럼 "
@@ -487,11 +495,19 @@ def personal_list_saved_schedules(
     date_from: str | None = None,
     date_to: str | None = None,
 ) -> str:
-    """앱 DB에 저장된 일정 목록을 날짜/종류 필터로 반환합니다. Nana가 조회/수정/삭제 후보를 볼 때 사용합니다."""
+    """앱 DB에 저장된 일정/할 일 목록을 날짜/종류 필터로 반환합니다. Nana가 조회/수정/삭제 후보를 볼 때 사용합니다."""
 
-    resolved_kind = kind or "personal_schedule"
-    schedules = _store().list_schedules(limit=limit, kind=resolved_kind, date_from=date_from, date_to=date_to)
-    filters = {"limit": limit, "kind": resolved_kind, "date_from": date_from, "date_to": date_to}
+    store = _store()
+    filters = {"limit": limit, "kind": kind, "date_from": date_from, "date_to": date_to}
+
+    if kind is None:
+        schedules = store.list_schedules(limit=limit, kind="personal_schedule", date_from=date_from, date_to=date_to)
+        todos = store.list_saved_requests(kind="todo", date_from=date_from, date_to=date_to, limit=limit)
+        return json_payload(
+            tool_result("personal_list_saved_schedules", filters=filters, schedules=schedules, todos=todos)
+        )
+
+    schedules = store.list_schedules(limit=limit, kind=kind, date_from=date_from, date_to=date_to)
     return json_payload(tool_result("personal_list_saved_schedules", filters=filters, schedules=schedules))
 
 
