@@ -51,7 +51,11 @@ WEEK03_TOOL_CALL_PROMPT = (
     "personal_list_schedules와 personal_delete_schedule은 Week 1에서 만든 임시 tool로, 현재 대화 세션에서 "
     "만든 일정만 보이고 새 대화나 이전 세션에 저장한 일정은 절대 보이지 않는다. 일정이 저장돼 있는지 "
     "확인하거나 저장된 일정을 지울 때는 이 두 tool을 호출하지 않고, 반드시 personal_list_saved_schedules와 "
-    "personal_delete_saved_schedules를 사용한다."
+    "personal_delete_saved_schedules를 사용한다. "
+    "'지난 일정'이나 '이미 지난 일정' 같은 과거 여부를 묻는 질문에는 date_to를 어제가 아니라 오늘 날짜로 "
+    "지정해 오늘 일정도 함께 조회한다. personal_list_saved_schedules는 날짜 단위로만 필터링하므로, 오늘 "
+    "날짜의 일정은 시스템 프롬프트에 있는 현재 시각과 각 일정의 start_time을 직접 비교해 이미 지난 시각인 "
+    "것만 '지난 일정'으로 판단하고, 아직 시각이 안 된 오늘 일정은 지난 일정에서 제외한다."
 )
 
 
