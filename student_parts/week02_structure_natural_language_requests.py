@@ -4,6 +4,7 @@ import json
 from typing import Any, Literal
 
 from langchain.agents import create_agent
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain.tools import tool
 from pydantic import BaseModel, Field
 
@@ -130,20 +131,45 @@ class StructuredRequestBatch(BaseModel):
 def _coerce_structured_request(value: Any) -> StructuredRequest:
     """이후 회차에서 사용할 StructuredRequest 정규화 예약 함수입니다."""
 
-    ...
+    if isinstance(value, StructuredRequest):
+        return value
+    if isinstance(value, str):
+        value = json.loads(value)
+    if isinstance(value, dict):
+        if "structured_request" in value:
+            value = value["structured_request"]
+        elif "requests" in value:
+            value = (value.get("requests") or [{}])[0]
+    return StructuredRequest.model_validate(value)
 
 
 def extract_structured_request(text: str) -> StructuredRequest:
     """이후 회차에서 사용할 단건 구조화 예약 함수입니다."""
 
-    ...
+    model = chat_model().with_structured_output(StructuredRequestBatch)
+    batch = model.invoke(
+        [
+            SystemMessage(content=week02_system_prompt()),
+            HumanMessage(content=text),
+        ]
+    )
+    return batch.requests[0] if batch.requests else StructuredRequest(kind="unknown", original_text=text)
 
 
 @tool
 def extract_schedule_request(query: str) -> str:
-    """이후 회차에서 저장 흐름과 연결할 예약 tool입니다."""
+    """자연어 일정/할 일/알림 요청을 Week 2 StructuredRequest JSON으로 변환합니다."""
 
-    ...
+    request = extract_structured_request(query)
+    return json.dumps(
+        {
+            "ok": True,
+            "tool_name": "extract_schedule_request",
+            "base_date": current_app_date_iso(),
+            "structured_request": request.model_dump(),
+        },
+        ensure_ascii=False,
+    )
 
 
 def week02_tools() -> list[Any]:
