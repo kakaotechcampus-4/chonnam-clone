@@ -387,9 +387,20 @@ def personal_create_schedule(
 ) -> str:
     """Nana의 개인 일정을 생성하고 Week 3+ 앱 SQLite DB에도 저장합니다."""
 
-    # TODO: Week 1 임시 일정 tool을 호출한 뒤 결과를 StructuredRequest로 바꿔 SQLite에도 저장하세요.
-    # TODO: created 결과에 structured_request와 sqlite_save를 합쳐 JSON 문자열로 반환하세요.
-    ...
+    created = json.loads(
+        week01_personal_create_schedule.invoke(
+            {
+                "title": title,
+                "date": date,
+                "start_time": start_time,
+                "end_time": end_time,
+                "attendees": attendees,
+            }
+        )
+    )
+    save_input = structured_request_from_week01_schedule(created["created_schedule"])
+    sqlite_save = _store().save_structured_request(save_input.model_dump())
+    return json_payload({**created, "structured_request": save_input.model_dump(), "sqlite_save": sqlite_save})
 
 
 @tool(args_schema=SaveStructuredRequestInput)
