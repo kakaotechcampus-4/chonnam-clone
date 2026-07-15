@@ -409,7 +409,19 @@ def personal_create_schedule(
 
     # TODO: Week 1 임시 일정 tool을 호출한 뒤 결과를 StructuredRequest로 바꿔 SQLite에도 저장하세요.
     # TODO: created 결과에 structured_request와 sqlite_save를 합쳐 JSON 문자열로 반환하세요.
-    ...
+    created_raw = week01_personal_create_schedule.invoke(
+        {
+            "title": title,
+            "date": date,
+            "start_time": start_time,
+            "end_time": end_time,
+            "attendees": attendees,
+        }
+    )
+    created = json.loads(created_raw)
+    structured_request = structured_request_from_week01_schedule(created["created_schedule"])
+    sqlite_save = save_structured_request_payload(structured_request)
+    return json_payload({**created, "structured_request": structured_request.model_dump(), "sqlite_save": sqlite_save})
 
 
 @tool(args_schema=SaveStructuredRequestInput)
