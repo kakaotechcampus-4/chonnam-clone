@@ -38,7 +38,17 @@ SQLITE_MEMORY_PROMPT = (
 )
 
 # TODO: 자연어 구조화 → SQLite 저장과 조회/수정/삭제 tool 호출 순서를 안내하는 규칙을 작성하세요.
-WEEK03_TOOL_CALL_PROMPT = ""
+WEEK03_TOOL_CALL_PROMPT = (
+    "새로운 일정/할 일/알림 요청을 저장할 때는 extract_schedule_request로 자연어를 먼저 구조화하고, "
+    "그 결과 필드(kind/title/date/start_time/end_time/members/priority/reason/original_text)를 "
+    "save_structured_request 인자로 그대로 전달해 SQLite에 저장한다. "
+    "저장된 일정을 조회할 때는 personal_list_saved_schedules를 사용하고, "
+    "구조화 요청 원본 기록 자체가 필요하면 list_saved_requests 또는 get_saved_request를 사용한다. "
+    "저장된 일정을 수정하거나 삭제할 때는 먼저 personal_list_saved_schedules로 대상 schedule_id를 "
+    "확인한 뒤, personal_update_saved_schedule 또는 personal_delete_saved_schedules에 "
+    "schedule_id(들) 또는 명확한 필터를 전달한다. "
+    "삭제 조건이 불명확하거나 사용자가 명시하지 않았다면 임의로 전체 삭제를 시도하지 않는다."
+)
 
 
 # [3주차 수강생 구현 가이드]
