@@ -36,8 +36,17 @@ list_saved_requests/get_saved_request/personal_list_saved_schedules로 SQLite를
 """
 )
 
-# TODO: 자연어 구조화 → SQLite 저장과 조회/수정/삭제 tool 호출 순서를 안내하는 규칙을 작성하세요.
-WEEK03_TOOL_CALL_PROMPT = ""
+WEEK03_TOOL_CALL_PROMPT = (
+    """
+Week 3 tool은 다음 순서로 호출한다.
+1. 자연어 요청을 받으면 먼저 extract_schedule_request(query=사용자 발화)로 StructuredRequest를 만들고,
+   그 필드를 그대로 save_structured_request 인자로 넘겨 SQLite에 저장한다.
+2. 저장된 내용을 조회할 때는 list_saved_requests/get_saved_request(원본 구조화 요청 조회) 또는
+   personal_list_saved_schedules(정규화된 일정 후보 조회)를 사용한다.
+3. 일정을 수정하거나 삭제하기 전에는 먼저 personal_list_saved_schedules로 대상 후보를 확인하고,
+   확인된 schedule_id를 personal_update_saved_schedule 또는 personal_delete_saved_schedules에 넘긴다.
+"""
+)
 
 
 # [3주차 수강생 구현 가이드]
