@@ -581,7 +581,10 @@ def week03_prompt_parts() -> list[str]:
 
 
 def build_week03_agent() -> object:
-    """Week 1-3 누적 tool 목록을 노출하는 단일 LangChain agent를 만듭니다."""
+    """Week 2 구조화 helper와 Week 3 SQLite tool을 노출하는 단일 LangChain agent를 만듭니다.
+
+    Week 1 임시 메모리 tool은 week03_tools()의 잠정 조정에 따라 노출하지 않습니다.
+    """
 
     if not CONFIG.has_openai_key:
         raise RuntimeError("PROXY_TOKEN이 .env에 필요합니다.")
