@@ -39,6 +39,9 @@ list_saved_requests/get_saved_request/personal_list_saved_schedules로 SQLite를
 WEEK03_TOOL_CALL_PROMPT = (
     """
 Week 3 tool은 다음 순서로 호출한다.
+0. kind가 personal_schedule이어도 이전 주차 지시(personal_create_schedule 사용)를 따르지 않는다.
+   personal_create_schedule은 Week 1 호환용 tool일 뿐, Week 3의 저장 경로가 아니다.
+   새로운 일정/할 일/알림을 저장하는 요청에는 kind와 무관하게 항상 아래 1번 경로를 사용한다.
 1. 자연어 요청을 받으면 먼저 extract_schedule_request(query=사용자 발화)로 StructuredRequest를 만들고,
    그 필드를 그대로 save_structured_request 인자로 넘겨 SQLite에 저장한다.
 2. 저장된 내용을 조회할 때는 list_saved_requests/get_saved_request(원본 구조화 요청 조회) 또는
@@ -276,8 +279,16 @@ class SavedScheduleListInput(BaseModel):
 
     limit: int = Field(default=50, ge=1, le=200)
     kind: RequestKind | None = None
-    date_from: str | None = None
-    date_to: str | None = None
+    date_from: str | None = Field(
+        default=None,
+        description="YYYY-MM-DD. 사용자가 날짜/범위를 명시한 경우에만 채운다. '내 일정 보여줘'처럼 "
+        "날짜 언급이 없으면 비워서 전체 기간을 조회한다(오늘로 임의로 좁히지 않는다).",
+    )
+    date_to: str | None = Field(
+        default=None,
+        description="YYYY-MM-DD. 사용자가 날짜/범위를 명시한 경우에만 채운다. '내 일정 보여줘'처럼 "
+        "날짜 언급이 없으면 비워서 전체 기간을 조회한다(오늘로 임의로 좁히지 않는다).",
+    )
 
 
 class SavedScheduleUpdateInput(BaseModel):
@@ -515,8 +526,11 @@ def build_week03_agent() -> object:
         raise RuntimeError("PROXY_TOKEN이 .env에 필요합니다.")
     global _WEEK03_AGENT
     if _WEEK03_AGENT is None:
-        # TODO: chat_model(), week03_tools(), week03_system_prompt()로 Week 3 LangChain agent를 생성하세요.
-        ...
+        _WEEK03_AGENT = create_agent(
+            model=chat_model(),
+            tools=week03_tools(),
+            system_prompt=week03_system_prompt(),
+        )
     return _WEEK03_AGENT
 
 
