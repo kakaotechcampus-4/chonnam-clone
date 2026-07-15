@@ -14,7 +14,6 @@ from fixed.app_store import AppSQLiteStore
 from student_parts.week01_wake_up_nana import (
     join_system_prompt,
     personal_create_schedule as week01_personal_create_schedule,
-    week01_tools,
 )
 from student_parts.week02_structure_natural_language_requests import (
     RequestKind,
@@ -568,13 +567,16 @@ def personal_delete_saved_schedules(
 
 
 def week03_tools() -> list[Any]:
-    """Week 1 도구, Week 2 구조화 helper, SQLite 저장/조회/삭제 도구를 조립합니다."""
+    """Week 3 agent에 노출할 도구를 조립합니다.
 
-    base_tools = [
-        personal_create_schedule if _tool_name(item) == "personal_create_schedule" else item for item in week01_tools()
-    ]
+    Week 1의 임시 메모리 전용 조회/삭제 도구(personal_list_schedules / personal_delete_schedule)는
+    Week 3에서 노출하지 않는다. Week 3부터 정본 저장소는 SQLite라서, 저장(SQLite)과 조회(임시 메모리)가
+    엇갈려 "저장했는데 안 보이는" 혼선을 막기 위해 SQLite 기반 도구만 공개한다.
+    개인 일정 생성만 Week 1 호환(임시+SQLite 이중 기록) 버전으로 노출한다.
+    """
+
     return [
-        *base_tools,
+        personal_create_schedule,
         extract_schedule_request,
         save_structured_request,
         list_saved_requests,
