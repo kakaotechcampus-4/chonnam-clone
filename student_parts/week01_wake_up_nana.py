@@ -176,15 +176,34 @@ def _matches_format(value: str, fmt: str) -> bool:
         return False
 
 
-def _validate_schedule_params(date: str, start_time: str, end_time: str) -> str | None:
-    """일정 인자 형식을 검증하고, 문제가 있으면 한국어 오류 메시지를 반환합니다 (Week 3 스키마 검증에서 재사용)."""
+def _validate_schedule_params(date: str, start_time: str, end_time: str) -> dict[str, Any] | None:
+    """일정 인자 형식을 검증하고, 문제가 있으면 구조화된 오류를 반환합니다 (Week 3 스키마 검증에서 재사용).
+
+    LLM이 한국어 error 문장을 읽고 "재시도할지"를 추론하는 대신 code/field/retryable 필드로
+    판단할 수 있게, 코드가 이미 아는 분류를 데이터로 노출합니다.
+    """
 
     if not _matches_format(date, "%Y-%m-%d"):
-        return f"date는 YYYY-MM-DD 형식의 실제 달력 날짜여야 합니다. 받은 값: {date!r}"
+        return {
+            "code": "invalid_format",
+            "field": "date",
+            "message": f"date는 YYYY-MM-DD 형식의 실제 달력 날짜여야 합니다. 받은 값: {date!r}",
+            "retryable": True,
+        }
     if not _matches_format(start_time, "%H:%M"):
-        return f"start_time은 HH:MM(24시간제) 형식이어야 합니다. 받은 값: {start_time!r}"
+        return {
+            "code": "invalid_format",
+            "field": "start_time",
+            "message": f"start_time은 HH:MM(24시간제) 형식이어야 합니다. 받은 값: {start_time!r}",
+            "retryable": True,
+        }
     if end_time != "미정" and not _matches_format(end_time, "%H:%M"):
-        return f"end_time은 HH:MM(24시간제) 형식이거나 \"미정\"이어야 합니다. 받은 값: {end_time!r}"
+        return {
+            "code": "invalid_format",
+            "field": "end_time",
+            "message": f"end_time은 HH:MM(24시간제) 형식이거나 \"미정\"이어야 합니다. 받은 값: {end_time!r}",
+            "retryable": True,
+        }
     return None
 
 
@@ -200,7 +219,8 @@ def personal_create_schedule(
 
     - date는 YYYY-MM-DD 형식의 실제 달력 날짜여야 합니다.
     - start_time/end_time은 HH:MM(24시간제) 형식이며, end_time은 "미정"도 허용합니다.
-    - 형식이 잘못되면 일정을 만들지 않고 ok=false와 error 메시지를 반환합니다.
+    - 형식이 잘못되면 일정을 만들지 않고 ok=false와 error를 반환합니다.
+      error는 code/field/message/retryable을 담은 객체이며, field가 고쳐야 할 인자를 가리킵니다.
     """
 
     error = _validate_schedule_params(date, start_time, end_time)
