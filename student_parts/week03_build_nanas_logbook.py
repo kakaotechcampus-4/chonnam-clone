@@ -229,15 +229,29 @@ class SaveStructuredRequestInput(StructuredRequest):
     def unwrap_legacy_payload(cls, value: Any) -> Any:
         """예전 trace의 payload wrapper만 짧게 풀고 실제 검증은 필드 스키마에 맡깁니다."""
 
-        # TODO: StructuredRequest와 예전 payload/structured_request wrapper를 저장 입력 형태로 정규화하세요.
+        if isinstance(value, dict):
+            for wrapper_key in ("structured_request", "payload"):
+                wrapped = value.get(wrapper_key)
+                if isinstance(wrapped, dict):
+                    value = {**value, **wrapped}
+                    value.pop(wrapper_key, None)
         return value
 
 
 def _save_input_from(value: SaveStructuredRequestInput | StructuredRequest | dict[str, Any] | str) -> SaveStructuredRequestInput:
     """저장 입력을 SaveStructuredRequestInput 하나로 모읍니다."""
 
-    # TODO: dict/JSON/자연어/StructuredRequest 입력을 SaveStructuredRequestInput으로 검증하고 정규화하세요.
-    ...
+    if isinstance(value, SaveStructuredRequestInput):
+        return value
+    if isinstance(value, StructuredRequest):
+        return SaveStructuredRequestInput.model_validate(value.model_dump())
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except (TypeError, ValueError):
+            parsed = extract_structured_request(value).model_dump()
+        return SaveStructuredRequestInput.model_validate(parsed)
+    return SaveStructuredRequestInput.model_validate(value)
 
 
 def save_structured_request_payload(
@@ -247,8 +261,10 @@ def save_structured_request_payload(
 ) -> dict[str, Any]:
     """검증된 structured request를 앱 DB에 저장합니다."""
 
-    # TODO: 입력을 검증한 뒤 AppSQLiteStore.save_structured_request(...)로 저장하고 tool 결과를 반환하세요.
-    ...
+    validated = _save_input_from(request)
+    payload = {key: value for key, value in validated.model_dump().items() if value is not None}
+    result = (store or _store()).save_structured_request(payload)
+    return tool_result("save_structured_request", ok=True, **result)
 
 
 class SavedRequestListInput(BaseModel):
@@ -350,9 +366,21 @@ def save_structured_request(
 ) -> str:
     """Week 2 structured_request 필드를 검증한 뒤 SQLite에 저장합니다."""
 
-    # TODO: 검증된 함수 인자를 저장 dict로 만들고 None 값을 제외한 뒤 SQLite에 저장하세요.
-    # TODO: ok/tool_name과 저장 결과가 포함된 JSON 문자열을 반환하세요.
-    ...
+    payload = {
+        "kind": kind,
+        "title": title,
+        "date": date,
+        "start_time": start_time,
+        "end_time": end_time,
+        "members": members or [],
+        "priority": priority,
+        "reason": reason,
+        "original_text": original_text,
+        "source_schedule_id": source_schedule_id,
+    }
+    payload = {key: value for key, value in payload.items() if value is not None}
+    result = _store().save_structured_request(payload)
+    return json_payload(tool_result("save_structured_request", ok=True, **result))
 
 
 @tool(args_schema=SavedRequestListInput)
@@ -363,16 +391,16 @@ def list_saved_requests(
 ) -> str:
     """SQLite에 저장된 구조화 요청 목록을 조회합니다."""
 
-    # TODO: kind/date_from/date_to 필터로 저장 요청을 조회하고 rows를 JSON 문자열로 반환하세요.
-    ...
+    rows = _store().list_saved_requests(kind=kind, date_from=date_from, date_to=date_to)
+    return json_payload(tool_result("list_saved_requests", ok=True, rows=rows))
 
 
 @tool(args_schema=SavedRequestGetInput)
 def get_saved_request(request_id: str) -> str:
     """request_id로 구조화 요청 행 하나를 조회합니다."""
 
-    # TODO: request_id로 단건 조회하고, 결과가 없을 때도 row=None을 유지해 JSON 문자열로 반환하세요.
-    ...
+    row = _store().get_saved_request(request_id)
+    return json_payload(tool_result("get_saved_request", ok=True, row=row))
 
 
 @tool(args_schema=SavedScheduleListInput)
@@ -384,9 +412,10 @@ def personal_list_saved_schedules(
 ) -> str:
     """앱 DB에 저장된 일정 목록을 날짜/종류 필터로 반환합니다. Nana가 조회/수정/삭제 후보를 볼 때 사용합니다."""
 
-    # TODO: 기본 kind를 personal_schedule로 정하고 날짜/종류/limit 필터로 저장 일정을 조회하세요.
-    # TODO: filters와 schedules를 포함한 JSON 문자열을 반환하세요.
-    ...
+    effective_kind = kind or "personal_schedule"
+    schedules = _store().list_schedules(limit=limit, kind=effective_kind, date_from=date_from, date_to=date_to)
+    filters = {"limit": limit, "kind": effective_kind, "date_from": date_from, "date_to": date_to}
+    return json_payload(tool_result("personal_list_saved_schedules", ok=True, filters=filters, schedules=schedules))
 
 
 def delete_saved_schedules_dict(
