@@ -31,8 +31,12 @@ _WEEK03_AGENT: Any | None = None
 SQLITE_MEMORY_PROMPT = """새 대화에서도, 이전 대화에서 생성한 일정/할 일/알림을 SQLite DB로부터 조회가 가능하다."""
 
 # TODO: 자연어 구조화 → SQLite 저장과 조회/수정/삭제 tool 호출 순서를 안내하는 규칙을 작성하세요.
-WEEK03_TOOL_CALL_PROMPT = """사용자의 일정/할 일/알림 요청을 받으면, 먼저 extract_schedule_request(query=사용자 요청)를 호출해 자연어를 구조화하고, 그 결과 필드를 save_structured_request 인자로 그대로 전달해 SQLite DB에 저장할 것.
-사용자 요구한 조회 조건에 맞게 list_saved_requests, get_saved_request, personal_list_saved_schedules 중 적절한 툴을 사용하여 SQLite DB에서 일정/할 일/알림을 조회할 것."""
+WEEK03_TOOL_CALL_PROMPT = """사용자가 새로운 일정/할 일/알림을 생성하거나 저장해 달라고 요청한 경우, 먼저 extract_schedule_request(query=사용자 요청)를 호출해 자연어를 구조화하고, 그 결과 필드를 save_structured_request 인자로 그대로 전달해 SQLite DB에 저장할 것.
+사용자가 요구한 조회 조건에 맞게 list_saved_requests, get_saved_request, personal_list_saved_schedules 중 적절한 툴을 사용하여 SQLite DB에서 일정/할 일/알림을 조회할 것.
+사용자가 이미 저장된 일정의 일부 내용(시간/날짜/제목 등)만 바꿔달라고 요청하면, 새로 저장하지 말고 먼저 personal_list_saved_schedules로 대상 일정을 찾아 schedule_id를 확인한 뒤, personal_update_saved_schedule에 그 schedule_id와 바뀐 필드만 전달해 수정할 것.
+방금 언급했거나 이미 저장된 일정에 대해, 시간/날짜/제목 등 일부 필드 값만 다시 알려주는 후속 요청(예: '시간은 오후 5시로 잡아줘', '날짜를 다음 주로 바꿔줘')은 새 일정을 생성하는 것이 아니라 기존 일정을 수정하는 것으로 간주할 것. 
+이 경우 extract_schedule_request로 새로 구조화하지 말고, 먼저 personal_list_saved_schedules로 대상 일정을 찾아 schedule_id를 확인한 뒤, personal_update_saved_schedule에 그 schedule_id와 바뀐 필드만 전달해 수정할 것.
+삭제 요청을 받으면 날짜/제목만으로 바로 추측해서 삭제하지 말고, 먼저 personal_list_saved_schedules로 후보를 조회해 schedule_id를 확인한 뒤, personal_delete_saved_schedules에 schedule_ids로 명시해서 삭제할 것."""
 
 
 # [3주차 수강생 구현 가이드]
@@ -302,14 +306,60 @@ def _delete_saved_schedules(
 
     # TODO: 삭제 조건이 없으면 거부하고, delete_all 또는 명시 필터에 맞는 store 메서드를 호출하세요.
     # TODO: deleted_count, filters, deleted가 포함된 tool 결과 dict를 반환하세요.
-    ...
+    
+    # 사용자가 요청한 삭제 조건 필터.
+    filters = {
+        "schedule_ids": schedule_ids,
+        "date": date,
+        "title": title,
+        "start_time": start_time,
+        "time_unspecified": time_unspecified,
+        "delete_all": delete_all,
+    }
+
+    if delete_all: # 전부 삭제가 조건일 경우 모든 일정 삭제.
+        deleted = store.delete_all_schedules()
+    else:
+        has_condition = bool(schedule_ids) or bool(date) or bool(title) or bool(start_time) or time_unspecified
+        if not has_condition: # 삭제 조건이 없을 경우 ok=False 반환.
+            return tool_result(
+                "personal_delete_saved_schedules",
+                ok=False,
+                error="삭제 조건이 없습니다. schedule_ids/date/title/start_time 중 하나를 지정하거나 delete_all=True로 호출하세요.",
+                deleted_count=0,
+                filters=filters,
+                deleted=[],
+            )
+        deleted = store.delete_schedules_by_filter( # 삭제 조건이 있을 경우 해당하는 일정 삭제.
+            schedule_ids=schedule_ids,
+            date=date,
+            title=title,
+            start_time=start_time,
+            time_unspecified=time_unspecified,
+        )
+
+    return tool_result( # 삭제한 일정 정보를 반환. json_payload 문자열 변환은 tool에서 직접 적용.
+        "personal_delete_saved_schedules",
+        ok=True,
+        deleted_count=len(deleted),
+        filters=filters,
+        deleted=deleted,
+    )
 
 
 def structured_request_from_week01_schedule(schedule: dict[str, Any]) -> SaveStructuredRequestInput:
     """Week 1 임시 일정 dict를 Week 3 저장 입력으로 변환합니다."""
 
     # TODO: Week 1 schedule의 attendees/id를 Week 3 members/source_schedule_id에 맞춰 변환하세요.
-    ...
+    return SaveStructuredRequestInput(
+        kind="personal_schedule", # Week1 tool 자체가 개인 일정 전용이므로, kind는 "personal_schedule"로 고정.
+        title=schedule.get("title"),
+        date=schedule.get("date"),
+        start_time=schedule.get("start_time"),
+        end_time=schedule.get("end_time"),
+        members=schedule.get("attendees") or [],
+        source_schedule_id=schedule.get("personal_id"),
+    )
 
 
 @tool("personal_create_schedule")
@@ -324,7 +374,20 @@ def personal_create_schedule(
 
     # TODO: Week 1 임시 일정 tool을 호출한 뒤 결과를 StructuredRequest로 바꿔 SQLite에도 저장하세요.
     # TODO: created 결과에 structured_request와 sqlite_save를 합쳐 JSON 문자열로 반환하세요.
-    ...
+    week1_result = json.loads(
+        week01_personal_create_schedule.invoke(
+            {"title": title, "date": date, "start_time": start_time, "end_time": end_time, "attendees": attendees}
+        )
+    )
+    created_schedule = week1_result["created_schedule"]
+    
+    # StructuredRequest를 상속한 SaveStructuredRequestInput 객체를 생성.
+    save_input = structured_request_from_week01_schedule(created_schedule)
+    # SaveStructuredRequestInput객체를 dict로 변환하여 SQLite에 저장.
+    sqlite_save = _store().save_structured_request(save_input.model_dump())
+    
+    #JSON 문자열 반환
+    return json_payload(tool_result("personal_create_schedule", ok=True, structured_request=created_schedule, sqlite_save=sqlite_save))
 
 
 @tool(args_schema=SaveStructuredRequestInput) 
@@ -435,7 +498,15 @@ def delete_saved_schedules_dict(
     """tool invoke 없이 저장 일정 삭제 로직을 직접 호출합니다."""
 
     # TODO: 전달받은 store 또는 기본 store로 _delete_saved_schedules(...)를 호출하세요.
-    ...
+    return _delete_saved_schedules(
+        store=app_store or _store(),
+        schedule_ids=schedule_ids,
+        date=date,
+        title=title,
+        start_time=start_time,
+        time_unspecified=time_unspecified,
+        delete_all=delete_all,
+    )
 
 
 @tool(args_schema=SavedScheduleUpdateInput)
@@ -451,7 +522,28 @@ def personal_update_saved_schedule(
 
     # TODO: None이 아닌 수정 필드를 AppSQLiteStore.update_schedule(...)에 전달하세요.
     # TODO: ID가 없으면 ok=False, 있으면 updated_schedule/shared_sync를 담아 JSON 문자열로 반환하세요.
-    ...
+    
+    # update_schedule() 내부에서 None을 받으면 해당 필드는 기존 값으로 유지하도록 되어있기 때문에, 그대로 필드 인자를 전달.
+    result = _store().update_schedule(
+        schedule_id,
+        title=title,
+        date=date,
+        start_time=start_time,
+        end_time=end_time,
+        attendees=attendees,
+    )
+    if result is None: # ID가 없으면 ok=False 반환
+        return json_payload(
+            tool_result("personal_update_saved_schedule", ok=False, error=f"schedule_id={schedule_id}를 찾을 수 없습니다.")
+        )
+    return json_payload(
+        tool_result(
+            "personal_update_saved_schedule",
+            ok=True,
+            updated_schedule=result["schedule"], # update_schedule() 내부에서 {"schedule": updated, "shared_sync": ...} 형태로 결과를 만들어줌으로, 필요한 필드값을 담기.
+            shared_sync=result["shared_sync"],
+        )
+    )
 
 
 @tool(args_schema=SavedScheduleDeleteInput)
@@ -466,17 +558,28 @@ def personal_delete_saved_schedules(
     """Nana가 고른 일정 ID나 날짜/제목/시간 필터로 저장 일정을 삭제합니다."""
 
     # TODO: _delete_saved_schedules(...)에 삭제 조건을 전달하고 결과를 JSON 문자열로 반환하세요.
-    ...
+    result = _delete_saved_schedules(
+        store=_store(),
+        schedule_ids=schedule_ids,
+        date=date,
+        title=title,
+        start_time=start_time,
+        time_unspecified=time_unspecified,
+        delete_all=delete_all,
+    )
+    return json_payload(result)
 
 
 def week03_tools() -> list[Any]:
     """Week 1 도구, Week 2 구조화 helper, SQLite 저장/조회/삭제 도구를 조립합니다."""
 
-    base_tools = [
-        personal_create_schedule if _tool_name(item) == "personal_create_schedule" else item for item in week01_tools()
-    ]
+    # personal_list_schedules/personal_delete_schedule은 SQLite에 저장되지 않는 Week 1 임시 메모리 tool이라
+    # agent에 노출하지 않는다. personal_create_schedule은 이 파일의 SQLite 호환 버전으로 교체한다.
+    excluded_week1_tools = {"personal_create_schedule", "personal_list_schedules", "personal_delete_schedule"}
+    base_tools = [item for item in week01_tools() if _tool_name(item) not in excluded_week1_tools]
     return [
         *base_tools,
+        personal_create_schedule,
         extract_schedule_request,
         save_structured_request,
         list_saved_requests,
@@ -502,12 +605,12 @@ def week03_prompt_parts() -> list[str]:
         SQLITE_MEMORY_PROMPT,
         WEEK03_TOOL_CALL_PROMPT,
         # TODO: 현재 날짜, Week 3 tool 선택 기준, 이번 주차의 범위를 설명하는 agent 지시를 추가하세요.
-        f"""Week 3 agent의 역할은, 구조화된 사용자 요청을 SQLite DB에 저장하거나 조회하는거야.
-        사용자의 일정/할 일/알림 요청을 받으면 extract_schedule_request(query=사용자 요청)를 호출하고,
-        그 결과의 structured_request 필드를 save_structured_request tool 호출 인자로 그대로 전달해.
-        만약 사용자가 조회를 요청하면, 적절한 툴을 사용해서 SQLite DB에서 요구된 일정/할 일/알림을 조회해.
-        personal_list_schedules와 personal_delete_schedule은 임시로 구현했던 메모리 조회/삭제 tool이니까 사용하지 마.
-        데이터를 조회할 때는 무조건 list_saved_requests, get_saved_request, personal_list_saved_schedules tool들중 하나를 사용해.
+        f"""Week 2의 “구조화만 수행하고 SQLite에는 저장하지 않는다”는 제한은 Week 3에서 해제돼.
+        Week 3 agent의 역할은, 구조화된 사용자 요청을 SQLite DB에 저장하거나 조회/삭제/수정하는거야.
+        사용자가 이미 저장된 일정·할 일·알림을 조회하려고 하는 경우에는 extract_schedule_request와 save_structured_request를 
+        호출하지 말고, list_saved_requests, get_saved_request, personal_list_saved_schedules 중 적절한 SQLite 조회 tool만 사용해.
+        personal_list_schedules와 personal_delete_schedule은 Week 1의 현재 대화 전용 임시 메모리 tool이므로 
+        Week 3의 저장 데이터 조회에는 절대 사용하지마.
         """
     ]
 
