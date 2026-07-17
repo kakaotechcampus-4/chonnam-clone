@@ -24,16 +24,6 @@ from student_parts.week02_structure_natural_language_requests import (
     week02_prompt_parts,
 )
 
-# tools = [
-#         *base_tools,
-#         extract_schedule_request,
-#         save_structured_request,
-#         list_saved_requests,
-#         get_saved_request,
-#         personal_list_saved_schedules,
-#         personal_update_saved_schedule,
-#         personal_delete_saved_schedules,
-#     ]
 
 _WEEK03_AGENT: Any | None = None
 SQLITE_MEMORY_PROMPT = """
@@ -54,7 +44,9 @@ WEEK03_TOOL_CALL_PROMPT = """
 - 조회: 저장된 일정은 personal_list_saved_schedules, 요청 기록은 list_saved_requests를 쓴다.
 - 수정: 먼저 personal_list_saved_schedules로 대상 schedule_id를 확인한 뒤
 personal_update_saved_schedule을 호출한다. 바꿀 필드만 전달하고 나머지는 생략한다.
-- 삭제: 먼저 personal_list_saved_schedules로 후보를 확인하고,
+- 전체 삭제: 사용자가 '모두 삭제', '전부 지워줘'처럼 저장된 일정 전체 삭제를 명확히 요청하면,
+schedule_ids를 하나씩 모으지 말고 personal_delete_saved_schedules를 delete_all=True로 한 번만 호출한다.
+- 일부 삭제: 먼저 personal_list_saved_schedules로 후보를 확인하고,
 personal_delete_saved_schedules에 schedule_ids 또는 날짜/제목/시간 필터를 명시한다.
 - 조건 없는 삭제는 하지 않는다. delete_all=True는 사용자가 전체 삭제를 명확히 요청할 때만 쓴다.
 - 수정/삭제 대상이 여러 개로 일치하면 실행 전에 사용자에게 확인한다.
@@ -251,7 +243,8 @@ def _delete_saved_schedules(
         "personal_delete_saved_schedules",
         deleted_count=len(deleted),
         filters=filters,
-        deleted=deleted
+        deleted=deleted,
+        delete_all=delete_all,
     )
 
 
@@ -360,7 +353,6 @@ def list_saved_requests(
     """SQLite에 저장된 구조화 요청 원본 기록을 조회합니다.
 
     "지금까지 저장한 요청 보여줘"처럼 요청 이력을 물을 때 사용합니다.
-    저장된 일정 자체를 보려면 personal_list_saved_schedules를 사용합니다.
     결과가 없어도 오류가 아니며, rows가 빈 목록인 JSON 문자열을 반환합니다.
     """
 
@@ -548,8 +540,21 @@ def week03_prompt_parts() -> list[str]:
         "Week 2의 '저장하지 않는다' 제한은 Week 3에서 해제된다. 구조화 결과는 save_structured_request로 SQLite에 저장한다.",
         SQLITE_MEMORY_PROMPT,
         WEEK03_TOOL_CALL_PROMPT,
-        f"오늘 날짜는 {current_app_date_iso()}이다. "
+        f"오늘 날짜는 {current_app_date_iso()}이다. ",
         "Week 3의 범위는 자연어 구조화 → SQLite 저장 → 조회/수정/삭제까지이며, RAG와 외부 멤버 일정 조율은 다루지 않는다.",
+        "'10시'처럼 오전/오후가 명시되지 않은 시간은 모호한 시간이다. ",
+        "'아침', '저녁', '퇴근 후' 같은 문맥으로 확정할 수 있으면 그 근거로 24시간제로 변환하고, ",
+        "확정할 수 없으면 임의로 정하지 말고 저장 전에 사용자에게 오전/오후를 확인한다.",
+        "일정을 저장하기 전에 personal_list_saved_schedules를 date_from/date_to에 같은 날짜를 지정해 ",
+        "그 날짜의 저장된 일정을 먼저 확인한다. ",
+        "겹치는 일정이 없으면 바로 저장한다.",
+        "같은 날짜의 같은 시작 시간에 이미 일정이 있으면 새 일정을 저장하지 않는다. ",
+        "겹치는 일정의 제목과 시간을 사용자에게 알리고, 다른 시간으로 조정하거나 ",
+        "그래도 저장할지 확인받은 뒤에만 진행한다.",
+        "사용자에게 저장 여부를 묻는 응답도 같은 날짜 조회를 마친 뒤에만 한다. ",
+        "겹치는 일정이 있으면 저장 여부 질문에 경고를 반드시 포함한다. ",
+        "예: \"내일 10:00에는 이미 '개인 코칭' 일정이 있습니다. 그래도 저장할까요, 아니면 다른 시간으로 잡을까요?\" ",
+        "겹침 여부를 알리지 않은 채 '저장할까요?'라고만 묻지 않는다.",
     ]
 
 
