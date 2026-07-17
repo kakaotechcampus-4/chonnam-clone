@@ -36,12 +36,18 @@ SQLITE_MEMORY_PROMPT = """## Week 3 · 영속 메모리
 WEEK03_TOOL_CALL_PROMPT = """## Week 3 · tool 호출 순서
 - 저장이 필요한 요청(개인 일정 생성 제외)은 먼저 extract_schedule_request로 자연어를 구조화한 뒤,
   그 결과의 structured_request 필드를 save_structured_request 인자로 그대로 전달해 저장합니다.
+- extract_schedule_request 결과의 kind가 unknown이면 save_structured_request를 호출하지 않습니다.
+  대신 structured_request.reason에 담긴 되묻는 질문을 그대로 사용자에게 전달하고, 답을 받은 뒤
+  다시 구조화해 저장합니다.
 - 개인 일정 생성 요청은 이 파일의 personal_create_schedule(Week 1 호환 tool)을 호출하면 임시 일정 생성과
   SQLite 저장이 한 번에 처리됩니다. save_structured_request를 따로 또 호출하지 않습니다.
 - 일정 조회는 personal_list_saved_schedules를 사용합니다. 사용자가 기간을 말하지 않으면 date_from/date_to를
   비워 조회합니다 — 임의로 기간을 만들어내지 않습니다.
 - 일정 수정/삭제 전에는 먼저 personal_list_saved_schedules로 대상 schedule_id를 확인한 뒤,
   personal_update_saved_schedule 또는 personal_delete_saved_schedules를 호출합니다.
+- personal_delete_saved_schedules가 ok=False이고 candidates가 여러 개면, 조건에 맞는 일정이
+  여러 개라 특정할 수 없다는 뜻입니다. candidates를 사용자에게 보여주고, 사용자가 고른 일정의
+  schedule_id로 다시 삭제를 요청합니다. 임의로 하나를 골라 지우지 않습니다.
 - 일정이 아닌 전체 요청 기록(할 일/알림 포함)을 조회할 때만 list_saved_requests/get_saved_request를 사용합니다."""
 
 
@@ -268,7 +274,7 @@ def save_structured_request_payload(
     """검증된 structured request를 앱 DB에 저장합니다."""
 
     validated = _save_input_from(request)
-    result = (store or _store()).save_structured_request(validated.model_dump())
+    result = (store or _store()).save_structured_request(validated.model_dump(exclude_none=True))
     return tool_result("save_structured_request", **result)
 
 
@@ -346,6 +352,25 @@ def _delete_saved_schedules(
             filters=filters,
         )
 
+    if not delete_all and schedule_ids is None:
+        candidates = store.find_schedules(
+            date=date,
+            title=title,
+            start_time=start_time,
+            time_unspecified=time_unspecified,
+        )
+        if len(candidates) > 1:
+            return tool_result(
+                "personal_delete_saved_schedules",
+                ok=False,
+                reason=(
+                    f"조건에 맞는 일정이 {len(candidates)}개라 어떤 것을 지울지 정할 수 없습니다. "
+                    "candidates를 사용자에게 보여주고 schedule_id로 특정해서 다시 요청하세요."
+                ),
+                filters=filters,
+                candidates=candidates,
+            )
+
     if delete_all:
         deleted = store.delete_all_schedules()
     else:
@@ -369,13 +394,14 @@ def structured_request_from_week01_schedule(schedule: dict[str, Any]) -> SaveStr
     """Week 1 임시 일정 dict를 Week 3 저장 입력으로 변환합니다."""
 
     end_time = schedule.get("end_time")
+    attendees = schedule.get("attendees") or []
     return SaveStructuredRequestInput(
-        kind="personal_schedule",
+        kind="group_schedule" if attendees else "personal_schedule",
         title=schedule.get("title"),
         date=schedule.get("date"),
         start_time=schedule.get("start_time"),
         end_time=None if end_time == "미정" else end_time,
-        members=schedule.get("attendees") or [],
+        members=attendees,
         source_schedule_id=schedule.get("id"),
     )
 
@@ -441,6 +467,7 @@ def save_structured_request(
         "original_text": original_text,
         "source_schedule_id": source_schedule_id,
     }
+    payload = {k: v for k, v in payload.items() if v is not None}
     result = _store().save_structured_request(payload)
     return json_payload(tool_result("save_structured_request", **result))
 
@@ -472,11 +499,14 @@ def personal_list_saved_schedules(
     date_from: str | None = None,
     date_to: str | None = None,
 ) -> str:
-    """앱 DB에 저장된 일정 목록을 날짜/종류 필터로 반환합니다. Nana가 조회/수정/삭제 후보를 볼 때 사용합니다."""
+    """앱 DB에 저장된 일정 목록을 날짜/종류 필터로 반환합니다. Nana가 조회/수정/삭제 후보를 볼 때 사용합니다.
 
-    effective_kind = kind or "personal_schedule"
-    schedules = _store().list_schedules(limit=limit, kind=effective_kind, date_from=date_from, date_to=date_to)
-    filters = {"kind": effective_kind, "date_from": date_from, "date_to": date_to}
+    kind를 지정하지 않으면 개인 일정과 그룹 일정을 모두 보여줍니다. kind가 없다고 personal_schedule로
+    좁히면 그룹 일정이 조회/삭제 후보에서 통째로 숨겨지기 때문입니다.
+    """
+
+    schedules = _store().list_schedules(limit=limit, kind=kind, date_from=date_from, date_to=date_to)
+    filters = {"kind": kind, "date_from": date_from, "date_to": date_to}
     return json_payload(tool_result("personal_list_saved_schedules", filters=filters, schedules=schedules))
 
 

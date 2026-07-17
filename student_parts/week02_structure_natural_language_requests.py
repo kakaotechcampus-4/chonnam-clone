@@ -382,13 +382,29 @@ def _week02_date_rules(today: str, today_date: date) -> str:
   일관되게 틀립니다)."""
 
 
+def _week02_time_rules() -> str:
+    """오전/오후 구분 없이 시각만 말한 경우의 처리 규칙만 담습니다."""
+
+    return """### 오전/오후 없는 시각 처리
+- 사용자가 '11시'처럼 1~12 사이 숫자로만 시각을 말하고, 오전/오후·아침/점심/저녁/밤 같은 표현이나
+  대화 맥락으로도 어느 쪽인지 확정할 수 없다면, 그 시각을 임의로 오전 또는 오후로 단정하지 않습니다.
+- 이런 경우 start_time을 채우지 말고 kind를 unknown으로 둔 채, reason에 오전/오후 중 언제인지
+  되묻는 질문을 남깁니다. '저녁 11시'처럼 시간대 표현이 함께 있거나 13~24시처럼 24시간제로 명확히
+  말한 경우는 그대로 사용합니다."""
+
+
 def _week02_kind_rules() -> str:
     """kind(personal_schedule/group_schedule/todo/reminder) 분류 규칙만 담습니다."""
 
     return """### kind 분류 규칙
 - kind는 personal_schedule/group_schedule/todo/reminder/unknown 중 하나입니다.
 - 참석자(실제 이름)가 구체적으로 언급되면 group_schedule, 없으면 personal_schedule로 분류합니다.
-  '팀', '다같이'처럼 뭉뚱그린 표현은 참석자로 인정하지 않습니다.
+  '팀', '팀원', '팀원들', '다같이', '사람들', '동료들'처럼 구체적인 이름이 아닌 뭉뚱그린 표현은
+  members 필드에도 절대 넣지 않습니다. 실제 이름이 아니라는 이유로 이런 단어 자체를 참석자로
+  만들어내면 안 됩니다.
+- 사용자가 '팀원들이랑', '동료들이랑'처럼 여러 명과의 일정임을 분명히 말했지만 구체적인 이름을
+  하나도 대지 않았다면, group_schedule로 단정하거나 members를 비운 채 personal_schedule로 넘기지
+  말고 kind를 unknown으로 두고 reason에 참석자 이름을 되묻는 질문을 남깁니다.
 - todo는 date 필드에 마감일(due date)을 담습니다. 마감일이 대화에서 확인되지 않으면 임의로
   채우지 말고 kind를 unknown으로 두고 reason에 마감일을 되묻는 질문을 남깁니다.
 - reminder는 몇 분 전에 알릴지(예: "30분 전")만으로는 실제로 언제 울릴지 알 수 없습니다. 기준이
@@ -419,6 +435,7 @@ def week02_prompt_parts() -> list[str]:
         *week01_prompt_parts(),
         _week02_intro(today, today_weekday),
         _week02_date_rules(today, today_date),
+        _week02_time_rules(),
         _week02_kind_rules(),
         _WEEK02_UNKNOWN_VALUE_RULES,
         _WEEK02_SCOPE_LIMITS,
