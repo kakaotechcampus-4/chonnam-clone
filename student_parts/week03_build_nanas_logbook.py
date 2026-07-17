@@ -26,6 +26,10 @@ from student_parts.week02_structure_natural_language_requests import (
 
 _WEEK03_AGENT: Any | None = None
 
+# 삭제 건수가 이 값을 넘으면 '대량 삭제'로 본다. 삭제 결과 payload의 bulk 신호 기준이며,
+# LLM이 개별 나열 대신 총 건수를 강조해 신중히 요약하도록 유도한다.
+BULK_DELETE_THRESHOLD = 3
+
 SQLITE_MEMORY_PROMPT = (
     "이제 일정·할 일·알림은 현재 대화 메모리가 아니라 앱 SQLite DB(기록장)에 영구 저장된다. "
     "따라서 앱을 다시 켜거나 새 대화를 열어도 이전에 저장한 일정을 조회·수정·삭제할 수 있다. "
@@ -52,7 +56,11 @@ WEEK03_TOOL_CALL_PROMPT = (
     "personal_list_saved_schedules의 기본 조회 종류는 개인 일정(personal_schedule)이다. "
     "대상에 다른 참석자가 있는 그룹 일정(예: '철수랑 회의', '영희랑 약속')은 kind='group_schedule'로 조회하고, "
     "개인 일정으로 조회해 대상을 찾지 못하면 kind='group_schedule'로 다시 조회한다.\n"
-    "조건 없는 전체 삭제는 사용자가 명시적으로 요청할 때만 한다.\n"
+    "조건 없는 전체 삭제는 사용자가 명시적으로 요청할 때만 한다. "
+    "전체 삭제(delete_all)와 개별 필터(날짜·제목·시간·ID)를 한 번에 함께 넘기지 않는다. "
+    "전부 지우려면 delete_all=True만, 일부만 지우려면 필터만 지정한다.\n"
+    "삭제 결과의 bulk가 true이면 개별 항목을 나열하지 말고 총 건수를 강조해 신중히 요약하고, "
+    "false이면 deleted에 담긴 항목 제목을 짚어 무엇을 지웠는지 구체적으로 알린다.\n"
     "도구를 호출한 뒤에는 결과 JSON을 바탕으로 짧게 답한다."
 )
 
@@ -357,9 +365,25 @@ def _delete_saved_schedules(
             "personal_delete_saved_schedules",
             ok=False,
             deleted_count=0,
+            bulk=False,
             filters=filters,
             deleted=[],
             error="삭제 조건이 없습니다. 일정 ID·날짜·제목·시간을 지정하거나 delete_all=True를 명시하세요.",
+        )
+    # delete_all(전체 삭제)과 개별 필터는 상호 배타다. 둘이 함께 오면 의도가 모순되므로
+    # 위험한 전체 삭제로 넘기지 않고 거부한다. LLM은 이 error를 사용자에게 되물어 확정하도록 유도한다.
+    if delete_all and has_filter:
+        return tool_result(
+            "personal_delete_saved_schedules",
+            ok=False,
+            deleted_count=0,
+            bulk=False,
+            filters=filters,
+            deleted=[],
+            error=(
+                "전체 삭제(delete_all)와 개별 필터(일정 ID·날짜·제목·시간)를 동시에 지정할 수 없습니다. "
+                "전부 지우려면 필터 없이 delete_all=True만, 일부만 지우려면 delete_all 없이 필터만 지정하세요."
+            ),
         )
 
     if delete_all:
@@ -373,9 +397,11 @@ def _delete_saved_schedules(
             time_unspecified=time_unspecified,
         )
 
+    deleted_count = len(deleted)
     return tool_result(
         "personal_delete_saved_schedules",
-        deleted_count=len(deleted),
+        deleted_count=deleted_count,
+        bulk=deleted_count > BULK_DELETE_THRESHOLD,
         filters=filters,
         deleted=deleted,
     )

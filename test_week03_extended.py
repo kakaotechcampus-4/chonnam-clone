@@ -97,10 +97,28 @@ def run() -> int:
     check("E. 제목 필터로 회의B 1건 삭제", call(w3.personal_delete_saved_schedules, title="회의B")["deleted_count"] == 1)
     d_none = call(w3.personal_delete_saved_schedules)
     check("E. 조건 없으면 ok=False, 0건", d_none["ok"] is False and d_none["deleted_count"] == 0)
+    check("E. 거부 payload에도 bulk=False 포함", d_none.get("bulk") is False, str(d_none))
     call(w3.save_structured_request, kind="personal_schedule", title="시간미정F", date="2026-07-25", original_text="x")
     check("E. time_unspecified로 시간없는 일정 삭제", call(w3.personal_delete_saved_schedules, time_unspecified=True)["deleted_count"] >= 1)
+    # delete_all + 필터 동시 지정은 상호 배타 → 거부하고 전체 삭제로 넘어가지 않아야 한다
+    before_conflict = len(_STORE.list_schedules(limit=200))
+    d_conflict = call(w3.personal_delete_saved_schedules, delete_all=True, date="2026-07-20")
+    check("E. delete_all+필터 동시 → ok=False, 0건", d_conflict["ok"] is False and d_conflict["deleted_count"] == 0, str(d_conflict))
+    check("E. delete_all+필터 거부 시 일정 보존(전체삭제 안 됨)", len(_STORE.list_schedules(limit=200)) == before_conflict)
     call(w3.personal_delete_saved_schedules, delete_all=True)
     check("E. delete_all 후 일정 0건", len(_STORE.list_schedules(limit=200)) == 0)
+    # bulk 신호: 임계(BULK_DELETE_THRESHOLD) 이하면 bulk=False, 초과면 bulk=True
+    call(w3.save_structured_request, kind="personal_schedule", title="단건H", date="2026-08-01", start_time="09:00", original_text="x")
+    d_single = call(w3.personal_delete_saved_schedules, title="단건H")
+    check("E. 단건 삭제 → bulk=False", d_single["deleted_count"] == 1 and d_single["bulk"] is False, str(d_single))
+    for i in range(w3.BULK_DELETE_THRESHOLD + 2):
+        call(w3.save_structured_request, kind="personal_schedule", title=f"대량{i}", date="2026-08-10", start_time="09:00", original_text="x")
+    d_bulk = call(w3.personal_delete_saved_schedules, date="2026-08-10")
+    check(
+        "E. 대량 삭제(>임계) → bulk=True",
+        d_bulk["deleted_count"] == w3.BULK_DELETE_THRESHOLD + 2 and d_bulk["bulk"] is True,
+        str(d_bulk),
+    )
 
     # F. 레거시 wrapper 정규화
     li_sr = w3._save_input_from({"structured_request": {"kind": "todo", "title": "wrapSR", "original_text": "x"}})
