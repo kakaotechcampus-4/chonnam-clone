@@ -119,6 +119,27 @@ def personal_list_saved_schedules(limit=50, kind=None, date_from=None, date_to=N
 > list는 kind/date_from/date_to 필터를 AppSQLiteStore.list_saved_requests(...)에 그대로 넘깁니다. get은 request_id 하나로 단건 조회합니다. 조회 결과가 없어도 예외를 던지지 말고 rows=[] 또는 row=None 형태를 유지합니다.
 > 날짜가 명확한 조회는 date_from/date_to로 범위를 좁히고, 너무 많은 row가 들어가지 않게 limit을 사용합니다.
 
+**🔍 멘토 리뷰 (PR #86)** — `effective_kind = kind or "personal_schedule"`
+> "이 경우 `kind = ""` 도 기본값으로 떨어집니다. 의도적인 동작인지 궁금합니다."
+
+**해결/답변** — 의도된 동작이다. 빈 문자열·`None`을 모두 "종류 미지정"으로 보고 개인 일정을 기본 조회하려는 것. 다만 더 엄격히 하려면 `kind`가 유효한 `RequestKind` 값일 때만 그대로 쓰고, 그 외(`""`·오타)는 기본값으로 떨어뜨리는 방어를 넣을 수 있다:
+```python
+effective_kind = kind if kind in RequestKind.__args__ else "personal_schedule"
+```
+
+**📎 보충 공부 — falsy와 `x or 기본값` 함정 (이 리뷰에서 파생)**
+
+- **falsy** = 파이썬이 참/거짓 판단에서 "거짓"으로 취급하는 값: `None`, `False`, `0`/`0.0`, `""`(빈 문자열), `[]`/`{}`/`()`(빈 컬렉션). 이것 말고는 전부 **truthy**. (`bool("")`→False, `bool("a")`→True로 확인 가능)
+- `A or B`는 "A가 truthy면 A, 아니면 B"를 돌려준다. 그래서 `kind or "personal_schedule"`은 `kind`가 `None`이든 `""`이든 `0`이든 **falsy이기만 하면 전부** 기본값으로 떨어뜨린다. (`None`뿐 아니라 `""`도 삼킨다는 게 멘토 지적의 핵심)
+- **왜 리뷰어가 반사적으로 보나**: `x or 기본값`은 파이썬에서 "값 없으면 기본값"을 뜻하는 흔한 관용구라 자주 쓰이고, 그만큼 함정도 자주 겪는다. 대표 버그:
+  ```python
+  limit = limit or 50   # 누가 limit=0("0개 반환")을 넘기면 → 50으로 뒤바뀜
+  ```
+  여기선 `0`이 의미 있는 값인데 falsy라 `or`가 삼킨다.
+- **이 케이스(`kind`) 판단**: `RequestKind`에 `""`가 유효값으로 없어 `None`과 `""`를 모두 "미지정"으로 봐도 논리적으로 맞고, 조회 도구라 최악도 기본 목록을 보여주는 정도라 부작용이 없다. → **버그는 아니다.**
+- **정직한 답변 방향**: "의도했다"고 억지 부리기보다, "`None`만 생각하고 관용적으로 쓴 코드인데, 이 자리에선 `""`도 미지정으로 보는 게 맞아 결과적으로 문제 없다"가 사실에 맞다. `0`/`""`가 의미 있는 자리라면 `default if x is None else x`로 쓴다.
+- **메타 교훈**: 이 줄은 AI 초안을 그대로 받은 부분이라, falsy 함정 같은 패턴에 익숙하지 않으면 비판적으로 걸러내기 어렵다. 리뷰에서 걸린 지점을 이렇게 뜯어보는 게 실전 코드 공부가 된다.
+
 ---
 
 ### 2.4 `personal_update_saved_schedule` — 보관된 문서 "고쳐 쓰기"(추가)
@@ -169,6 +190,30 @@ def _delete_saved_schedules(*, store, schedule_ids=None, date=None, title=None, 
 **④ 과제 원문**
 > 조건 없이 삭제하지 않도록 _delete_saved_schedules(...)에서 안전 규칙을 확인합니다. deleted_count, filters, deleted를 유지해야 trace에서 무엇이 지워졌는지 확인할 수 있습니다.
 
+**🔍 멘토 리뷰 (PR #86)** — `filters`의 `None`/빈 리스트 모호성
+> "`schedule_ids`가 `None`이면 filters dict에 `None`이 그대로 들어갑니다. 또한 빈 리스트도 '조건 없음'으로 처리되는데, 호출자가 실수로 빈 리스트를 넣은 건지 삭제 대상이 없는 건지 모호합니다."
+
+**해결/답변** — 안전 측면은 이미 가드가 처리한다: `bool([])=False`라 빈 리스트는 "조건 없음" → 다른 조건도 없으면 `ok=False`로 **거부**(위험한 전체 삭제를 막는 안전한 기본값). 가시성만 개선하면 된다 — `filters`에서 `None` 키를 빼서 로그를 깔끔하게:
+```python
+raw = {"schedule_ids": schedule_ids, "date": date, "title": title,
+       "start_time": start_time, "time_unspecified": time_unspecified, "delete_all": delete_all}
+filters = {k: v for k, v in raw.items() if v is not None}
+```
+
+**📎 보충 공부 — `None` vs `[]` 구분과 관찰 가능성 (이 리뷰에서 파생)**
+
+- **"호출자(caller)"** = 이 함수를 불러 쓰는 코드. `_delete_saved_schedules`(내부 함수, 같은 파일 320번 줄 정의)는 혼자 돌지 않고, 도구 `personal_delete_saved_schedules`(LLM이 부름)와 헬퍼 `delete_saved_schedules_dict`(테스트/코드가 직접 부름)가 호출한다. 삭제 대상 `schedule_ids`에 무엇을 넣을지는 결국 **LLM**(도구 호출 시) 또는 헬퍼를 부른 코드가 정한다.
+- **전체 흐름**: 사용자 "일정 지워줘" → LLM 에이전트가 도구 호출 결정(인자도 채움) → `personal_delete_saved_schedules(schedule_ids=...)` → `_delete_saved_schedules(...)` → 가드 검사 → store 삭제.
+- **모호함의 정체**: `bool(schedule_ids)`는 `None`과 `[]`를 **둘 다 falsy**로 봐서 "조건 없음"으로 뭉친다. 그래서 trace만 봐선 "id를 안 넘긴 것(`None`, 정상)"인지 "빈 리스트를 명시적으로 넘긴 것(`[]`, 상류 탐색 실패 의심)"인지 구분이 안 된다.
+- **안전엔 문제없다** — 어느 쪽이든 조건이 없으면 `ok=False`로 거부되니까. 다만 **관찰 가능성(observability)** 개선 여지: 둘을 갈라 빈 리스트인 경우 `warning`을 남기면 개발자가 상류 버그를 의심할 수 있다.
+  ```python
+  if schedule_ids == [] and not (delete_all or date or title or start_time or time_unspecified):
+      return tool_result("personal_delete_saved_schedules", ok=False,
+          warning="빈 리스트(schedule_ids=[])가 명시적으로 전달됨 — 대상 탐색 실패 가능",
+          deleted_count=0, filters=filters, deleted=[])
+  ```
+- 그리고 `filters`에 `None` 키가 그대로 남는 건 로그 노이즈라, 위 해결처럼 `None` 키를 빼면 깔끔하다.
+
 ---
 
 ### 2.6 Week1 호환 생성 — `personal_create_schedule` + `structured_request_from_week01_schedule`(추가)
@@ -205,6 +250,56 @@ def personal_create_schedule(title, date, start_time, end_time="미정", attende
 **✳️ 내 판단 (범위 밖·소소한 정규화)** — `end_time "미정" → None`
 과제는 "attendees/id 변환"만 지시했다. 그런데 Week1의 `end_time` 기본값은 `"미정"`(시각이 아닌 한국어)이라, 그대로 저장하면 `HH:MM`을 기대하는 뒤 로직과 어긋날 수 있다. Week2에서 세운 "'미정' 같은 비-시각 값은 `None`" 규칙을 **여기서도 코드로 적용**했다(빈 문자열도 `None` 처리). 데이터 일관성을 위한 판단이다.
 
+**🔍 멘토 리뷰 (PR #86)** — `personal_create_schedule` (3건)
+
+**(a) 빈 row 저장 가드**
+> "Week1 도구가 `ok=False`를 반환하거나 `created_schedule` 키가 비어있어도, `structured_request_from_week01_schedule({})`이 빈 입력을 만들고, `save_structured_request`는 title 누락 시 '제목 없음'으로 폴백해 `ok=True`를 반환합니다. 결과적으로 사용자에게 '저장 성공'으로 보이지만 실제로는 빈 row가 저장될 수 있습니다."
+
+**(b) 이중 기록 단계별 가시성**
+> "Week1 임시메모리 + SQLite 이중 기록인데, 한 쪽 실패 시 어느 단계가 실패했는지 명확하지 않습니다. 단계별 `ok`를 분리하거나 SQLite 실패 시 warning 필드를 추가하면 좋겠습니다."
+
+**(c) dict 병합 덮어쓰기**
+> "`{**created, ...}` 병합은 week1 tool의 created dict 스키마를 암묵적으로 가정합니다. 지금은 충돌이 없지만 week1 툴이 동일 키를 추가하면 조용히 덮어쓰기가 발생합니다."
+
+**해결** — (a)+(b)를 한 번에: week1 결과가 실패거나 `created_schedule`이 비면 **SQLite 저장을 건너뛰고** 실패/경고를 반환. 성공 경로도 단계별 `ok`를 분리. (c)는 우리 결과를 별도 키 아래로 넣어 충돌을 피한다.
+```python
+@tool("personal_create_schedule")
+def personal_create_schedule(title, date, start_time, end_time="미정", attendees=None):
+    created = json.loads(week01_personal_create_schedule.invoke({...}))
+    schedule = created.get("created_schedule") or {}
+    if not created.get("ok", True) or not schedule:                 # (a) 가드
+        return json_payload({"ok": False, "created_ok": False,
+                             "error": "Week1 임시 생성 실패 — SQLite 저장 생략",
+                             "created": created})
+    save_input = structured_request_from_week01_schedule(schedule)
+    sqlite_save = _store().save_structured_request(save_input.model_dump(exclude_none=True))
+    return json_payload({"ok": True,
+                         "created_ok": True,                        # (b) 단계별 ok
+                         "sqlite_ok": bool(sqlite_save.get("request_id")),
+                         "created": created,                        # (c) 네임스페이스 분리
+                         "structured_request": save_input.model_dump(),
+                         "sqlite_save": sqlite_save})
+```
+
+**📎 보충 공부 — 왜 이 리뷰들이 몰렸나 + (a)(b)(c) 심화 (대화 정리)**
+
+**store가 왜 빈 값도 "제목 없음"으로 저장 성공시키나 (a의 근원)**
+`fixed/app_store.py`의 `save_structured_request`는 `title = payload.get("title") or "제목 없음"`으로 폴백하고, 실패를 반환하지 않는다. 이유는 둘: ① DB 스키마가 `title TEXT NOT NULL`이라 `None`을 넣으면 INSERT가 크래시 → 폴백으로 항상 저장되게 함. ② store는 "주면 저장하는" **관대한(permissive) 저장 계층**이라 "의미 있는 데이터인가"는 판단하지 않는다. → **검증은 store가 아니라 호출자(우리 week3 코드)의 책임**이라 (a) 가드가 필요하다.
+
+**(a) 가드의 기준은 "제목 유무"가 아니라 "생성 실패 여부"**
+- **상황 B(정상)**: 챗 사용자가 제목만 안 줬거나 LLM이 제목을 안 만든 경우. week1은 성공(`ok=True`), `created_schedule`엔 날짜·시간이 실재. title만 "제목 없음"으로 채워짐 → **빈 row가 아니고 저장 성공도 사실.** 가드로 막으면 안 됨.
+- **상황 A(문제)**: week1 생성 자체가 실패(`ok=False`거나 `created_schedule` 없음). `created.get("created_schedule", {})`가 빈 dict `{}`를 넘겨 → title 빼고 전부 `None`인 **껍데기 row**가, 그것도 **실패인데 "성공"으로** 저장됨.
+- 그래서 가드는 title이 아니라 **week1 결과의 `ok`/빈 여부**를 본다: `if not created.get("ok", True) or not schedule:` → 실패면 저장 생략, title 없어도 schedule이 실재하면 통과(B 보존).
+
+**(b)는 (a)와 같은 맥락이나 자동 해결은 아님**
+(a)는 ①단계(week1 생성) 실패를 막는다. (b)가 추가로 원하는 건 ②단계(SQLite 저장)의 가시성이다. ①은 성공했는데 ②만 실패하는 경우는 (a)의 if문으로 안 잡히므로, 반환에 `created_ok`/`sqlite_ok`를 **각각 찍어** 어느 단계가 됐는지 보이게 한다. (같은 함수라 (a)와 한 번에 처리) 단, 현 store는 실패 시 보통 예외를 던져 ②의 "조용한 실패"는 실제론 드물다.
+
+**(c)는 저위험 잠재 이슈 (이 프로젝트에선 우선순위 낮음)**
+`{**created, ...}`는 week1이 돌려준 dict의 키를 통째로 펼치는데, 미래에 week1이 `structured_request`/`sqlite_save` 같은 동일 키를 추가하면 뒤에 쓴 우리 값이 **조용히 덮어쓴다**(dict 리터럴은 뒤 키가 이김). 해결은 우리 결과를 `week03` 같은 별도 키에 격리. 다만 week1은 이미 merge된 내 파일이고 혼자 하는 한 프로젝트라 스키마가 바뀔 일이 거의 없어 **이론적 위험**이다. 멘토가 짚는 건 "남의 모듈 반환 모양을 믿고 펼치지 말라"는 **실무 습관**.
+
+**메타 정리 — 왜 이 함수에 리뷰가 몰렸나 + 학습 전략**
+① 큰 설계는 plan 모드로 여러 파일을 관망하며 짰지만, 이 접착(glue) 함수는 그 뒤 디버깅 단계에서 "일단 붙이자"로 빠르게 나온 코드다. ② plan·프롬프트가 happy path 위주여서 방어 경로(실패/빈 값/키 충돌)가 빠졌다 — AI 코드의 전형적 성향. ③ week1↔week3를 잇는 접착 코드라 edge-case가 태생적으로 몰리는 자리. → 코드가 유난히 나쁜 게 아니라 "happy path는 되는데 방어가 얇은" 상태이며, 대부분 관찰 가능성·방어 수준의 개선 제안이다. **전략**: 과제 완수를 기본선으로 깔고, 리뷰에서 걸린 것만 개념(falsy·가드·관찰 가능성)으로 소화한다. 다음 주차엔 멘토 리뷰를 받기 전에 AI로 "방어 코드 관점" 셀프 리뷰를 먼저 돌려본다.
+
 ---
 
 ### 2.7 레거시 정규화 helper — `_save_input_from` / `save_structured_request_payload`(추가)
@@ -238,6 +333,24 @@ def save_structured_request_payload(request, *, store=None):
 **④ 과제 원문**
 > _save_input_from / save_structured_request_payload는 tool 없이 dict/JSON/자연어를 직접 저장할 때 쓰는 helper입니다. 자연어 문자열이 들어오면 Week 2 extract_structured_request(...)로 먼저 구조화합니다.
 
+**🔍 멘토 리뷰 (PR #86)** — `raise RuntimeError`의 진단 정보 부족
+> "런타임 메시지가 `type(value)`만 찍고 value 본문을 안 찍어서, 디버깅 시 어떤 값이 들어와서 실패했는지 알기 어렵습니다."
+
+**해결** — 예외 메시지에 값 본문 일부(길면 잘라서)를 함께 남긴다:
+```python
+raise RuntimeError(f"저장 입력을 해석할 수 없습니다: type={type(value)!r}, value={repr(value)[:200]}")
+```
+
+**📎 보충 공부 — `type(value)` vs 값 본문, 그리고 `repr` (이 리뷰에서 파생)**
+
+- `_save_input_from`은 dict/JSON/자연어/객체 어디에도 안 맞으면 `raise`로 즉시 멈춘다(fail-fast). 문제는 메시지에 `type(value)`만 넣어 **타입(종류)만** 남는다는 것.
+- `type(value)`는 "무엇인지(int/str/…)"만, `value`는 "실제 내용"을 말한다. 예: `value = 12345` → `type(value)`는 `<class 'int'>`(정수라는 것만), 실제 값 `12345`는 안 보인다.
+- 그래서 로그에 `... : <class 'int'>`만 찍혀 "무슨 값이 잘못 흘러왔는지" 추적이 어렵다.
+- **해결**: 값 본문도 함께(길면 잘라서) 남긴다 — `f"... type={type(value)!r}, value={repr(value)[:200]}"`.
+  - `repr(...)`: 값을 명확하게 보여준다 — 문자열이면 따옴표까지(`'abc'`), 빈 문자열 `''`·공백도 눈에 보인다. (`str()`은 `abc`라 헷갈릴 수 있음)
+  - `[:200]`: 값이 긴 JSON 등일 때 앞 200자만 잘라 로그 폭발을 막는다.
+- 이것도 **관찰 가능성(observability)** 개선 — 실패 시 원인을 빨리 찾게 흔적을 남기는 것.
+
 ---
 
 ### 2.8 프롬프트 & agent — `week03_prompt_parts` / `build_week03_agent`
@@ -265,6 +378,56 @@ def build_week03_agent():
 
 **④ 과제 원문**
 > Week 3 agent가 "구조화 후 저장" 흐름을 따르도록 system prompt를 조립합니다. Week 1~3 tool을 가진 agent를 한 번만 만들고 재사용합니다.
+
+**🔍 멘토 리뷰 (PR #86)** — `current_app_date_iso()`가 build 시점에 고정
+> "`current_app_date_iso()`가 에이전트 생성 시점에 평가되어 문자열에 고정됩니다. 의도적인 동작인지 궁금합니다."
+
+**해결/답변** — 완전히 의도한 건 아니고, "agent를 한 번만 만들어 재사용"(가이드 지시) + "날짜를 system_prompt에 문자열로 박음"의 상호작용으로 생긴 박제다. 이 앱의 app-date는 한 프로세스 내내 고정이라 실행 중엔 문제가 없지만, 자정을 넘기거나 날짜가 바뀌면 stale해지는 잠재 이슈다. live 날짜가 필요하면 날짜를 system_prompt에 굽지 말고 **매 턴 사용자 메시지에 주입**하거나, agent 캐시를 날짜 키로 무효화해야 한다. (지난 주 '날짜는 코드단에서' 피드백과 같은 결의 이슈다.)
+
+**📎 보충 공부 — "함수가 언제 호출되나" + agent 캐싱 (이 리뷰에서 파생)**
+
+- **f-string은 만들 때 딱 한 번 평가된다**: `f"...{current_app_date_iso()}..."`는 문자열이 만들어지는 순간 함수를 실행해 결과를 **글자로 박아넣는다**. 이후엔 굳은 문자열이라 다시 계산하지 않는다. 예: `"오늘은 2026-07-18이다"`로 확정.
+- **agent 캐싱**: `build_week03_agent`는 `if _WEEK03_AGENT is None:`으로 **처음 한 번만** agent를 만들고(그때 system_prompt 확정), 이후엔 저장해둔 걸 재사용한다(가이드 지시). → 그 안에 박힌 날짜도 **첫 build 시점에 얼어붙는다**.
+- **문제**: 앱이 켜진 채 날짜가 바뀌면(자정 넘김 등) 프롬프트는 여전히 옛 날짜를 "오늘"이라 말한다 → LLM이 "내일" 같은 상대날짜를 틀린 기준으로 계산. (달력을 벽에 붙여두고 안 넘기는 셈)
+- **이 앱에선 실질 무해**: `current_app_date_iso()`는 앱의 **시뮬레이션 날짜**라 한 프로세스 내내 고정 → 실행 중엔 안 바뀐다. 다만 개념적으론 얼어있는 게 맞다.
+- **live 날짜가 필요하면**: ① 날짜를 system_prompt에 굽지 말고 **매 턴 사용자 메시지에 주입**, 또는 ② 날짜가 바뀌면 agent 캐시를 무효화하고 재생성.
+- **답변 방향**: "의도라기보단 '한 번 생성·재사용' + '날짜를 프롬프트에 박음'의 부산물. 이 앱은 app-date가 고정이라 실행 중엔 문제없지만, 지적대로 얼어있는 게 맞고 실시간 날짜가 필요하면 매 턴 주입 방식으로 바꾼다." (지난 주 '날짜는 코드단' 피드백과 같은 결)
+
+---
+
+### 2.9 `week03_tools()` — 매핑 안 되는 리뷰 (도구 조립, ADR-4 연계)
+
+> 이 리뷰는 2.1~2.8의 개별 함수가 아니라 **도구 목록을 조립하는 `week03_tools()`**에 대한 것이라 따로 정리한다. (설계 결정 자체는 ADR-4 참고)
+
+**① 쉽게 말하면**
+agent에게 "이번 주엔 이 도구들만 써"라고 쥐여주는 **도구 상자**. Week1 임시 조회/삭제 도구는 뺐고, 생성만 SQLite 이중 기록 버전으로 넣었다.
+
+**② 코드 (현재)**
+```python
+def week03_tools() -> list[Any]:
+    # Week1 임시 메모리 전용 조회/삭제(personal_list_schedules / personal_delete_schedule)는
+    # Week3에서 노출하지 않는다. 정본 저장소가 SQLite라 임시-메모리 조회와 엇갈리는 혼선을 막는다.
+    return [
+        personal_create_schedule,          # Week1 호환(임시+SQLite 이중 기록)
+        extract_schedule_request,
+        save_structured_request,
+        list_saved_requests, get_saved_request, personal_list_saved_schedules,
+        personal_update_saved_schedule, personal_delete_saved_schedules,
+    ]
+```
+
+**🔍 멘토 리뷰 (PR #86)** — 제거 대신 "교체"는 어땠나
+> "가이드는 Week1 tool 목록에 Week2/3 도구를 누적하라고 했는데, 여기서는 `personal_list_schedules` / `personal_delete_schedule`을 제거했어요. 제거 대신 Week1 도구가 SQLite를 호출하도록 교체하는 것도 고려해볼 수 있을 것 같은데, 왜 제거를 선택하셨는지 궁금합니다."
+
+**해결/답변** — 교체(= Week1 이름을 SQLite로 재배선)를 하면, 이미 **메인 과제로 구현해야 하는** `personal_list_saved_schedules`와 **기능이 같은 도구가 2개**(`personal_list_schedules` + `personal_list_saved_schedules`)가 되어 LLM이 다시 이름 충돌로 혼선을 겪는다. 그래서 중복을 최소 코드로 없애는 **제거**를 택했다(생성만은 이름을 유지해야 Week1 흐름과 호환되므로 교체로 남김). 트레이드오프로 가이드의 "누적" 원칙에서 의도적으로 벗어난 것이며, 그 근거는 ADR-4에 기록했다.
+
+**📎 보충 공부 — 제거 vs 교체: 도구별로 다르게 (이 리뷰에서 파생)**
+
+- **배경(ADR-4 복습)**: 원래 스캐폴드는 Week1 도구를 누적 노출 → 임시 조회 `personal_list_schedules`와 SQLite 조회 `personal_list_saved_schedules`가 공존 → LLM이 "내 일정 보여줘"에 임시(빈) 도구를 골라 빈 결과 반환.
+- **멘토 대안(교체)**: 제거하지 말고 Week1 이름은 유지하되 몸통이 SQLite를 호출하게 바꾸자 → 가이드의 "누적" 유지 + 충돌 해소.
+- **왜 조회/삭제는 교체가 아니라 제거인가**: `personal_list_saved_schedules`는 **메인 과제 필수 도구**라 지울 수 없다. 여기에 `personal_list_schedules`도 SQLite로 교체하면 **기능 동일 도구가 2개** → 이름 충돌 재발(ADR-4가 잡은 그 버그). 그래서 중복을 없애는 **제거**가 최소·근본 해법.
+- **생성만 교체인 이유**: "SQLite 저장용 별도 생성 도구"가 없어서 `personal_create_schedule` 이름을 유지·교체(임시+SQLite 이중 기록)해도 **중복이 안 생긴다** → 생성은 멘토가 말한 "교체"를 실제로 적용.
+- **정리**: 획일적 "다 제거"가 아니라 **생성=교체(중복 없음), 조회/삭제=제거(교체 시 필수 도구와 중복)**. 가이드 누적 원칙에서 벗어난 건 인지했고 근거는 ADR-4.
 
 ---
 
