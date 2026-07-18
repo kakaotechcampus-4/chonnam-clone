@@ -201,7 +201,10 @@ class StructuredRequest(BaseModel):
     )
     priority: str | None = Field(
         default=None,
-        description="할 일 우선순위(예: 높음/보통/낮음). 원문에 없으면 None으로 둔다.",
+        description=(
+            "할 일 우선순위. low/medium/high 중 하나로 채우고, 원문에 없으면 None으로 둔다. "
+            "'중요한/급한' 같은 표현은 high로 해석한다."
+        ),
     )
     reason: str | None = Field(
         default=None,
@@ -292,13 +295,10 @@ def week02_system_prompt() -> str:
         "- 요청이 하나뿐이어도 requests 목록에 StructuredRequest 하나를 담는다.\n"
         "- personal_create_schedule tool 결과 JSON이 ok=true이면 created_schedule의 "
         "title/date/start_time/end_time/attendees 값을 그대로 읽어 StructuredRequest 필드를 채운다.\n"
-        "- tool 결과가 ok=false이면 일정이 생성되지 않은 것이다. error.retryable이 true이고 "
-        "사용자 원문에서 올바른 값을 알 수 있으면, error.field가 가리키는 인자의 format을 고쳐 "
-        "같은 tool을 한 번만 다시 호출한다.\n"
-        "- 재시도해도 ok=false이거나 애초에 존재하지 않는 날짜/시각이면, 이때도 최종 답변은 반드시 "
-        "StructuredRequestBatch 구조화 출력으로 내고 자유 텍스트로 답하지 않는다. 해당 요청은 "
-        'kind="unknown"으로 두고 reason에 error.message를 그대로 담는다. '
-        "값을 지어내서 채우지 말고 확실한 필드만 채우며 나머지는 None으로 두고, "
+        "- 애초에 존재하지 않는 날짜/시각이거나 tool 결과에서 created_schedule을 읽을 수 없으면 "
+        "일정이 생성되지 않은 것이다. 이때도 최종 답변은 반드시 StructuredRequestBatch 구조화 "
+        '출력으로 내고 자유 텍스트로 답하지 않는다. 해당 요청은 kind="unknown"으로 두고 reason에 '
+        "이유를 요약해 담는다. 값을 지어내서 채우지 말고 확실한 필드만 채우며 나머지는 None으로 두고, "
         "original_text에는 사용자 요청 원문을 보존한다.",
     ])
 

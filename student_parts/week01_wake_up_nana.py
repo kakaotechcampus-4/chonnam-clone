@@ -28,12 +28,19 @@ _WEEK01_AGENT: Any | None = None
 
 # Week 1 Nana 일정 agent의 기준 system prompt
 CHAT_MEMORY_PROMPT = (
-    "너는 Kanana의 일정 비서 Nana다. 사용자의 개인 일정 요청을 친절한 한국어로 돕는다.\n"
-    "일정 생성/조회/삭제가 필요하면 반드시 제공된 tool"
-    "(personal_create_schedule, personal_list_schedules, personal_delete_schedule)을 호출한다. "
-    "추측으로 일정을 지어내지 말고, tool 결과 JSON을 바탕으로 답한다.\n"
-    "너는 지금 진행 중인 이 대화에서 만든 임시 일정만 기억한다. "
-    "다른 대화의 일정은 보이지 않으며, 앱을 다시 시작하면 이 일정들은 사라진다."
+    "## 역할\n"
+    "- 너는 Kanana의 일정 비서 Nana다.\n"
+    "- 사용자의 개인 일정 요청을 친절한 한국어로 돕는다.\n"
+    "\n"
+    "## tool 사용 규칙\n"
+    "- 일정 생성/조회/삭제가 필요하면 반드시 제공된 tool"
+    "(personal_create_schedule, personal_list_schedules, personal_delete_schedule)을 호출한다.\n"
+    "- 추측으로 일정을 지어내지 않는다.\n"
+    "- tool 결과 JSON을 바탕으로 답한다.\n"
+    "\n"
+    "## 기억 범위\n"
+    "- 너는 지금 진행 중인 이 대화에서 만든 임시 일정만 기억한다.\n"
+    "- 다른 대화의 일정은 보이지 않으며, 앱을 다시 시작하면 이 일정들은 사라진다."
 )
 
 
@@ -167,46 +174,6 @@ def _current_session_schedules() -> list[dict[str, Any]]:
     return [schedule for schedule in PERSONAL_SCHEDULES if _schedule_scope(schedule) == session_id]
 
 
-def _matches_format(value: str, fmt: str) -> bool:
-    """strptime round-trip으로 값이 포맷과 정확히 일치하는지 확인합니다 (2026-7-8, 9:5 같은 비정규 표기 거부)."""
-
-    try:
-        return datetime.strptime(value, fmt).strftime(fmt) == value
-    except (ValueError, TypeError):
-        return False
-
-
-def _validate_schedule_params(date: str, start_time: str, end_time: str) -> dict[str, Any] | None:
-    """일정 인자 형식을 검증하고, 문제가 있으면 구조화된 오류를 반환합니다 (Week 3 스키마 검증에서 재사용).
-
-    LLM이 한국어 error 문장을 읽고 "재시도할지"를 추론하는 대신 code/field/retryable 필드로
-    판단할 수 있게, 코드가 이미 아는 분류를 데이터로 노출합니다.
-    """
-
-    if not _matches_format(date, "%Y-%m-%d"):
-        return {
-            "code": "invalid_format",
-            "field": "date",
-            "message": f"date는 YYYY-MM-DD 형식의 실제 달력 날짜여야 합니다. 받은 값: {date!r}",
-            "retryable": True,
-        }
-    if not _matches_format(start_time, "%H:%M"):
-        return {
-            "code": "invalid_format",
-            "field": "start_time",
-            "message": f"start_time은 HH:MM(24시간제) 형식이어야 합니다. 받은 값: {start_time!r}",
-            "retryable": True,
-        }
-    if end_time != "미정" and not _matches_format(end_time, "%H:%M"):
-        return {
-            "code": "invalid_format",
-            "field": "end_time",
-            "message": f"end_time은 HH:MM(24시간제) 형식이거나 \"미정\"이어야 합니다. 받은 값: {end_time!r}",
-            "retryable": True,
-        }
-    return None
-
-
 @tool
 def personal_create_schedule(
     title: str,
@@ -219,17 +186,8 @@ def personal_create_schedule(
 
     - date는 YYYY-MM-DD 형식의 실제 달력 날짜여야 합니다.
     - start_time/end_time은 HH:MM(24시간제) 형식이며, end_time은 "미정"도 허용합니다.
-    - 형식이 잘못되면 일정을 만들지 않고 ok=false와 error를 반환합니다.
-      error는 code/field/message/retryable을 담은 객체이며, field가 고쳐야 할 인자를 가리킵니다.
     """
 
-    error = _validate_schedule_params(date, start_time, end_time)
-    if error is not None:
-        return _json({
-            "ok": False,
-            "tool_name": "personal_create_schedule",
-            "error": error,
-        })
     schedule = {
         "id": _new_personal_id(),
         "title": title,
@@ -307,7 +265,9 @@ def week01_prompt_parts() -> list[str]:
 
     return [
         CHAT_MEMORY_PROMPT,
-        f"오늘 날짜는 {current_app_date_iso()}이며, 상대/모호한 날짜는 이 기준으로 해석한다.",
+        "## 날짜 해석 기준\n"
+        f"- 오늘 날짜는 {current_app_date_iso()}다.\n"
+        "- 상대/모호한 날짜는 이 기준으로 해석한다.",
     ]
 
 
