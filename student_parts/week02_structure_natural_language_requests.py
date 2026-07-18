@@ -137,8 +137,8 @@ def _coerce_structured_request(value: Any) -> StructuredRequest:
 def extract_structured_request(text: str) -> StructuredRequest:
     """이후 회차에서 사용할 단건 구조화 예약 함수입니다."""
     agent = build_week02_agent()
-    response_batch = agent.invoke({"input": text})
-    return response_batch.requests[0]
+    response_batch = agent.invoke({"messages": [{"role": "user", "content": text}]})
+    return response_batch["structured_response"].requests[0]
 
 
 @tool
