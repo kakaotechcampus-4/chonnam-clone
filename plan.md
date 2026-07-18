@@ -1,200 +1,164 @@
-# Week 02 구현 플랜: `week02_structure_natural_language_requests.py`
+# Week 3 "Nana의 기록장" 
 
 ## Context
 
-Week 2 목표는 자연어 요청을 `StructuredRequest` / `StructuredRequestBatch` Pydantic 모델로 구조화하는 LangChain 에이전트를 완성하는 것이다. Week 1 tool이 임시 일정을 만드는 데 그쳤다면, Week 2는 사용자 입력이나 tool 결과 JSON을 "앱이 이해하는 구조"로 변환하는 단계다.
+`student_parts/week03_build_nanas_logbook.py`는 Week 2의 `StructuredRequest`를 SQLite에 저장하고 다시 조회하는 과제다. 파일 안 주석(§메인과제/§추가과제)이 과제를 두 tier로 나누는데, 이번 작업은 **메인과제만** 구현한다: "구조화 → 저장 → 조회 → 새 대화에서도 유지"가 되는 최소 세로 슬라이스.
 
-수정 파일: `student_parts/week02_structure_natural_language_requests.py` 단독
+`personal_update_saved_schedule`, `personal_delete_saved_schedules`, Week1 호환 `personal_create_schedule`, 레거시 payload 정규화(`unwrap_legacy_payload` 내부, `_save_input_from`, `save_structured_request_payload`) 등 **추가과제로 표시된 항목은 그대로 TODO로 남긴다.**
 
----
+**발견한 의존성 문제**: week03의 핵심 흐름 1번("LLM은 `extract_schedule_request`를 호출해 자연어를 구조화")은 `week02_structure_natural_language_requests.py`의 `extract_schedule_request` / `extract_structured_request` / `_coerce_structured_request`에 의존하는데, 이 셋은 week02 파일 자체 기준으로는 "추가 과제"라서 아직 TODO(빈 `...`)다. 이 세 함수가 없으면 week03 메인과제 검증 시나리오("내일 10시 개인 코칭 저장해줘" → 저장 → 조회)가 아예 실행되지 않는다. **사용자 확인 결과, 이 세 함수도 이번 계획에 포함**하기로 했다.
 
-## 구현 순서
+## 구현 대상
 
-### 1. `KIND_REQUIRED_FIELDS` 모듈 상수 추가 (line 17 이후)
+### 1. `student_parts/week02_structure_natural_language_requests.py` — bridge 함수 3개 + 검증 함수 활성화
 
-kind별 필수 필드 목록을 모델 정의 바깥에 상수로 선언한다. 시스템 프롬프트 텍스트와 검증 함수 양쪽에서 참조한다.
+이미 완성된 `StructuredRequest`/`StructuredRequestBatch` 스키마(212~247행 상당)는 건드리지 않는다.
 
-```python
-KIND_REQUIRED_FIELDS: dict[str, list[str]] = {
-    "personal_schedule": ["title", "date"],
-    "group_schedule":    ["title", "date", "members"],
-    "todo":              ["title"],
-    "reminder":          ["title", "date"],
-    "unknown":           [],
-}
-```
+- **`missing_required_fields(req)`** (250~260행, 현재 주석 처리됨): "Week 3+ 저장 전 검증에서 재사용할 예약 함수"라는 주석대로, 이번에 실제로 활성화해서 쓴다. 주석을 풀어 일반 함수로 만든다 (내용은 그대로):
+  ```python
+  def missing_required_fields(req: StructuredRequest) -> list[str]:
+      """kind별 필수 필드 중 값이 없는 것을 반환한다. 빈 list면 완전한 요청."""
+      required = KIND_REQUIRED_FIELDS.get(req.kind, [])
+      return [
+          f for f in required
+          if not getattr(req, f, None)
+          or (isinstance(getattr(req, f), list) and not getattr(req, f))
+      ]
+  ```
+  기존 `KIND_REQUIRED_FIELDS`(19행)를 그대로 사용 — 새로 정의할 것 없음.
 
----
+- **`_coerce_structured_request(value)`** (263행)
+  ```python
+  if isinstance(value, StructuredRequest):
+      return value
+  if isinstance(value, dict):
+      return StructuredRequest.model_validate(value)
+  raise RuntimeError(f"예상치 못한 structured output 형식: {type(value)!r}")
+  ```
 
-### 2. `StructuredRequest` 클래스 (line 99)
+- **`extract_structured_request(text)`** (272행)
+  ```python
+  structured_llm = chat_model().with_structured_output(StructuredRequest, method="function_calling")
+  result = structured_llm.invoke([
+      {"role": "system", "content": join_system_prompt(week02_prompt_parts())},
+      {"role": "user", "content": text},
+  ])
+  return _coerce_structured_request(result)
+  ```
 
-9개 필드 선언. `reason` 필드 description에 **모호할 때 여기에 이유를 남긴다**는 안내를 포함해 LLM이 ambiguity를 처리하는 창구로 쓰도록 유도한다.
+- **`extract_schedule_request(query)`** (`@tool`, 281행)
+  ```python
+  structured = extract_structured_request(query)
+  payload = {
+      "ok": True,
+      "tool_name": "extract_schedule_request",
+      "base_date": current_app_date_iso(),
+      "structured_request": structured.model_dump(),
+  }
+  return json.dumps(payload, ensure_ascii=False)
+  ```
 
-```python
-class StructuredRequest(BaseModel):
-    kind: RequestKind = Field(
-        description="요청 종류. personal_schedule·group_schedule·todo·reminder·unknown 중 하나."
-    )
-    title: str | None = Field(default=None, description="일정·할 일·리마인더 제목. 모르면 None.")
-    date: str | None = Field(default=None, description="날짜 (YYYY-MM-DD). 불확실하면 None.")
-    start_time: str | None = Field(default=None, description="시작 시간 (HH:MM). 불확실하면 None.")
-    end_time: str | None = Field(default=None, description="종료 시간 (HH:MM). 불확실하면 None.")
-    members: list[str] = Field(default_factory=list, description="참석자·관련 멤버 이름 목록. 없으면 빈 list.")
-    priority: str | None = Field(default=None, description="우선순위 (todo일 때 사용). 없으면 None.")
-    reason: str | None = Field(
-        default=None,
-        description="판단 근거. 날짜·시간·kind가 불확실할 때 이유를 한 문장으로 남긴다."
-    )
-    original_text: str = Field(default="", description="사용자 원문. 감사 추적·디버깅용으로 반드시 보존한다.")
-```
+### 2. `student_parts/week03_build_nanas_logbook.py` — 메인과제 함수
 
----
+먼저 19~25행의 week02 import 목록에 `missing_required_fields`를 추가한다.
 
-### 3. `StructuredRequestBatch` 클래스 (line 111)
+- **`SQLITE_MEMORY_PROMPT`** (31행): Week 1의 `CHAT_MEMORY_PROMPT`(대화 한정 임시 메모리)와 대비되는, "Week 3부터는 SQLite 앱 DB에 저장되어 대화가 끊기거나 앱을 재시작해도 유지된다"는 취지의 prompt 문자열.
 
-```python
-class StructuredRequestBatch(BaseModel):
-    requests: list[StructuredRequest] = Field(
-        default_factory=list,
-        description="구조화된 요청 목록. 요청이 1개뿐이어도 반드시 list에 담는다."
-    )
-    base_date: str = Field(
-        default_factory=current_app_date_iso,
-        description="상대 날짜(내일·다음 주 등) 해석 기준일 (YYYY-MM-DD)."
-    )
-```
+- **`WEEK03_TOOL_CALL_PROMPT`** (34행): "자연어 저장 요청 → 먼저 `extract_schedule_request` 호출 → 결과의 `structured_request` 필드를 그대로 `save_structured_request` 인자로 전달" 순서, "일정 조회는 `personal_list_saved_schedules`, 원본 구조화 요청 조회는 `list_saved_requests`/`get_saved_request`"라는 tool 선택 규칙을 담은 문자열.
 
----
+- **`save_structured_request`** (330행, `@tool(args_schema=SaveStructuredRequestInput)`) — 저장 전에 `missing_required_fields`로 kind별 필수 필드를 검증하는 단계를 추가한다. 검증 결과(`missing_fields`)가 응답에 그대로 남도록 해서, 실패했을 때 무엇이 빠졌는지 결과물로 확인할 수 있게 한다.
+  ```python
+  req_for_validation = StructuredRequest(
+      kind=kind, title=title, date=date, start_time=start_time, end_time=end_time,
+      members=members or [], priority=priority, reason=reason, original_text=original_text,
+  )
+  missing = missing_required_fields(req_for_validation)
+  if missing:
+      return json_payload(tool_result(
+          "save_structured_request", ok=False,
+          missing_fields=missing,
+          reason=f"필수 필드 누락: {missing}",
+      ))
 
-### 4. `missing_required_fields()` 공개 헬퍼 함수
+  payload = {
+      "kind": kind, "title": title, "date": date,
+      "start_time": start_time, "end_time": end_time,
+      "members": members or [], "priority": priority,
+      "reason": reason, "original_text": original_text,
+      "source_schedule_id": source_schedule_id,
+  }
+  payload = {k: v for k, v in payload.items() if v is not None}
+  result = _store().save_structured_request(payload)
+  return json_payload(tool_result("save_structured_request", missing_fields=[], **result))
+  ```
+  (`AppSQLiteStore.save_structured_request(payload: dict)`는 `{"request_id", "kind", "saved_rows", "shared_sync", ...}`를 반환 — `fixed/app_store.py:281`)
 
-`StructuredRequestBatch` 정의 바로 아래에 추가. Week 3+ 저장 전 검증에서 재사용할 수 있도록 모듈 공개 함수로 둔다.
+- **`list_saved_requests`** (350행)
+  ```python
+  rows = _store().list_saved_requests(kind=kind, date_from=date_from, date_to=date_to)
+  return json_payload(tool_result("list_saved_requests", rows=rows))
+  ```
 
-```python
-def missing_required_fields(req: StructuredRequest) -> list[str]:
-    """kind별 필수 필드 중 값이 없는 것을 반환한다. 빈 list면 완전한 요청."""
-    required = KIND_REQUIRED_FIELDS.get(req.kind, [])
-    return [
-        f for f in required
-        if not getattr(req, f, None)
-        or (isinstance(getattr(req, f), list) and not getattr(req, f))
-    ]
-```
+- **`get_saved_request`** (362행)
+  ```python
+  row = _store().get_saved_request(request_id)
+  return json_payload(tool_result("get_saved_request", row=row))
+  ```
 
-이 함수는 `_coerce_structured_request` / `extract_structured_request` 예약 함수에서 이후 회차에 호출될 진입점이다.
+- **`personal_list_saved_schedules`** (370행)
+  ```python
+  effective_kind = kind or "personal_schedule"
+  schedules = _store().list_schedules(limit=limit, kind=effective_kind, date_from=date_from, date_to=date_to)
+  filters = {"limit": limit, "kind": effective_kind, "date_from": date_from, "date_to": date_to}
+  return json_payload(tool_result("personal_list_saved_schedules", filters=filters, schedules=schedules))
+  ```
+  (`AppSQLiteStore.list_schedules(...)`는 `attendees`/`request_kind`가 포함된 decoded row list 반환 — `fixed/app_store.py` 480행대)
 
----
+- **`week03_prompt_parts()`** (453행): TODO 두 곳을 실제 지시문으로 채운다 — 현재 날짜(`current_app_date_iso()`), "구조화 후 저장 흐름을 따르라"는 지시, `SQLITE_MEMORY_PROMPT`/`WEEK03_TOOL_CALL_PROMPT` 삽입 위치는 이미 리스트에 있으므로 그 앞뒤 지시 문자열만 추가.
 
-### 5. `week02_tools()` (line 139)
+- **`build_week03_agent()`** (465행): week01/02와 동일 패턴으로 채움
+  ```python
+  _WEEK03_AGENT = create_agent(
+      model=chat_model(),
+      tools=week03_tools(),
+      system_prompt=week03_system_prompt(),
+  )
+  ```
 
-```python
-def week02_tools() -> list[Any]:
-    return week01_tools()
-```
+### 손대지 않는 부분 (추가과제, 그대로 TODO)
 
----
+`SaveStructuredRequestInput.unwrap_legacy_payload` 내부(이미 no-op passthrough라 무해함), `_save_input_from`, `save_structured_request_payload`, `_delete_saved_schedules`, `structured_request_from_week01_schedule`, `personal_create_schedule`(Week1 호환), `delete_saved_schedules_dict`, `personal_update_saved_schedule`, `personal_delete_saved_schedules`.
 
-### 6. `week02_prompt_parts()` (line 155) — 핵심
+**알려진 한계**: `week03_tools()`(이미 구현됨, 수정 안 함)가 week01의 동작하는 `personal_create_schedule`을 이 파일의 미구현 버전으로 교체해 노출한다. 메인과제 검증 시나리오는 이 tool을 거치지 않지만, LLM이 "일정 만들어줘"류 요청에서 이 tool을 직접 고르면 `...`(None 반환)로 인해 tool 호출이 깨질 수 있다. 이는 추가과제 범위라 이번 계획에서 고치지 않는다.
 
-`week01_prompt_parts()` 위에 4개 조각을 추가한다.
+## 검증 방법
 
-**조각 1 — 역할·날짜 기준**
-```
-너는 Week 2 구조화 에이전트야.
-오늘 날짜(기준일)는 {current_app_date_iso()}이야.
-사용자의 자연어 요청을 StructuredRequestBatch(requests, base_date) 형태로 구조화하는 게 네 역할이야.
-```
+1. **정적 확인**: 두 파일 `python -m py_compile`로 문법 오류 없는지 확인.
 
-**조각 2 — kind별 필수 필드**
-```
-자연어를 StructuredRequest 필드로 구조화할 때 아래 규칙을 따라.
+2. **assert 기반 스크립트** (스크래치패드에 `verify_week03.py` 등으로 작성해 실행, 실제 결과물을 눈으로 확인): agent 전체를 띄우지 않고 tool을 직접 호출해 assert로 결과를 고정 확인한다.
+   ```python
+   import json
+   from student_parts.week02_structure_natural_language_requests import missing_required_fields, StructuredRequest
+   from student_parts.week03_build_nanas_logbook import extract_schedule_request, save_structured_request, personal_list_saved_schedules
 
-[kind별 필수 필드]
-- personal_schedule : title, date
-- group_schedule    : title, date, members (최소 1명)
-- todo              : title
-- reminder          : title, date
-- unknown           : 없음 (original_text만 보존)
+   # (a) missing_required_fields 자체 검증
+   complete = StructuredRequest(kind="personal_schedule", title="코칭", date="2026-07-16", members=[], original_text="x")
+   assert missing_required_fields(complete) == []
+   incomplete = StructuredRequest(kind="personal_schedule", title=None, date=None, members=[], original_text="x")
+   assert set(missing_required_fields(incomplete)) == {"title", "date"}
 
-필수 필드가 불확실할 때는 억지로 만들지 않고 None으로 두되 reason에 이유를 남겨.
-```
+   # (b) 저장 → 조회 세로 슬라이스
+   extracted = json.loads(extract_schedule_request.invoke({"query": "내일 10시 개인 코칭 저장해줘"}))
+   assert extracted["ok"] is True
+   sr = extracted["structured_request"]
+   saved = json.loads(save_structured_request.invoke(sr))
+   assert saved["ok"] is True, saved
+   assert saved["missing_fields"] == []
 
-**조각 3 — tool JSON 처리**
-```
-personal_create_schedule tool을 호출한 뒤 결과 JSON이 있으면
-같은 tool을 다시 호출하지 말고, 결과의 created_schedule 필드를 읽어 StructuredRequest를 채워.
-```
+   listed = json.loads(personal_list_saved_schedules.invoke({}))
+   assert any(s["request_id"] == saved["request_id"] for s in listed["schedules"]), "방금 저장한 일정이 조회 결과에 없음"
+   print("week03 메인과제 검증 통과")
+   ```
+   (`.env`에 `PROXY_TOKEN` 필요 — `extract_schedule_request`가 실제 LLM 호출을 하기 때문)
 
-**조각 4 — 범위 제한**
-```
-Week 2는 구조화만 담당해. SQLite 저장, RAG, 외부 멤버 일정 조율은 이번 주차에 없어.
-```
-
----
-
-### 7. `week02_system_prompt()` (line 146)
-
-```python
-def week02_system_prompt() -> str:
-    return join_system_prompt([
-        *week02_prompt_parts(),
-        """
-        최종 답변은 반드시 structured_response(StructuredRequestBatch)로만 반환한다.
-        요청이 1개뿐이어도 requests 목록에 StructuredRequest 1개를 담아라.
-        personal_create_schedule tool 결과가 있으면 created_schedule JSON을 읽어 필드를 채워라.
-        """,
-    ])
-```
-
----
-
-### 8. `build_week02_agent()` (line 167)
-
-week01 패턴과 동일하게 구현한다.
-
-```python
-def build_week02_agent() -> object:
-    global _WEEK02_AGENT
-    if not CONFIG.has_openai_key:
-        raise RuntimeError("PROXY_TOKEN이 .env에 필요합니다.")
-    if _WEEK02_AGENT is None:
-        _WEEK02_AGENT = create_agent(
-            model=chat_model(),
-            tools=week02_tools(),
-            response_format=StructuredRequestBatch,
-            system_prompt=week02_system_prompt(),
-        )
-    return _WEEK02_AGENT
-```
-
----
-
-## 재사용 함수 참조
-
-| 함수 | 파일 | 용도 |
-|------|------|------|
-| `join_system_prompt` | `week01_wake_up_nana.py:37` | prompt 조각 누적 합산 |
-| `week01_prompt_parts` | `week01_wake_up_nana.py:229` | Week 1 역할·tool 지시 상속 |
-| `week01_tools` | `week01_wake_up_nana.py:217` | Week 1 3개 tool 목록 |
-| `current_app_date_iso` | `fixed/runtime_clock.py` | 오늘 날짜 ISO 문자열 |
-| `CONFIG.has_openai_key` | `fixed/config.py:44` | API 키 유효성 확인 |
-
----
-
-## 검증
-
-```bash
-./run.sh --week2
-```
-
-테스트 입력 및 기대 결과:
-
-| 입력 | 기대 kind | 주요 확인 |
-|------|-----------|---------|
-| "다음 주 화요일 오후 3시에 철수랑 회의 잡아줘" | group_schedule | date=YYYY-MM-DD, members=["철수"], start_time="15:00" |
-| "내일 점심 약속 만들어줘" | personal_schedule | date=내일 날짜, start_time="12:00" or None+reason |
-| "운동하기 todo 추가해줘" | todo | title="운동하기", date=None |
-| "그냥 메모해줘" | unknown | original_text 보존, reason에 분류 불가 이유 |
-
-`structured_response` 키가 있고 타입이 `StructuredRequestBatch`인지 확인.  
-`missing_required_fields()` 수동 호출로 kind별 필수 필드 누락 여부도 체크 가능.
+3. **공식 검증 경로**: `./run.sh --week3` 실행 후 "내일 10시 개인 코칭 저장해줘" → trace에서 `extract_schedule_request` 다음 `save_structured_request` 호출 확인 → "내 일정 보여줘" → `personal_list_saved_schedules`로 조회되는지 확인 → 앱 재시작(또는 새 대화)해도 일정이 남아있는지 확인 (SQLite 파일 기반이라 프로세스 재시작에도 유지되어야 함).
