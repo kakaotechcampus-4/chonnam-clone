@@ -620,6 +620,11 @@ def week03_prompt_parts() -> list[str]:
     return [
         *week02_prompt_parts(),
         (
+            "위 Week 2 지시 중 'Week 2는 SQLite 저장, RAG 조회, 외부 멤버 일정 조율을 하지 않는다'는 "
+            "제한은 Week 3부터 해제된다. Week 3의 SQLite 저장 tool(save_structured_request 등)은 "
+            "이 제한과 무관하게 정상적으로 사용한다."
+        ),
+        (
             "Week 2까지는 agent의 최종 답변 자체를 StructuredRequestBatch 형식으로 강제했지만, "
             "Week 3부터는 최종 답변의 형식을 강제하지 않고 자연어로 답한다. 다만 구조화 자체를 "
             "그만두는 것은 아니다: extract_schedule_request tool로 여전히 StructuredRequest를 "
