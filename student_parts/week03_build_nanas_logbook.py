@@ -29,23 +29,26 @@ from student_parts.week02_structure_natural_language_requests import (
 _WEEK03_AGENT: Any | None = None
 
 SQLITE_MEMORY_PROMPT = """
-[조회·검증 우선 규칙 — 어떤 요청이든 항상 이 순서를 지킨다]
-1) 답하기 전에 먼저 필터(kind/date_from/date_to/limit)를 지정한 조회 tool로
+[조회·검증 규칙]
+1) 조회·수정·삭제 요청은 답하기 전에 먼저 필터(kind/date_from/date_to/limit)를 지정한 조회 tool로
    현재 SQLite 저장 상태를 확인한다. 필터 없이 전체를 훑지 않는다.
-2) 저장·수정·삭제 전에도 반드시 먼저 조회해 대상이 실제로 존재하는지 검증한다.
+2) 수정·삭제 전에는 반드시 먼저 조회해 대상이 실제로 존재하는지 검증한다.
    이미 조회로 확인한 내용은 같은 대화에서 다시 묻지 않는다.
-3) 새 요청이 저장된 내용과 충돌하면(같은 날짜·제목인데 시간/참석자가 다르면)
-   임의로 덮어쓰지 말고, 어느 값이 맞는지 사용자에게 한 번 확인한 뒤 최신 값으로 수정한다.
-4) 조회 결과가 없으면 "저장된 내용이 없다"고 답하고, 추측으로 일정을 지어내지 않는다.
+3) 저장 요청은 사전 조회로 존재 검증을 하지 않고 extract 후 바로 저장한다.
+4) 조회 결과가 비어 있으면 "저장된 내용이 없다"고 답하고, 추측으로 일정을 지어내지 않는다.
+   단 조회 결과의 truncated가 true면 "없다"가 아니라 도구 규칙대로 기간을 좁혀 다시 물어봐 달라고 안내한다.
 """
 
 WEEK03_TOOL_CALL_PROMPT = """
 새 일정/할 일/알림 저장 요청:
   1) extract_schedule_request(query=사용자 원문)로 자연어를 StructuredRequest로 구조화한다.
   2) 그 결과 필드(kind/title/date/start_time/end_time/members/priority/reason/original_text)를
-     save_structured_request 인자로 그대로 넘겨 SQLite에 저장한다. tool을 두 번 부르지 않는다.
+     save_structured_request 인자로 그대로 넘겨 SQLite에 저장한다.
+     같은 extract 결과로 save_structured_request를 두 번 호출하지 않는다.
 조회 요청("내 일정 보여줘" 등): personal_list_saved_schedules로 저장 일정을 먼저 확인한다.
   저장 요청 원본 기록이 필요하면 list_saved_requests, 특정 건은 get_saved_request(request_id)를 쓴다.
+  조회 결과의 truncated가 True면 저장된 일정이 limit을 넘어 다 표시되지 못한 것이므로,
+  "일정이 없다"고 하지 말고 사용자에게 날짜 등으로 기간을 좁혀 다시 물어봐 달라고 안내한다.
 수정 요청: 먼저 personal_list_saved_schedules로 schedule_id를 확인한 뒤
   personal_update_saved_schedule(schedule_id, 바꿀 필드만)로 수정한다.
 삭제 요청: 먼저 personal_list_saved_schedules로 후보를 확인한 뒤
@@ -271,7 +274,7 @@ def _save_input_from(
     if isinstance(value, SaveStructuredRequestInput):
         return value
 
-    if isinstance(value, str):  # elif를 적용하면 안되는 이유?
+    if isinstance(value, str):
         text = value.strip()
         try:
             data = json.loads(text)
