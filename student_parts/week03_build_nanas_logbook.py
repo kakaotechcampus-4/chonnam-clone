@@ -255,7 +255,9 @@ def _save_input_from(value: SaveStructuredRequestInput | StructuredRequest | dic
         return SaveStructuredRequestInput.model_validate(extract_structured_request(text).model_dump())
     if isinstance(value, dict):
         return SaveStructuredRequestInput.model_validate(value)
-    raise RuntimeError(f"저장 입력을 해석할 수 없습니다: {type(value)!r}")
+    raise RuntimeError(
+        f"저장 입력을 해석할 수 없습니다: type={type(value)!r}, value={repr(value)[:200]}"
+    )
 
 
 def save_structured_request_payload(
@@ -329,7 +331,7 @@ def _delete_saved_schedules(
 ) -> dict[str, Any]:
     """삭제 guard와 DB 호출을 한 곳에 둡니다."""
 
-    filters = {
+    raw_filters = {
         "schedule_ids": schedule_ids,
         "date": date,
         "title": title,
@@ -337,8 +339,16 @@ def _delete_saved_schedules(
         "time_unspecified": time_unspecified,
         "delete_all": delete_all,
     }
+    # 로그 노이즈를 줄이기 위해 값이 없는(None) 조건은 filters에서 제외한다.
+    filters = {k: v for k, v in raw_filters.items() if v is not None}
     has_condition = delete_all or bool(schedule_ids) or any([date, title, start_time, time_unspecified])
     if not has_condition:
+        # schedule_ids=[]가 명시적으로 들어온 경우는 '대상 탐색 실패' 가능성이 있어 구분해 알린다.
+        extra = (
+            {"warning": "빈 schedule_ids([])가 명시적으로 전달됨 — 삭제 대상 탐색이 실패했을 수 있음"}
+            if schedule_ids == []
+            else {}
+        )
         return tool_result(
             "personal_delete_saved_schedules",
             ok=False,
@@ -346,6 +356,7 @@ def _delete_saved_schedules(
             deleted_count=0,
             filters=filters,
             deleted=[],
+            **extra,
         )
     if delete_all:
         deleted = store.delete_all_schedules()
@@ -404,11 +415,27 @@ def personal_create_schedule(
         }
     )
     created = json.loads(created_json)
-    save_input = structured_request_from_week01_schedule(created.get("created_schedule", {}))
+    schedule = created.get("created_schedule") or {}
+    # (a) week1 임시 생성이 실패했거나 결과가 비면 SQLite 저장을 건너뛰고 실패로 반환한다.
+    #     (title만 없고 일정 자체는 정상인 경우는 통과 — 기준은 title 유무가 아니라 생성 성공 여부)
+    if not created.get("ok", True) or not schedule:
+        return json_payload(
+            {
+                "ok": False,
+                "created_ok": False,
+                "error": "Week1 임시 생성이 실패해 SQLite 저장을 건너뜁니다.",
+                "created": created,
+            }
+        )
+    save_input = structured_request_from_week01_schedule(schedule)
     sqlite_save = _store().save_structured_request(save_input.model_dump(exclude_none=True))
+    # (b) 단계별 성공 여부 분리 노출, (c) week1 결과는 별도 키(created)로 격리해 키 충돌 방지
     return json_payload(
         {
-            **created,
+            "ok": True,
+            "created_ok": True,
+            "sqlite_ok": bool(sqlite_save.get("request_id")),
+            "created": created,
             "structured_request": save_input.model_dump(),
             "sqlite_save": sqlite_save,
         }
