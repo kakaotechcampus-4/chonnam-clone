@@ -508,8 +508,8 @@ def personal_list_saved_schedules(
 
     # TODO: 기본 kind를 personal_schedule로 정하고 날짜/종류/limit 필터로 저장 일정을 조회하세요.
     # TODO: filters와 schedules를 포함한 JSON 문자열을 반환하세요.
-    if kind is None:
-        kind = "personal_schedule"
+    # if kind is None:
+    #     kind = "personal_schedule"
     store = _store()
     schedules = store.list_schedules(limit, kind, date_from, date_to)
     filters = {
@@ -657,7 +657,8 @@ def week03_prompt_parts() -> list[str]:
         # TODO: 현재 날짜, Week 3 tool 선택 기준, 이번 주차의 범위를 설명하는 agent 지시를 추가하세요.
         f"오늘 날짜는 OS기준 {current_app_date_iso()}이다.",
         "저장/조회/수정/삭제는 항상 SQLite 쪽 tool을 쓴다.",
-        "일정 조회시 개인/그룹 구분 없이 보여달라고 하면 kind를 지정하지 말고 개인+그룹 모두 확인해.",
+        "시간 범위를 말할 때 물결표(~)를 쓰지 말고 '15시부터 17까지'처럼 '부터/까지'로 풀어서",
+        "말한다. 마크다운 취소선으로 오해될 수 있는 ~기호는 답변에 쓰지 않는다.",
     ]
 
 
