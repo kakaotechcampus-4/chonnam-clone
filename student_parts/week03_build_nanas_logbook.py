@@ -367,6 +367,8 @@ def _delete_saved_schedules(
             ok=False,
             reason="삭제 조건이 없어 요청을 거부했습니다. schedule_ids 또는 날짜/제목/시간 필터, delete_all 중 하나를 지정하세요.",
             filters=filters,
+            deleted_count=0,
+            deleted=[],
         )
 
     if delete_all:
