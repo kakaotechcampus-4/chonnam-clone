@@ -503,12 +503,22 @@ def personal_list_saved_schedules(
     """앱 DB에 저장된 일정 목록을 날짜/종류 필터로 반환합니다. Nana가 조회/수정/삭제 후보를 볼 때 사용합니다."""
 
     kind = kind or "personal_schedule"
+
     filters = {"kind": kind, "date_from": date_from, "date_to": date_to, "limit": limit}
+    # limit+1로 한 번만 조회해, limit을 넘겼는지로 잘림 여부를 판정한다.
+    # [AI-assisted] truncated 감지 로직은 직접 작성, if/else 두 갈래를 단일 return으로 정리한 부분만 Claude가 도움.
+    # schedules[:limit]는 개수가 limit 이하일 때는 전부 그대로 반환하므로 두 경우를 한 줄로 합칠 수 있다.
     schedules = _store().list_schedules(
-        limit=limit, kind=kind, date_from=date_from, date_to=date_to
+        limit=limit + 1, kind=kind, date_from=date_from, date_to=date_to
     )
+    truncated = len(schedules) > limit
     return json_payload(
-        tool_result("personal_list_saved_schedules", filters=filters, schedules=schedules)
+        tool_result(
+            "personal_list_saved_schedules",
+            filters=filters,
+            schedules=schedules[:limit],
+            truncated=truncated,
+        )
     )
 
 
