@@ -162,10 +162,12 @@ def save_structured_request(
 
 ### 4.6 `structured_request_from_week01_schedule` / `personal_create_schedule` (Week 1 호환)
 
-`AppSQLiteStore.save_structured_request`에는 이미 **멱등성 처리**가 있다: `source_schedule_id`가 `schedules.schedule_id`로 이미 존재하면 재삽입하지 않고 기존 row를 반환한다. 이 성질을 활용해 Week 1의 임시 id를 그대로 Week 3 `schedule_id`로 재사용한다.
+`AppSQLiteStore.save_structured_request`에는 이미 **멱등성 처리**가 있다: `source_schedule_id`가 `schedules.schedule_id`로 이미 존재하면 재삽입하지 않고 기존 row를 반환한다. 이 성질을 활용해 Week 1의 임시 id를 그대로 Week 3 `schedule_id`로 재사용한다. `original_text`에는 일정 dict를 직렬화하지 않고 `extract_schedule_request`가 보존한 사용자 원문을 전달한다. 내부 id는 `source_schedule_id`, 전체 저장 payload는 `raw_json`이 각각 담당한다.
 
 ```python
-def structured_request_from_week01_schedule(schedule: dict[str, Any]) -> SaveStructuredRequestInput:
+def structured_request_from_week01_schedule(
+    schedule: dict[str, Any], *, original_text: str = ""
+) -> SaveStructuredRequestInput:
     return SaveStructuredRequestInput(
         kind="personal_schedule",
         title=schedule.get("title"),
@@ -173,14 +175,16 @@ def structured_request_from_week01_schedule(schedule: dict[str, Any]) -> SaveStr
         start_time=schedule.get("start_time"),
         end_time=schedule.get("end_time") if schedule.get("end_time") != "미정" else None,
         members=list(schedule.get("attendees") or []),
-        original_text=json.dumps(schedule, ensure_ascii=False),
+        original_text=original_text,
         source_schedule_id=schedule.get("id"),
     )
 ```
 
 ```python
 @tool("personal_create_schedule")
-def personal_create_schedule(title, date, start_time, end_time="미정", attendees=None) -> str:
+def personal_create_schedule(
+    title, date, start_time, end_time="미정", attendees=None, original_text=""
+) -> str:
     week1_result = json.loads(
         week01_personal_create_schedule.invoke(
             {"title": title, "date": date, "start_time": start_time, "end_time": end_time, "attendees": attendees}
@@ -189,7 +193,9 @@ def personal_create_schedule(title, date, start_time, end_time="미정", attende
     if not week1_result.get("ok"):
         return json_payload(tool_result("personal_create_schedule", ok=False, **week1_result))
 
-    save_input = structured_request_from_week01_schedule(week1_result["created_schedule"])
+    save_input = structured_request_from_week01_schedule(
+        week1_result["created_schedule"], original_text=original_text
+    )
     sqlite_save = save_structured_request_payload(save_input)
     return json_payload(
         tool_result(
