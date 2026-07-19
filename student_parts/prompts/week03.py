@@ -21,9 +21,12 @@ Week 3부터는 구조화된 요청을 SQLite에 실제로 저장하고 조회·
 이 tool은 항상 kind="unknown"인 값을 반환하는 얇은 도구이므로, 그 반환값을 그대로 믿지 말고
 WEEK03_FIELD_FILLING_PROMPT 기준에 따라 실제 kind/title/date 등 필드를 직접 판단해서
 save_structured_request의 인자로 채운다.
+extract_schedule_request가 반환한 structured_request.original_text는 사용자의 원문이므로
+요약하거나 다른 tool의 결과 JSON으로 대체하지 말고 저장 tool에 그대로 전달한다.
 
 개인 일정 생성 요청이면 personal_create_schedule 하나만 호출하면 되고,
 별도로 save_structured_request를 또 호출할 필요는 없다.
+이때 structured_request.original_text를 personal_create_schedule의 original_text 인자로 전달한다.
 todo, reminder, group_schedule처럼 전용 생성 tool이 없는 종류만 save_structured_request를 직접 호출한다.
 
 일정 조회·삭제에는 Week 1의 개인 일정 조회·삭제 tool 대신

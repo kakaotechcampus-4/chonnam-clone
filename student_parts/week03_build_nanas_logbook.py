@@ -162,8 +162,9 @@ _WEEK03_AGENT: Any | None = None
 #     삭제 조건이 비어 있는지 먼저 확인하고, delete_all인지 필터 삭제인지에 따라 store 삭제 메서드를 호출합니다.
 #     실제 SQL 삭제는 AppSQLiteStore가 수행하고, 이 함수는 안전 규칙과 응답 모양을 정리합니다.
 #
-#   - [추가] structured_request_from_week01_schedule(schedule)
-#     Week 1의 임시 schedule dict를 Week 3 저장 입력으로 변환합니다. personal_create_schedule 호환 wrapper에서 사용합니다.
+#   - [추가] structured_request_from_week01_schedule(schedule, original_text=...)
+#     Week 1의 임시 schedule dict를 Week 3 저장 입력으로 변환하되, 사용자 원문은 별도로 전달받습니다.
+#     personal_create_schedule 호환 wrapper에서 사용합니다.
 #
 #   - [추가] personal_create_schedule(...)
 #     Week 1과 같은 이름을 유지하는 호환 tool입니다. 먼저 Week 1 임시 일정을 만들고, 같은 내용을 SQLite에도 저장합니다.
@@ -261,10 +262,20 @@ def save_structured_request_payload(
 ) -> dict[str, Any]:
     """검증된 structured request를 앱 DB에 저장합니다."""
 
+    result = _persist_structured_request(request, store=store)
+    return tool_result("save_structured_request", ok=True, **result)
+
+
+def _persist_structured_request(
+    request: SaveStructuredRequestInput | StructuredRequest | dict[str, Any] | str,
+    *,
+    store: AppSQLiteStore | None = None,
+) -> dict[str, Any]:
+    """모든 Week 3 저장 진입점이 공유하는 검증·저장 경로입니다."""
+
     validated = _save_input_from(request)
     payload = {key: value for key, value in validated.model_dump().items() if value is not None}
-    result = (store or _store()).save_structured_request(payload)
-    return tool_result("save_structured_request", ok=True, **result)
+    return (store or _store()).save_structured_request(payload)
 
 
 class SavedRequestListInput(BaseModel):
@@ -363,7 +374,11 @@ def _delete_saved_schedules(
     )
 
 
-def structured_request_from_week01_schedule(schedule: dict[str, Any]) -> SaveStructuredRequestInput:
+def structured_request_from_week01_schedule(
+    schedule: dict[str, Any],
+    *,
+    original_text: str = "",
+) -> SaveStructuredRequestInput:
     """Week 1 임시 일정 dict를 Week 3 저장 입력으로 변환합니다."""
 
     end_time = schedule.get("end_time")
@@ -374,7 +389,7 @@ def structured_request_from_week01_schedule(schedule: dict[str, Any]) -> SaveStr
         start_time=schedule.get("start_time"),
         end_time=end_time if end_time and end_time != "미정" else None,
         members=list(schedule.get("attendees") or []),
-        original_text=json.dumps(schedule, ensure_ascii=False),
+        original_text=original_text,
         source_schedule_id=schedule.get("id"),
     )
 
@@ -386,6 +401,7 @@ def personal_create_schedule(
     start_time: str,
     end_time: str = "미정",
     attendees: list[str] | None = None,
+    original_text: str = "",
 ) -> str:
     """Nana의 개인 일정을 생성하고 Week 3+ 앱 SQLite DB에도 저장합니다."""
 
@@ -403,7 +419,10 @@ def personal_create_schedule(
     if not week1_result.get("ok"):
         return json_payload(tool_result("personal_create_schedule", ok=False, **week1_result))
 
-    save_input = structured_request_from_week01_schedule(week1_result["created_schedule"])
+    save_input = structured_request_from_week01_schedule(
+        week1_result["created_schedule"],
+        original_text=original_text,
+    )
     sqlite_save = save_structured_request_payload(save_input)
     return json_payload(
         tool_result(
@@ -431,20 +450,19 @@ def save_structured_request(
 ) -> str:
     """Week 2 structured_request 필드를 검증한 뒤 SQLite에 저장합니다."""
 
-    payload = {
-        "kind": kind,
-        "title": title,
-        "date": date,
-        "start_time": start_time,
-        "end_time": end_time,
-        "members": members or [],
-        "priority": priority,
-        "reason": reason,
-        "original_text": original_text,
-        "source_schedule_id": source_schedule_id,
-    }
-    payload = {key: value for key, value in payload.items() if value is not None}
-    result = _store().save_structured_request(payload)
+    request = SaveStructuredRequestInput(
+        kind=kind,
+        title=title,
+        date=date,
+        start_time=start_time,
+        end_time=end_time,
+        members=members or [],
+        priority=priority,
+        reason=reason,
+        original_text=original_text,
+        source_schedule_id=source_schedule_id,
+    )
+    result = _persist_structured_request(request)
     return json_payload(tool_result("save_structured_request", ok=True, **result))
 
 
