@@ -183,7 +183,11 @@ def _coerce_structured_request(value: Any) -> StructuredRequest:
         return value
     if isinstance(value, dict):
         return StructuredRequest.model_validate(value)
-    raise RuntimeError(f"예상하지 못한 structured output 형태입니다: {type(value)!r}")
+    raise RuntimeError(
+        "예상하지 못한 structured output 형태입니다: "
+        f"StructuredRequest 또는 dict를 기대했지만 {type(value).__name__}이 들어왔습니다. "
+        f"실제 값: {value!r}"
+    )
 
 
 def extract_structured_request(text: str) -> StructuredRequest:

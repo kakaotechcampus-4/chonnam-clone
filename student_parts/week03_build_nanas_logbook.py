@@ -26,6 +26,7 @@ from student_parts.week02_structure_natural_language_requests import (
 
 
 _WEEK03_AGENT: Any | None = None
+_WEEK03_AGENT_DATE: str | None = None
 
 SQLITE_MEMORY_PROMPT = (
     "Week 1의 개인 일정은 대화가 끝나면 사라지는 임시 메모리였지만, Week 3부터는 앱 SQLite DB에 저장되어 "
@@ -35,6 +36,9 @@ SQLITE_MEMORY_PROMPT = (
 )
 
 WEEK03_TOOL_CALL_PROMPT = (
+    "사용자 요청에 날짜/시간/제목 같은 새로운 일정 정보가 들어있으면 저장 흐름(구조화 후 save_structured_request)을 따르고, "
+    "'아까', '저번에', '저장한 거'처럼 이미 저장된 것을 가리키는 요청이면 구조화 단계를 건너뛰고 "
+    "바로 personal_list_saved_schedules로 대상을 확인한 뒤 조회/수정/삭제 tool을 호출한다.\n"
     "사용자의 자연어 요청을 저장하기 전에 먼저 extract_schedule_request(query=사용자 원문)를 호출해 "
     "StructuredRequest로 구조화한다. 그 결과의 structured_request 필드 값을 save_structured_request의 "
     "kind/title/date/start_time/end_time/members/priority/reason/original_text 인자로 그대로 전달해 SQLite에 저장한다. "
@@ -420,6 +424,18 @@ def personal_list_saved_schedules(
     # TODO: 기본 kind를 personal_schedule로 정하고 날짜/종류/limit 필터로 저장 일정을 조회하세요.
     # TODO: filters와 schedules를 포함한 JSON 문자열을 반환하세요.
 
+    if kind in {"todo", "reminder"}:
+        return json_payload(
+            tool_result(
+                "personal_list_saved_schedules",
+                ok=False,
+                error=(
+                    f"personal_list_saved_schedules는 일정(personal_schedule/group_schedule)만 조회합니다. "
+                    f"kind='{kind}'는 list_saved_requests(kind='{kind}')를 대신 호출하세요."
+                ),
+            )
+        )
+
     resolved_kind = kind or "personal_schedule"
     schedules = _store().list_schedules(limit=limit, kind=resolved_kind, date_from=date_from, date_to=date_to)
     filters = {"kind": resolved_kind, "date_from": date_from, "date_to": date_to, "limit": limit}
@@ -517,13 +533,15 @@ def build_week03_agent() -> object:
 
     if not CONFIG.has_openai_key:
         raise RuntimeError("PROXY_TOKEN이 .env에 필요합니다.")
-    global _WEEK03_AGENT
-    if _WEEK03_AGENT is None:
+    global _WEEK03_AGENT, _WEEK03_AGENT_DATE
+    today = current_app_date_iso()
+    if _WEEK03_AGENT is None or _WEEK03_AGENT_DATE != today:
         _WEEK03_AGENT = create_agent(
             model=chat_model(),
             tools=week03_tools(),
             system_prompt=week03_system_prompt(),
         )
+        _WEEK03_AGENT_DATE = today
     return _WEEK03_AGENT
 
 
