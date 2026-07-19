@@ -480,11 +480,11 @@ def personal_delete_saved_schedules(
 def week03_tools() -> list[Any]:
     """Week 1 도구, Week 2 구조화 helper, SQLite 저장/조회/삭제 도구를 조립합니다."""
 
-    base_tools = [
-        personal_create_schedule if _tool_name(item) == "personal_create_schedule" else item for item in week01_tools()
-    ]
+    # base_tools = [
+    #     personal_create_schedule if _tool_name(item) == "personal_create_schedule" else item for item in week01_tools()
+    # ]
     return [
-        *base_tools,
+        # *base_tools,
         extract_schedule_request,
         save_structured_request,
         list_saved_requests,
