@@ -364,14 +364,16 @@ def _delete_saved_schedules(
         "delete_all": delete_all,
     }
 
-    deleted = store.delete_schedules(
-        schedule_ids=schedule_ids,
-        date=date,
-        title=title,
-        start_time=start_time,
-        time_unspecified=time_unspecified,
-        delete_all=delete_all,
-    )
+    if delete_all:
+        deleted = store.delete_all_schedules()
+    else:
+        deleted = store.delete_schedules_by_filter(
+            schedule_ids=schedule_ids,
+            date=date,
+            title=title,
+            start_time=start_time,
+            time_unspecified=time_unspecified,
+        )
 
     return tool_result(
         "personal_delete_saved_schedules",
@@ -503,7 +505,7 @@ def personal_list_saved_schedules(
     # TODO: 기본 kind를 personal_schedule로 정하고 날짜/종류/limit 필터로 저장 일정을 조회하세요.
     # TODO: filters와 schedules를 포함한 JSON 문자열을 반환하세요.
     selected_kind = kind or "personal_schedule"
-    schedules = _store().list_saved_schedules(
+    schedules = _store().list_schedules(
         limit=limit,
         kind=selected_kind,
         date_from=date_from,
@@ -583,12 +585,8 @@ def personal_update_saved_schedule(
             )
         )
 
-    if isinstance(result, dict) and "updated_schedule" in result:
-        updated_schedule = result.get("updated_schedule")
-        shared_sync = result.get("shared_sync", [])
-    else:
-        updated_schedule = result
-        shared_sync = []
+    updated_schedule = result["schedule"]
+    shared_sync = result["shared_sync"]
 
     return json_payload(
         tool_result(
