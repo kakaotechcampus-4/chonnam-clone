@@ -32,25 +32,19 @@ SQLITE_MEMORY_PROMPT = (
 )
 
 # TODO: 자연어 구조화 → SQLite 저장과 조회/수정/삭제 tool 호출 순서를 안내하는 규칙을 작성하세요.
-WEEK03_TOOL_CALL_PROMPT = (
-    "사용자가 일정/할 일/리마인더 저장을 요청하면, 먼저 extract_schedule_request로 자연어를 구조화하고 "
-    "그 결과 필드를 그대로 save_structured_request 인자로 넘겨 SQLite에 저장한다."
-    "personal_create_schedule은 날짜/시작 시간이 확실한 개인 또는 참석자 있는 일정 생성에만 쓴다. "
-    "알림/리마인더 성격(예: '~시에 알려줘', '까먹지 말고')이나 할 일 성격(예: '~해야 함', 시간 미확정) 요청은 "
-    "personal_create_schedule을 쓰지 않고 extract_schedule_request로 구조화한 뒤 save_structured_request로 저장한다."
-    "사용자가 '일정' 조회를 포괄적으로 요청하면(예: '일정 알려줘', '뭐 저장돼 있어', '다 보여줘') "
-    "kind를 지정하지 말고 list_saved_requests를 호출해 개인/그룹/할 일/리마인더를 전부 확인한다."
-    "사용자가 명시적으로 '개인 일정만' 또는 '그룹 일정만'처럼 범위를 좁히면 personal_list_saved_schedules에 "
-    "해당 kind를 지정해 호출한다."
-    "사용자가 할 일이나 리마인더만 보여달라고 하면 list_saved_requests에 kind='todo' 또는 kind='reminder'를 지정해 호출한다."
-    "Week 1의 personal_list_schedules/personal_delete_schedule은 대화가 끝나면 사라지는 임시 메모리이므로 "
-    "SQLite에 남아야 하는 조회/삭제 요청에는 사용하지 않는다."
-    "구조화 요청 원본 기록 자체를 조회해야 할 때는 목록이면 list_saved_requests, 단건이면 get_saved_request를 호출한다."
-    "사용자가 저장된 일정 수정을 요청하면 먼저 personal_list_saved_schedules로 대상 schedule_id를 확인한 뒤 "
-    "personal_update_saved_schedule을 호출한다."
-    "사용자가 저장된 일정 삭제를 요청하면 먼저 personal_list_saved_schedules로 대상을확인한 뒤 "
-    "schedule_ids 또는 명시적 조건으로 personal_delete_saved_schedules를 호출한다. 조건 없이 전체 삭제를 요청하지 않는다."
-)
+WEEK03_TOOL_CALL_PROMPT = [
+    "사용자가 일정/할 일/리마인더 저장을 요청하면, 먼저 extract_schedule_request로 자연어를 구조화하고 ",
+    "그 결과 필드를 그대로 save_structured_request 인자로 넘겨 SQLite에 저장한다.",
+    "personal_create_schedule은 날짜/시작 시간이 확실한 개인 또는 참석자 있는 일정 생성에만 쓴다. ",
+    "알림/리마인더 성격(예: '~시에 알려줘', '까먹지 말고')이나 할 일 성격(예: '~해야 함', 시간 미확정) 요청은 personal_create_schedule을 쓰지 않고 extract_schedule_request로 구조화한 뒤 save_structured_request로 저장한다.",
+    "사용자가 '일정' 조회를 포괄적으로 요청하면(예: '일정 알려줘', '뭐 저장돼 있어', '다 보여줘') kind를 지정하지 말고 list_saved_requests를 호출해 개인/그룹/할 일/리마인더를 전부 확인한다.",
+    "사용자가 명시적으로 '개인 일정만' 또는 '그룹 일정만'처럼 범위를 좁히면 personal_list_saved_schedules에 해당 kind를 지정해 호출한다.",
+    "사용자가 할 일이나 리마인더만 보여달라고 하면 list_saved_requests에 kind='todo' 또는 kind='reminder'를 지정해 호출한다.",
+    "Week 1의 personal_list_schedules/personal_delete_schedule은 대화가 끝나면 사라지는 임시 메모리이므로 SQLite에 남아야 하는 조회/삭제 요청에는 사용하지 않는다.",
+    "구조화 요청 원본 기록 자체를 조회해야 할 때는 목록이면 list_saved_requests, 단건이면 get_saved_request를 호출한다.",
+    "사용자가 저장된 일정 수정을 요청하면 먼저 personal_list_saved_schedules로 대상 schedule_id를 확인한 뒤, personal_update_saved_schedule을 호출한다.",
+    "사용자가 저장된 일정 삭제를 요청하면 먼저 personal_list_saved_schedules로 대상을확인한 뒤, schedule_ids 또는 명시적 조건으로 personal_delete_saved_schedules를 호출한다. 조건 없이 전체 삭제를 요청하지 않는다.",
+]
 
 
 # [3주차 수강생 구현 가이드]
@@ -660,7 +654,7 @@ def week03_prompt_parts() -> list[str]:
         "2. LLM은 그 결과 필드를 save_structured_request 인자로 그대로 전달한다.",
         "3. 즉 구조화 한 뒤에는 반드시 save_structured_request로 저장까지 이어간다.",
         SQLITE_MEMORY_PROMPT,
-        WEEK03_TOOL_CALL_PROMPT,
+        *WEEK03_TOOL_CALL_PROMPT,
         # TODO: 현재 날짜, Week 3 tool 선택 기준, 이번 주차의 범위를 설명하는 agent 지시를 추가하세요.
         f"오늘 날짜는 OS기준 {current_app_date_iso()}이다.",
         "저장/조회/수정/삭제는 항상 SQLite 쪽 tool을 쓴다.",
