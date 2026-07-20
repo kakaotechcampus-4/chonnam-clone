@@ -384,6 +384,16 @@ def _delete_saved_schedules(
             time_unspecified=time_unspecified,
         )
 
+    if not deleted:
+        return tool_result(
+            "personal_delete_saved_schedules",
+            ok=False,
+            error="조건에 맞는 일정이 없습니다. personal_list_saved_schedules로 현재 일정을 확인하세요.",
+            deleted_count=0,
+            filters=filters,
+            deleted=[],
+        )
+
     return tool_result(
         "personal_delete_saved_schedules",
         ok=True,
