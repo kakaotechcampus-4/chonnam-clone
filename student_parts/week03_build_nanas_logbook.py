@@ -35,6 +35,9 @@ SQLITE_MEMORY_PROMPT = (
 WEEK03_TOOL_CALL_PROMPT = (
     "사용자가 일정/할 일/리마인더 저장을 요청하면, 먼저 extract_schedule_request로 자연어를 구조화하고 "
     "그 결과 필드를 그대로 save_structured_request 인자로 넘겨 SQLite에 저장한다."
+    "personal_create_schedule은 날짜/시작 시간이 확실한 개인 또는 참석자 있는 일정 생성에만 쓴다. "
+    "알림/리마인더 성격(예: '~시에 알려줘', '까먹지 말고')이나 할 일 성격(예: '~해야 함', 시간 미확정) 요청은 "
+    "personal_create_schedule을 쓰지 않고 extract_schedule_request로 구조화한 뒤 save_structured_request로 저장한다."
     "사용자가 저장된 일정을 보여달라고 하면 personal_list_saved_schedules를 호출한다."
     "Week 1의 personal_list_schedules/personal_delete_schedule은 대화가 끝나면 사라지는 임시 메모리이므로 "
     "SQLite에 남아야 하는 조회/삭제 요청에는 사용하지 않는다."
@@ -388,7 +391,7 @@ def structured_request_from_week01_schedule(
 
     # TODO: Week 1 schedule의 attendees/id를 Week 3 members/source_schedule_id에 맞춰 변환하세요.
     return SaveStructuredRequestInput(
-        kind="personal_schedule",
+        kind="group_schedule" if schedule["attendees"] else "personal_schedule",
         title=schedule["title"],
         date=schedule["date"],
         start_time=schedule["start_time"],
@@ -659,6 +662,7 @@ def week03_prompt_parts() -> list[str]:
         "저장/조회/수정/삭제는 항상 SQLite 쪽 tool을 쓴다.",
         "시간 범위를 말할 때 물결표(~)를 쓰지 말고 '15시부터 17까지'처럼 '부터/까지'로 풀어서",
         "말한다. 마크다운 취소선으로 오해될 수 있는 ~기호는 답변에 쓰지 않는다.",
+        "",
     ]
 
 

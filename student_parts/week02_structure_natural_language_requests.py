@@ -294,6 +294,12 @@ def week02_prompt_parts() -> list[str]:
         "자연어를 StructuredRequest 필드(kind/title/date/start_time/end_time/members/priority/reason/original_text)로 구조화 한다.",
         "Week 1 tool JSON을 받은 경우 다시 tool을 호출하지 않고 payload를 읽어 structured_response로 만든다",
         "Week 2에서는 SQLite 저장, RAG, 외부 멤버 일정 조율을 하지 않는다.",
+        "RequestKind 값을 정할 때는 아래 기준을 둔다.",
+        "'내일 3시에 병원 예약'→ personal_schedule (members=[])",
+        "'철수랑 치킨 먹기 저녁 8시' → group_schedule (members=[철수])",
+        "'철수, 영희랑 저녁 7시에 만나' → group_schedule (members=[철수,영희])",
+        "'약 먹을 시간 됐다고 8시에 알려줘' → reminder (end_time 없음, 알림 어투)",
+        "'이번 주 안에 보고서 초안 써야 함' → todo (시간 미지정, 할 일 어투)",
     ]
 
 
