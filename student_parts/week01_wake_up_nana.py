@@ -242,7 +242,7 @@ def personal_delete_schedule(schedule_id: str) -> str:
     ]
     deleted = before - len(PERSONAL_SCHEDULES)
     return _json({
-        "ok": True,
+        "ok": deleted > 0,
         "tool_name": "personal_delete_schedule",
         "deleted": deleted,
     })
