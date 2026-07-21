@@ -156,9 +156,24 @@ class StructuredRequest(BaseModel):
 
     kind: RequestKind = Field(
         description=(
-            "요청 종류. personal_schedule(개인 일정), group_schedule(그룹 일정), "
-            "todo(할 일), reminder(리마인더) 중 하나이며, 판단이 어려우면 unknown을 사용한다. "
-            "분류가 애매하면 시스템 프롬프트의 kind 분류 기준 우선순위를 따른다."
+            "요청 종류. 아래 기준을 위에서부터 순서대로 판정한다.\n"
+            '- 1순위 reminder: "알려줘", "리마인드", "까먹지 않게" 같은 알림 요청 표현이 있으면 '
+            '"~까지" 마감 표현이 함께 있어도 reminder. 알림 요청 표현이 없으면 reminder가 아니다.\n'
+            '  예: "내일 3시에 회의 있다고 미리 알려줘", "저녁에 약 먹는 거 까먹지 않게 해줘", '
+            '"금요일까지 보고서 마감 알려줘" → reminder\n'
+            "- 2순위 todo: 특정 시각의 약속이 아니라 마감이 있거나 완료해야 할 작업이면 todo. "
+            "알림 요청 표현 없이 마감 표현만 있으면 todo.\n"
+            '  예: "금요일까지 보고서 제출해야 해", "할 일 목록에 우유 사기 추가해줘" → todo\n'
+            "- 3순위 group_schedule: 여러 사람의 가능 시간을 조율하거나 팀/모임 공동 일정을 잡는 요청이면 "
+            "group_schedule.\n"
+            '  예: "팀원들이랑 회식 날짜 좀 잡아줘. 다들 되는 시간으로" → group_schedule\n'
+            "- 4순위 personal_schedule: 특정 날짜/시각에 나의 일정을 만드는 요청이면 personal_schedule. "
+            "참석자 이름이 언급되어도 시간이 이미 정해진 내 일정이면 personal_schedule이고 "
+            "members에 이름을 담는다.\n"
+            '  예: "다음 주 화요일 오후 3시에 철수랑 회의 잡아줘" → personal_schedule\n'
+            "- 5순위 unknown: 위 기준으로 확실히 판정할 수 없으면 unknown으로 두고 "
+            "reason에 판단이 어려운 이유를 남긴다.\n"
+            '  예: "저번에 말한 그거 일정 알아서 좀 해줘" → unknown'
         )
     )
     title: str | None = Field(
@@ -186,7 +201,10 @@ class StructuredRequest(BaseModel):
     )
     priority: str | None = Field(
         default=None,
-        description="할 일 우선순위(예: 높음/보통/낮음). 원문에 없으면 None으로 둔다.",
+        description=(
+            "할 일 우선순위. low/medium/high 중 하나로 채우고, 원문에 없으면 None으로 둔다. "
+            "'중요한/급한' 같은 표현은 high로 해석한다."
+        ),
     )
     reason: str | None = Field(
         default=None,
@@ -277,12 +295,10 @@ def week02_system_prompt() -> str:
         "- 요청이 하나뿐이어도 requests 목록에 StructuredRequest 하나를 담는다.\n"
         "- personal_create_schedule tool 결과 JSON이 ok=true이면 created_schedule의 "
         "title/date/start_time/end_time/attendees 값을 그대로 읽어 StructuredRequest 필드를 채운다.\n"
-        "- tool 결과가 ok=false이면 일정이 생성되지 않은 것이다. error가 인자 format 문제이고 "
-        "사용자 원문에서 올바른 값을 알 수 있으면, format을 고쳐 같은 tool을 한 번만 다시 호출한다.\n"
-        "- 재시도해도 ok=false이거나 애초에 존재하지 않는 날짜/시각이면, 이때도 최종 답변은 반드시 "
-        "StructuredRequestBatch 구조화 출력으로 내고 자유 텍스트로 답하지 않는다. 해당 요청은 "
-        'kind="unknown"으로 두고 reason에 tool이 반환한 error 메시지를 그대로 담는다. '
-        "값을 지어내서 채우지 말고 확실한 필드만 채우며 나머지는 None으로 두고, "
+        "- 애초에 존재하지 않는 날짜/시각이거나 tool 결과에서 created_schedule을 읽을 수 없으면 "
+        "일정이 생성되지 않은 것이다. 이때도 최종 답변은 반드시 StructuredRequestBatch 구조화 "
+        '출력으로 내고 자유 텍스트로 답하지 않는다. 해당 요청은 kind="unknown"으로 두고 reason에 '
+        "이유를 요약해 담는다. 값을 지어내서 채우지 말고 확실한 필드만 채우며 나머지는 None으로 두고, "
         "original_text에는 사용자 요청 원문을 보존한다.",
     ])
 
@@ -301,23 +317,14 @@ def week02_prompt_parts() -> list[str]:
         "- 확실하지 않은 값은 지어내지 말고 None 또는 빈 list로 둔다.\n"
         "- 시각이 원문에 명시되지 않은 종류(todo, reminder 등)나 '금요일까지' 같은 마감 표현은 "
         "start_time/end_time을 임의 값으로 채우지 말고 None으로 둔다.",
-        "## kind 분류 기준 (위에서부터 순서대로 판정한다)\n"
-        '- 1순위 reminder: "알려줘", "리마인드", "까먹지 않게" 같은 알림 요청 표현이 있으면 '
-        '"~까지" 마감 표현이 함께 있어도 reminder.\n'
-        '  예: "내일 3시에 회의 있다고 미리 알려줘", "저녁에 약 먹는 거 까먹지 않게 해줘", '
-        '"금요일까지 보고서 마감 알려줘" → reminder\n'
-        "- 2순위 todo: 특정 시각의 약속이 아니라 마감이 있거나 완료해야 할 작업이면 todo.\n"
-        '  예: "금요일까지 보고서 제출해야 해", "할 일 목록에 우유 사기 추가해줘" → todo\n'
-        "- 3순위 group_schedule: 여러 사람의 가능 시간을 조율하거나 팀/모임 공동 일정을 잡는 요청이면 "
-        "group_schedule.\n"
-        '  예: "팀원들이랑 회식 날짜 좀 잡아줘. 다들 되는 시간으로" → group_schedule\n'
-        "- 4순위 personal_schedule: 특정 날짜/시각에 나의 일정을 만드는 요청이면 personal_schedule. "
-        "참석자 이름이 언급되어도 시간이 이미 정해진 내 일정이면 personal_schedule이고 "
-        "members에 이름을 담는다.\n"
-        '  예: "다음 주 화요일 오후 3시에 철수랑 회의 잡아줘" → personal_schedule\n'
-        "- 5순위 unknown: 위 기준으로 확실히 판정할 수 없으면 unknown으로 두고 "
-        "reason에 판단이 어려운 이유를 남긴다.\n"
-        '  예: "저번에 말한 그거 일정 알아서 좀 해줘" → unknown',
+        "## kind 판정과 tool 사용\n"
+        "- kind 판정은 StructuredRequest kind 필드 설명에 있는 우선순위 기준을 따른다.\n"
+        "- 알림 요청 표현이 있으면 마감 표현이 함께 있어도 reminder이고, "
+        "알림 요청 표현 없이 마감 표현만 있으면 todo다.\n"
+        "- tool은 kind가 personal_schedule인 요청에만 호출한다. "
+        "group_schedule/todo/reminder/unknown으로 판정한 요청은 tool을 호출하지 말고 바로 구조화한다.\n"
+        "- 여러 사람의 가능 시간 조율이 필요하거나 날짜/시각이 아직 정해지지 않은 요청은 "
+        "내 개인 일정 생성이 아니므로 personal_create_schedule을 호출하지 않는다.",
         "## Tool 결과 처리\n"
         "- ok=true인 Week 1 tool 결과 JSON을 이미 받은 경우 같은 tool을 다시 호출하지 말고, "
         "그 payload를 읽어 structured_response를 만든다.\n"
