@@ -567,7 +567,38 @@ def week04_prompt_parts() -> list[str]:
 
     return [
         *week03_prompt_parts(),
-        # TODO: Week 4 Nana memory agent system prompt를 자유롭게 추가하세요.
+        (
+            "Week 4의 기억 저장·검색 규칙은 이전 주차의 RAG 검색 금지 규칙과 "
+            "'모든 자연어 저장 요청은 일정 구조화 후 저장한다'는 규칙보다 우선한다. "
+            "일정, 할 일, 알림을 저장하려는 요청은 Week 3의 "
+            "extract_schedule_request -> save_structured_request 순서를 유지한다. "
+            "반면 일정성 요청이 아닌 사용자의 일반 선호, 규칙, 메모, 참고자료를 명시적으로 기억해 달라는 요청은 "
+            "add_personal_reference만 호출하고 structured request로 저장하지 않는다."
+        ),
+        (
+            "개인 선호, 취향, 규칙, 메모, 참고자료에서 답을 찾아야 하면 search_personal_references를 사용한다. "
+            "SQLite에 저장한 일정, 할 일, 알림의 제목·원문·분류 근거를 키워드로 찾을 때는 "
+            "search_saved_requests를 사용한다. 정확한 일정 목록이나 날짜 범위 조회에는 "
+            "personal_list_saved_schedules를 사용한다. 서로 다른 출처가 함께 필요하면 해당 도구를 각각 호출하고 "
+            "최종 답변에서 어느 내용이 개인 참고자료이고 어느 내용이 SQLite 저장 기록인지 구분한다."
+        ),
+        (
+            "사용자가 과거 채팅에서 자신이 했던 말을 묻는 경우에만 search_conversation_messages를 사용한다. "
+            "현재 대화에서 방금 제공한 내용은 현재 message history로 답하고 대화 RAG로 다시 검색하지 않는다. "
+            "특정 conversation_id가 주어지면 그 대화만 검색하며, 그렇지 않으면 tool이 현재 대화를 제외한다."
+        ),
+        (
+            "vector 검색 distance에 임의의 고정 임계값을 적용하지 말고 질문과 검색 내용의 의미 관련성을 판단한다. "
+            "hits나 rows가 비어 있으면 근거가 없다는 뜻이므로 사실을 추측하거나 기억한다고 주장하지 않는다. "
+            "대화 chunk의 assistant 발화만으로 사용자의 선호나 사실을 확정하지 말고 user 발화 또는 다른 근거를 확인한다. "
+            "검색 도구는 읽기 전용이므로 검색 결과를 저장·수정·삭제했다고 말하지 않는다."
+        ),
+        (
+            f"현재 앱 기준 날짜는 {current_app_date_iso()}이다. "
+            "search_nana_memory는 이전 trace 호환용이며 새 agent가 선택할 도구가 아니다. "
+            "검색 도구의 backend, sync, conversation_id, excluded_conversation_id와 출처별 결과를 근거로 답한다. "
+            "임베딩 또는 SQLite 오류가 발생하면 근거가 검색된 것처럼 꾸미지 않는다."
+        ),
     ]
 
 

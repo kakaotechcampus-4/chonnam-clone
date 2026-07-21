@@ -484,5 +484,59 @@ class CompatibilityMemorySearchTests(unittest.TestCase):
         self.assertIn("조건에 맞는 저장 일정이 없습니다", result["context"])
 
 
+class Week04AgentTests(unittest.TestCase):
+    def test_tool_list_exposes_source_specific_tools_only(self) -> None:
+        tool_names = [tool.name for tool in week04.week04_tools()]
+
+        self.assertIn("add_personal_reference", tool_names)
+        self.assertIn("search_personal_references", tool_names)
+        self.assertIn("search_saved_requests", tool_names)
+        self.assertIn("search_conversation_messages", tool_names)
+        self.assertIn("personal_list_saved_schedules", tool_names)
+        self.assertNotIn("search_nana_memory", tool_names)
+
+    def test_prompt_defines_source_routing_and_evidence_boundaries(self) -> None:
+        prompt = week04.week04_system_prompt()
+
+        self.assertIn("일반 선호, 규칙, 메모, 참고자료", prompt)
+        self.assertIn("add_personal_reference만 호출", prompt)
+        self.assertIn("search_personal_references", prompt)
+        self.assertIn("search_saved_requests", prompt)
+        self.assertIn("personal_list_saved_schedules", prompt)
+        self.assertIn("search_conversation_messages", prompt)
+        self.assertIn("현재 message history", prompt)
+        self.assertIn("assistant 발화만으로", prompt)
+        self.assertIn("근거가 없다는 뜻", prompt)
+        self.assertIn("search_nana_memory는 이전 trace 호환용", prompt)
+        self.assertIn(week04.current_app_date_iso(), prompt)
+
+    def test_agent_is_built_once_with_week04_contract(self) -> None:
+        previous_token = CONFIG.proxy_token
+        previous_agent = week04._WEEK04_AGENT
+        fake_model = object()
+        fake_agent = object()
+        object.__setattr__(CONFIG, "proxy_token", "test-token")
+        week04._WEEK04_AGENT = None
+        try:
+            with (
+                patch.object(week04, "chat_model", return_value=fake_model) as model_mock,
+                patch.object(week04, "create_agent", return_value=fake_agent) as create_mock,
+            ):
+                first = week04.build_week04_agent()
+                second = week04.build_week04_agent()
+        finally:
+            week04._WEEK04_AGENT = previous_agent
+            object.__setattr__(CONFIG, "proxy_token", previous_token)
+
+        self.assertIs(first, fake_agent)
+        self.assertIs(second, fake_agent)
+        model_mock.assert_called_once_with()
+        create_mock.assert_called_once()
+        arguments = create_mock.call_args.kwargs
+        self.assertIs(arguments["model"], fake_model)
+        self.assertIn("search_conversation_messages", [tool.name for tool in arguments["tools"]])
+        self.assertIn("현재 message history", arguments["system_prompt"])
+
+
 if __name__ == "__main__":
     unittest.main()
