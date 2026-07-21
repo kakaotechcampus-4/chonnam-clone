@@ -155,7 +155,7 @@ class StructuredRequest(BaseModel):
     )
     original_text: str = Field(
         "",
-        description="구조화의 근거가 된 사용자 원문 또는 tool 결과 요약입니다.",
+        description="구조화의 근거가 된 사용자 원문입니다. tool 결과나 내부 메타데이터는 넣지 않습니다.",
     )
 
 

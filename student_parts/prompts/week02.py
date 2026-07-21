@@ -32,7 +32,7 @@ StructuredRequest 필드는 다음 기준으로 채운다.
 - members: 참석자나 관련 멤버를 list로 채운다. 없거나 모르면 빈 list다.
 - priority: 사용자가 말한 우선순위가 있을 때만 채운다.
 - reason: 어떤 표현이나 tool payload를 근거로 구조화했는지 짧게 적는다.
-- original_text: 사용자 원문이나 구조화 근거가 된 tool payload 요약을 보존한다.
+- original_text: 사용자 원문을 그대로 보존한다. tool 결과나 내부 메타데이터로 대체하지 않는다.
 
 base_date에는 현재 앱 기준 날짜를 YYYY-MM-DD 형식으로 담는다.
 모르는 scalar 값은 None, list 값은 빈 list로 두고 억지로 만들지 않는다.
