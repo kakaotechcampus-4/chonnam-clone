@@ -298,8 +298,13 @@ def week02_prompt_parts() -> list[str]:
         "'내일 3시에 병원 예약'→ personal_schedule (members=[])",
         "'철수랑 치킨 먹기 저녁 8시' → group_schedule (members=[철수])",
         "'철수, 영희랑 저녁 7시에 만나' → group_schedule (members=[철수,영희])",
+        "원문에 명시된 이름이 없으면 members를 비워두거나 원문 표현 그대로(예: '다른 친구들') 둔다",
+        "'빼고/제외하고' 같은 표현의 제외 대상은 members에 넣지 않는다",
         "'약 먹을 시간 됐다고 8시에 알려줘' → reminder (end_time 없음, 알림 어투)",
         "'이번 주 안에 보고서 초안 써야 함' → todo (시간 미지정, 할 일 어투)",
+        "unknown은 kind 자체(약속/할 일/알림 중 뭔지)를 전혀 판단할 수 없을 때만 쓴다.",
+        "title이나 구체적인 행동/약속 대상이 전혀 없으면(예: '아무거나','뭐든') unknown을 유지한다.",
+        "unknown 회피 규칙은 날짜/시간만 없고 내용은 명확한 경우에만 적용한다.",
     ]
 
 
