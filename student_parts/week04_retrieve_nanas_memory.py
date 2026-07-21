@@ -225,8 +225,15 @@ def add_personal_reference_dict(
 ) -> dict[str, Any]:
     """개인 참고자료를 vector store에 추가하고 backend 정보를 반환합니다."""
 
-    # TODO: PersonalReferenceStore.add_personal_reference(...)로 개인 참고자료를 저장하세요.
-    ...
+    reference = reference_store.add_personal_reference(
+        title=title,
+        content=content,
+        tags=tags or [],
+    )
+    return {
+        "reference_backend": reference_store.backend_info(),
+        "reference": reference,
+    }
 
 
 def search_personal_reference_hits(
@@ -237,8 +244,24 @@ def search_personal_reference_hits(
 ) -> list[dict[str, Any]]:
     """ChromaDB 검색 결과를 tool이 바로 반환하기 쉬운 hit 구조로 정리합니다."""
 
-    # TODO: 개인 참고자료 검색 결과를 id/content/distance/metadata 구조로 정리하세요.
-    ...
+    normalized_query = query.strip()
+    if not normalized_query:
+        return []
+
+    limit = safe_limit(top_k, default=2, maximum=20)
+    raw_hits = reference_store.search_personal_references(normalized_query, limit=limit)
+    return [
+        {
+            "id": hit.get("id"),
+            "content": hit.get("content", ""),
+            "distance": hit.get("distance"),
+            "metadata": {
+                "title": hit.get("title", ""),
+                "tags": hit.get("tags", ""),
+            },
+        }
+        for hit in raw_hits
+    ]
 
 
 def search_saved_request_rows(
@@ -284,16 +307,42 @@ def search_conversation_message_rows(
 def add_personal_reference(title: str, content: str, tags: list[str] | None = None) -> str:
     """개인 참고자료를 ChromaDB에 추가합니다."""
 
-    # TODO: 개인 참고자료를 저장하고 JSON 문자열로 반환하세요.
-    ...
+    result = add_personal_reference_dict(
+        REFERENCE_STORE,
+        title=title,
+        content=content,
+        tags=tags,
+    )
+    return json_payload(
+        {
+            "ok": True,
+            "tool_name": "add_personal_reference",
+            **result,
+        }
+    )
 
 
 @tool(args_schema=SearchPersonalReferencesInput)
 def search_personal_references(query: str, top_k: int = 2) -> str:
     """개인 참고자료를 ChromaDB와 OpenAI embedding 기반으로 검색합니다."""
 
-    # TODO: query/top_k로 개인 참고자료 vector store를 검색하고 top-level hits를 반환하세요.
-    ...
+    normalized_query = query.strip()
+    limit = safe_limit(top_k, default=2, maximum=20)
+    hits = search_personal_reference_hits(
+        REFERENCE_STORE,
+        query=normalized_query,
+        top_k=limit,
+    )
+    return json_payload(
+        {
+            "ok": True,
+            "tool_name": "search_personal_references",
+            "query": normalized_query,
+            "top_k": limit,
+            "reference_backend": REFERENCE_STORE.backend_info(),
+            "hits": hits,
+        }
+    )
 
 
 @tool(args_schema=SearchSavedRequestsInput)
