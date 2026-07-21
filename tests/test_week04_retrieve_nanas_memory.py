@@ -96,6 +96,16 @@ class ConversationRAGStoreFake:
         return {"vector_store": "fake-rag", "collection_name": "conversations"}
 
 
+class ScheduleStoreFake:
+    def __init__(self, rows: list[dict[str, Any]]) -> None:
+        self.rows = rows
+        self.list_calls: list[dict[str, Any]] = []
+
+    def list_schedules(self, **arguments: Any) -> list[dict[str, Any]]:
+        self.list_calls.append(arguments)
+        return self.rows
+
+
 class PersonalReferenceTests(unittest.TestCase):
     def test_add_normalizes_none_tags_and_returns_backend(self) -> None:
         store = ReferenceStoreFake()
@@ -341,6 +351,137 @@ class ConversationRAGTests(unittest.TestCase):
         self.assertEqual(result["top_k"], 5)
         self.assertEqual(result["hits"], result["rows"])
         self.assertEqual(result["excluded_conversation_id"], "conv_current")
+
+
+class CompatibilityMemorySearchTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.reference_store = ReferenceStoreFake()
+        self.schedule_rows = [
+            {
+                "schedule_id": "sch_1",
+                "request_id": "req_1",
+                "request_kind": "personal_schedule",
+                "title": "철수와 회의",
+                "date": "2026-07-23",
+                "start_time": "14:00",
+                "end_time": "15:00",
+                "attendees": ["철수"],
+            },
+            {
+                "schedule_id": "sch_2",
+                "request_id": "req_2",
+                "request_kind": "group_schedule",
+                "title": "영희와 회의",
+                "date": "2026-07-24",
+                "start_time": "10:00",
+                "end_time": None,
+                "attendees_json": '["영희"]',
+            },
+            {
+                "schedule_id": "sch_3",
+                "request_id": "req_3",
+                "request_kind": "personal_schedule",
+                "title": "깨진 참석자 데이터",
+                "date": "2026-07-25",
+                "start_time": None,
+                "end_time": None,
+                "attendees_json": "not-json",
+            },
+        ]
+
+    def _invoke(
+        self,
+        *,
+        attendee: str | None = None,
+        limit: int = 5,
+        rows: list[dict[str, Any]] | None = None,
+    ) -> tuple[dict[str, Any], ScheduleStoreFake]:
+        schedule_store = ScheduleStoreFake(self.schedule_rows if rows is None else rows)
+        with (
+            patch.object(week04, "REFERENCE_STORE", self.reference_store),
+            patch.object(week04, "SQLITE_STORE", schedule_store),
+        ):
+            raw = week04.search_nana_memory.invoke(
+                {
+                    "query": "  회의 선호  ",
+                    "date_from": " 2026-07-23 ",
+                    "date_to": " 2026-07-31 ",
+                    "attendee": attendee,
+                    "limit": limit,
+                }
+            )
+        return json.loads(raw), schedule_store
+
+    def test_combines_sources_with_effective_filters_and_candidate_limit(self) -> None:
+        result, schedule_store = self._invoke(limit=2)
+
+        self.assertEqual(
+            schedule_store.list_calls,
+            [
+                {
+                    "limit": 50,
+                    "date_from": "2026-07-23",
+                    "date_to": "2026-07-31",
+                }
+            ],
+        )
+        self.assertEqual(result["query"], "회의 선호")
+        self.assertEqual(result["limit"], 2)
+        self.assertEqual(result["filters"]["attendee"], None)
+        self.assertEqual(len(result["reference_hits"]), 1)
+        self.assertEqual(len(result["chunks"]), 2)
+        self.assertEqual(result["chunks"][0]["metadata"]["source"], "sqlite_schedule")
+        self.assertEqual(result["chunks"][0]["metadata"]["attendees"], ["철수"])
+        self.assertIn("[개인 참고자료 검색 결과]", result["context"])
+        self.assertIn("[SQLite 일정 검색 결과]", result["context"])
+
+    def test_attendee_filter_reads_list_and_json_fallback(self) -> None:
+        list_result, _ = self._invoke(attendee=" 철수 ")
+        json_result, _ = self._invoke(attendee="영희")
+
+        self.assertEqual(
+            [chunk["metadata"]["schedule_id"] for chunk in list_result["chunks"]],
+            ["sch_1"],
+        )
+        self.assertEqual(
+            [chunk["metadata"]["schedule_id"] for chunk in json_result["chunks"]],
+            ["sch_2"],
+        )
+
+    def test_malformed_attendees_json_is_ignored_safely(self) -> None:
+        result, _ = self._invoke(attendee="누구", rows=[self.schedule_rows[2]])
+
+        self.assertEqual(result["chunks"], [])
+        self.assertIn("조건에 맞는 저장 일정이 없습니다", result["context"])
+
+    def test_schedule_chunk_has_stable_provenance_metadata(self) -> None:
+        chunk = week04._schedule_chunk(self.schedule_rows[1])
+
+        self.assertEqual(chunk["metadata"]["schedule_id"], "sch_2")
+        self.assertEqual(chunk["metadata"]["request_id"], "req_2")
+        self.assertEqual(chunk["metadata"]["request_kind"], "group_schedule")
+        self.assertEqual(chunk["metadata"]["attendees"], ["영희"])
+        self.assertIn("영희와 회의", chunk["page_content"])
+        self.assertIn("10:00", chunk["page_content"])
+
+    def test_empty_sources_are_reported_as_no_evidence(self) -> None:
+        reference_store = ReferenceStoreFake()
+        reference_store.search_personal_references = lambda query, limit: []
+        schedule_store = ScheduleStoreFake([])
+        with (
+            patch.object(week04, "REFERENCE_STORE", reference_store),
+            patch.object(week04, "SQLITE_STORE", schedule_store),
+        ):
+            result = json.loads(
+                week04.search_nana_memory.invoke(
+                    {"query": "없음", "limit": 5}
+                )
+            )
+
+        self.assertEqual(result["reference_hits"], [])
+        self.assertEqual(result["chunks"], [])
+        self.assertIn("검색된 개인 참고자료가 없습니다", result["context"])
+        self.assertIn("조건에 맞는 저장 일정이 없습니다", result["context"])
 
 
 if __name__ == "__main__":
