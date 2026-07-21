@@ -8,6 +8,7 @@ from typing import Any
 from unittest.mock import patch
 
 from fixed.config import CONFIG
+from fixed.session_scope import conversation_session_scope
 
 
 _TEST_DATA = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
@@ -70,6 +71,29 @@ class SavedRequestStoreFake:
     ) -> list[dict[str, Any]]:
         self.search_calls.append({"query": query, "kind": kind, "limit": limit})
         return self.rows[:limit]
+
+
+class ConversationRAGStoreFake:
+    def __init__(self, hits: list[dict[str, Any]] | None = None) -> None:
+        self.hits = hits or []
+        self.events: list[str] = []
+        self.search_calls: list[dict[str, Any]] = []
+
+    def sync_from_sqlite(self, sqlite_store: Any) -> dict[str, int]:
+        self.events.append("sync")
+        return {"upserted": 1, "skipped": 0, "deleted": 0, "total": 1}
+
+    def search(self, **arguments: Any) -> list[dict[str, Any]]:
+        self.events.append("search")
+        self.search_calls.append(arguments)
+        return self.hits
+
+    def context_from_hits(self, hits: list[dict[str, Any]]) -> str:
+        self.events.append("context")
+        return "[SQLite 대화 RAG 검색 결과]\n" + str(len(hits))
+
+    def backend_info(self) -> dict[str, Any]:
+        return {"vector_store": "fake-rag", "collection_name": "conversations"}
 
 
 class PersonalReferenceTests(unittest.TestCase):
@@ -214,6 +238,109 @@ class SavedRequestSearchTests(unittest.TestCase):
         self.assertEqual(result["query"], "과제")
         self.assertEqual(result["top_k"], 3)
         self.assertEqual(result["rows"][0]["request_id"], "req_한글")
+
+
+class ConversationRAGTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.hit = {
+            "chunk_id": "conv_old:conversation",
+            "conversation_id": "conv_old",
+            "title": "지난 대화",
+            "content": "user: 오전 회의를 피하고 싶어",
+            "distance": 0.2,
+            "metadata": {"conversation_id": "conv_old"},
+        }
+
+    def test_sync_precedes_search_and_current_conversation_is_excluded(self) -> None:
+        rag_store = ConversationRAGStoreFake([self.hit])
+        sqlite_store = object()
+
+        with conversation_session_scope("conv_current"):
+            result = week04.search_conversation_messages_dict(
+                sqlite_store,
+                rag_store,
+                query="  오전 회의  ",
+                top_k=100,
+            )
+
+        self.assertEqual(rag_store.events[:2], ["sync", "search"])
+        self.assertEqual(
+            rag_store.search_calls,
+            [
+                {
+                    "query": "오전 회의",
+                    "top_k": 50,
+                    "exclude_conversation_id": "conv_current",
+                    "conversation_id": None,
+                }
+            ],
+        )
+        self.assertEqual(result["hits"], [self.hit])
+        self.assertEqual(result["rows"], [self.hit])
+        self.assertEqual(result["excluded_conversation_id"], "conv_current")
+        self.assertIsNone(result["conversation_id"])
+        self.assertEqual(result["rag_backend"]["vector_store"], "fake-rag")
+        self.assertEqual(result["sync"]["upserted"], 1)
+        self.assertIn("SQLite 대화 RAG", result["context"])
+
+    def test_default_direct_scope_is_not_treated_as_a_conversation(self) -> None:
+        rag_store = ConversationRAGStoreFake()
+
+        result = week04.search_conversation_messages_dict(
+            object(),
+            rag_store,
+            query="과거 대화",
+        )
+
+        self.assertIsNone(result["excluded_conversation_id"])
+        self.assertIsNone(rag_store.search_calls[0]["exclude_conversation_id"])
+
+    def test_explicit_conversation_targets_it_instead_of_excluding_current(self) -> None:
+        rag_store = ConversationRAGStoreFake([self.hit])
+
+        with conversation_session_scope("conv_current"):
+            result = week04.search_conversation_messages_dict(
+                object(),
+                rag_store,
+                query="지난 대화",
+                conversation_id="  conv_old  ",
+            )
+
+        self.assertEqual(result["conversation_id"], "conv_old")
+        self.assertIsNone(result["excluded_conversation_id"])
+        self.assertEqual(rag_store.search_calls[0]["conversation_id"], "conv_old")
+        self.assertIsNone(rag_store.search_calls[0]["exclude_conversation_id"])
+
+    def test_rows_helper_uses_shared_rag_store(self) -> None:
+        rag_store = ConversationRAGStoreFake([self.hit])
+        with patch.object(week04, "CONVERSATION_RAG_STORE", rag_store):
+            rows = week04.search_conversation_message_rows(
+                object(),
+                query="오전 회의",
+                top_k=5,
+            )
+
+        self.assertEqual(rows, [self.hit])
+
+    def test_public_tool_returns_traceable_rag_envelope(self) -> None:
+        rag_store = ConversationRAGStoreFake([self.hit])
+        with (
+            patch.object(week04, "SQLITE_STORE", object()),
+            patch.object(week04, "CONVERSATION_RAG_STORE", rag_store),
+            conversation_session_scope("conv_current"),
+        ):
+            raw = week04.search_conversation_messages.invoke(
+                {"query": "  오전 회의  ", "top_k": 5}
+            )
+
+        result = json.loads(raw)
+        self.assertIn("지난 대화", raw)
+        self.assertNotIn("\\u", raw)
+        self.assertEqual(result["tool_name"], "search_conversation_messages")
+        self.assertEqual(result["query"], "오전 회의")
+        self.assertEqual(result["top_k"], 5)
+        self.assertEqual(result["hits"], result["rows"])
+        self.assertEqual(result["excluded_conversation_id"], "conv_current")
 
 
 if __name__ == "__main__":
