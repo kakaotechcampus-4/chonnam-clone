@@ -272,8 +272,12 @@ def search_saved_request_rows(
 ) -> list[dict[str, Any]]:
     """SQLite 저장 요청을 검색하고 실제 검색 결과만 반환합니다."""
 
-    # TODO: AppSQLiteStore.search_saved_requests(...)로 저장 요청을 검색하세요.
-    ...
+    normalized_query = query.strip()
+    if not normalized_query:
+        return []
+
+    limit = safe_limit(top_k, default=3, maximum=50)
+    return sqlite_store.search_saved_requests(normalized_query, limit=limit)
 
 
 def search_conversation_messages_dict(
@@ -349,8 +353,22 @@ def search_personal_references(query: str, top_k: int = 2) -> str:
 def search_saved_requests(query: str, top_k: int = 3) -> str:
     """SQLite에 저장된 구조화 일정/할 일/알림 row를 검색합니다. query에는 LLM이 고른 일정/할 일/알림 핵심어를 넣습니다."""
 
-    # TODO: AppSQLiteStore.search_saved_requests(...)로 저장 요청을 검색하고 top-level rows를 반환하세요.
-    ...
+    normalized_query = query.strip()
+    limit = safe_limit(top_k, default=3, maximum=50)
+    rows = search_saved_request_rows(
+        SQLITE_STORE,
+        query=normalized_query,
+        top_k=limit,
+    )
+    return json_payload(
+        {
+            "ok": True,
+            "tool_name": "search_saved_requests",
+            "query": normalized_query,
+            "top_k": limit,
+            "rows": rows,
+        }
+    )
 
 
 @tool(args_schema=SearchConversationMessagesInput)

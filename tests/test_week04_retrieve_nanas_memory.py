@@ -57,6 +57,21 @@ class ReferenceStoreFake:
         ]
 
 
+class SavedRequestStoreFake:
+    def __init__(self, rows: list[dict[str, Any]] | None = None) -> None:
+        self.rows = rows or []
+        self.search_calls: list[dict[str, Any]] = []
+
+    def search_saved_requests(
+        self,
+        query: str,
+        kind: str | None = None,
+        limit: int = 5,
+    ) -> list[dict[str, Any]]:
+        self.search_calls.append({"query": query, "kind": kind, "limit": limit})
+        return self.rows[:limit]
+
+
 class PersonalReferenceTests(unittest.TestCase):
     def test_add_normalizes_none_tags_and_returns_backend(self) -> None:
         store = ReferenceStoreFake()
@@ -129,6 +144,76 @@ class PersonalReferenceTests(unittest.TestCase):
         self.assertEqual(searched["top_k"], 2)
         self.assertEqual(searched["reference_backend"]["vector_store"], "fake")
         self.assertEqual(searched["hits"][0]["id"], "ref_1")
+
+
+class SavedRequestSearchTests(unittest.TestCase):
+    def test_search_trims_query_and_clamps_limit(self) -> None:
+        store = SavedRequestStoreFake([{"request_id": "req_1"}])
+
+        rows = week04.search_saved_request_rows(
+            store,
+            query="  과제 제출  ",
+            top_k=100,
+        )
+
+        self.assertEqual(rows, [{"request_id": "req_1"}])
+        self.assertEqual(
+            store.search_calls,
+            [{"query": "과제 제출", "kind": None, "limit": 50}],
+        )
+
+    def test_blank_query_does_not_turn_into_full_history_lookup(self) -> None:
+        store = SavedRequestStoreFake([{"request_id": "must_not_leak"}])
+
+        rows = week04.search_saved_request_rows(store, query="   ", top_k=3)
+
+        self.assertEqual(rows, [])
+        self.assertEqual(store.search_calls, [])
+
+    def test_real_sqlite_searches_title_original_text_and_reason(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
+            store = week04.AppSQLiteStore(Path(directory) / "saved.sqlite3")
+            store.save_structured_request(
+                {
+                    "kind": "todo",
+                    "title": "과제 제출",
+                    "reason": "마감 전에 완료해야 함",
+                    "original_text": "금요일까지 보고서를 내야 해",
+                }
+            )
+            store.save_structured_request(
+                {
+                    "kind": "reminder",
+                    "title": "운동 알림",
+                    "reason": "집중 시간이 끝나면 알려 달라고 요청함",
+                    "original_text": "오후 여섯 시에 운동하라고 알려줘",
+                }
+            )
+
+            title_rows = week04.search_saved_request_rows(store, query="과제")
+            original_rows = week04.search_saved_request_rows(store, query="보고서")
+            reason_rows = week04.search_saved_request_rows(store, query="집중 시간")
+            missing_rows = week04.search_saved_request_rows(store, query="없는 기록")
+
+        self.assertEqual(title_rows[0]["title"], "과제 제출")
+        self.assertEqual(original_rows[0]["title"], "과제 제출")
+        self.assertEqual(reason_rows[0]["title"], "운동 알림")
+        self.assertEqual(missing_rows, [])
+
+    def test_public_tool_returns_effective_query_limit_and_rows(self) -> None:
+        store = SavedRequestStoreFake([{"request_id": "req_한글", "title": "과제"}])
+        with patch.object(week04, "SQLITE_STORE", store):
+            raw = week04.search_saved_requests.invoke(
+                {"query": "  과제  ", "top_k": 3}
+            )
+
+        result = json.loads(raw)
+        self.assertIn("과제", raw)
+        self.assertNotIn("\\u", raw)
+        self.assertEqual(result["tool_name"], "search_saved_requests")
+        self.assertEqual(result["query"], "과제")
+        self.assertEqual(result["top_k"], 3)
+        self.assertEqual(result["rows"][0]["request_id"], "req_한글")
 
 
 if __name__ == "__main__":
