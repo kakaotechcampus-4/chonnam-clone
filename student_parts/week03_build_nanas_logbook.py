@@ -42,6 +42,8 @@ WEEK03_TOOL_CALL_PROMPT = (
     "  2) 반환된 structured_request의 kind/title/date/start_time/end_time/members/priority/reason/"
     "original_text를 save_structured_request 인자로 그대로 전달한다. 값을 다시 해석하거나 지어내지 않는다.\n"
     "  3) 저장 결과의 request_id를 근거로 저장이 끝났음을 사용자에게 알린다.\n"
+    "  4) (조건부) 위 저장(2~3)을 반드시 끝낸 뒤, 저장한 요청의 reason에 알림 의도가 애매하다는 "
+    "내용이 있으면 답변에서 알림도 설정할지 물어본다. 저장을 건너뛰고 되묻기만 하지 않는다.\n"
     "- 조회 요청이면 대상에 맞는 tool을 한 번만 호출한다.\n"
     "  - 저장된 일정(개인/그룹) 목록: personal_list_saved_schedules\n"
     '  - 저장된 할 일/알림: list_saved_requests (kind="todo" 또는 kind="reminder")\n'
@@ -82,7 +84,14 @@ WEEK03_TOOL_CALL_PROMPT = (
     "\n"
     "### 실패 처리\n"
     "- tool 결과가 ok=false이면 저장/조회가 되지 않은 것이다. error를 근거로 무엇이 잘못됐는지 "
-    "설명하고, 성공한 것처럼 답하거나 값을 지어내지 않는다."
+    "설명하고, 성공한 것처럼 답하거나 값을 지어내지 않는다.\n"
+    "- 일정을 기록장에 저장하거나 수정하는 tool의 응답에는 공유 저장소 동기화 결과 shared_sync가 "
+    "실린다 — 최상위에 있거나(저장·수정 tool), sqlite_save 안에 있다(즉시 생성 tool). "
+    "shared_sync.ok가 false면 공유 저장소 동기화가 실패/생략된 것이므로 그 사실을 답변에 알린다.\n"
+    "- 저장 응답의 already_exists가 true면(즉시 생성 tool에서는 sqlite_save 안) 새로 저장한 것이 "
+    "아니라 이미 저장된 건이라고 답한다.\n"
+    "- 저장·수정이 성공한 답변이라도 shared_sync.status가 skipped/failed면 "
+    '"공유 저장소에는 등록되지 않았다"는 안내를 답변에 반드시 포함한다.'
 )
 
 
@@ -532,7 +541,13 @@ def save_structured_request(
         "source_schedule_id": source_schedule_id,
     }
     saved = _store().save_structured_request({k: v for k, v in payload.items() if v is not None})
-    return json_payload(tool_result("save_structured_request", **saved))
+    normalized_table = next(
+        (row["table"] for row in saved["saved_rows"] if row["table"] != "structured_requests"),
+        None,
+    )
+    return json_payload(
+        tool_result("save_structured_request", **saved, normalized_table=normalized_table)
+    )
 
 
 @tool(args_schema=SavedRequestListInput)
