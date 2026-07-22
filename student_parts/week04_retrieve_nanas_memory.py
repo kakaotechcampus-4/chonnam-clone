@@ -455,6 +455,9 @@ def week04_prompt_parts() -> list[str]:
         "저장된 일정/할 일/알림 기록을 키워드로 찾아달라고 하면 search_saved_requests를 호출한다.",
         "조건(kind/날짜)으로 목록을 보여달라는 요청은 지금까지처럼 list_saved_requests/personal_list_saved_schedules를 쓴다.",
         "'내가 방금 뭐라고 했지', '아까 말한 거'처럼 일정/할 일/알림이 아닌 일반 대화 내용을 물으면 search_conversation_messages를 호출한다.",
+        "'예전에 ~라고 말한 적 있나', '전에 ~한다고 했었나'처럼 add_personal_reference로 등록한 적 없는 지나가는 발화를 되짚는 질문도 search_conversation_messages를 호출한다.",
+        "'~을 참고해/알아둬/기억해줘'로 명시적으로 저장을 요청했던 내용만 search_personal_references 대상이다.",
+        "'내가 예전에 어떤 게임 좋아한다고 말한 적 있었나?' → search_conversation_messages (참고자료로 등록한 적 없는 일반 발화를 되짚는 질문)",
         "지금 나누고 있는 대화는 이미 문맥에 있으므로 그 안에서 답하고, 이전 대화 세션의 발화를 찾을 때만 search_conversation_messages를 쓴다.",
     ]
 
