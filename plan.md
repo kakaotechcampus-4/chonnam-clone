@@ -1,164 +1,61 @@
-# Week 3 "Nana의 기록장" 
+# Week 4 — Nana's Memory RAG 도구
 
 ## Context
 
-`student_parts/week03_build_nanas_logbook.py`는 Week 2의 `StructuredRequest`를 SQLite에 저장하고 다시 조회하는 과제다. 파일 안 주석(§메인과제/§추가과제)이 과제를 두 tier로 나누는데, 이번 작업은 **메인과제만** 구현한다: "구조화 → 저장 → 조회 → 새 대화에서도 유지"가 되는 최소 세로 슬라이스.
+`student_parts/week04_retrieve_nanas_memory.py`는 RAG를 데이터 출처별로 분리하는 것을 가르칩니다: 개인 참고자료(ChromaDB), 구조화된 저장 요청(SQLite), 앱 대화 기록(SQLite → lazy sync된 ChromaDB). 현재 파일에는 스캐폴딩(import, `CONFIG` 기반 store 싱글턴, Pydantic 입력 스키마, `json_payload`/`safe_limit` helper, 그리고 `week04_tools()`/`week04_system_prompt()`/`build_week04_agent()`)이 이미 구성되어 있지만, 실제 데이터 접근 로직은 helper 함수 6개 + `@tool` 데코레이터 함수 5개에서 `...` 상태의 stub으로 남아 있고, `week04_prompt_parts()`에도 빈 확장 지점이 있습니다.
 
-`personal_update_saved_schedule`, `personal_delete_saved_schedules`, Week1 호환 `personal_create_schedule`, 레거시 payload 정규화(`unwrap_legacy_payload` 내부, `_save_input_from`, `save_structured_request_payload`) 등 **추가과제로 표시된 항목은 그대로 TODO로 남긴다.**
+목표: agent가 (1) 개인 참고자료를 저장/검색하고, (2) SQLite에 저장된 요청을 검색하고, 추가 과제로 (3) ChromaDB로 lazy sync한 앱 대화 메시지를 검색할 수 있도록 위 stub들만 정확히 채우는 것입니다 — 각 tool은 course에서 기대하는 정확한 JSON 계약(top-level `hits` vs `rows` 키)을 반환해야 합니다.
 
-**발견한 의존성 문제**: week03의 핵심 흐름 1번("LLM은 `extract_schedule_request`를 호출해 자연어를 구조화")은 `week02_structure_natural_language_requests.py`의 `extract_schedule_request` / `extract_structured_request` / `_coerce_structured_request`에 의존하는데, 이 셋은 week02 파일 자체 기준으로는 "추가 과제"라서 아직 TODO(빈 `...`)다. 이 세 함수가 없으면 week03 메인과제 검증 시나리오("내일 10시 개인 코칭 저장해줘" → 저장 → 조회)가 아예 실행되지 않는다. **사용자 확인 결과, 이 세 함수도 이번 계획에 포함**하기로 했다.
+
+## 호출해야 할 핵심 store 시그니처 (소스에서 직접 확인함)
+
+- `PersonalReferenceStore.add_personal_reference(title, content, tags=None) -> dict` — 키: `reference_id, title, content, tags, backend`.
+- `PersonalReferenceStore.search_personal_references(query, limit=3) -> list[dict]` — 파라미터명은 `top_k`가 아니라 `limit`. 각 hit은 `id, title, content, tags(콤마로 join된 문자열), distance`를 가짐.
+- `PersonalReferenceStore.backend_info() -> dict`.
+- `AppSQLiteStore.search_saved_requests(query, kind=None, limit=5) -> list[dict]` — `structured_requests` 테이블의 row(`SELECT *`).
+- `AppSQLiteStore.list_schedules(limit=12, kind=None, date_from=None, date_to=None, ...)`.
+- `ConversationRAGStore.sync_from_sqlite(sqlite_store) -> dict` — `{upserted, skipped, deleted, total}`.
+- `ConversationRAGStore.search(*, query, top_k=5, exclude_conversation_id=None, conversation_id=None) -> list[dict]` — hit은 `chunk_id, conversation_id, title, status, content, distance, metadata{...}`를 가짐.
+- `ConversationRAGStore.context_from_hits(hits) -> str`, `ConversationRAGStore.backend_info() -> dict`.
+- `current_session_scope()` / `DEFAULT_SESSION_SCOPE` (`fixed/session_scope.py`, 이미 import되어 있음) — 기본적으로 제외할 "현재 대화"를 판단하는 데 사용.
+
+
+## 구현 계획
+
+모든 수정은 `student_parts/week04_retrieve_nanas_memory.py` 안에서, 기존 stub의 본문만 채우는 방식으로 진행합니다 (시그니처 변경 없음).
 
 ## 구현 대상
 
-### 1. `student_parts/week02_structure_natural_language_requests.py` — bridge 함수 3개 + 검증 함수 활성화
+### 메인 과제
 
-이미 완성된 `StructuredRequest`/`StructuredRequestBatch` 스키마(212~247행 상당)는 건드리지 않는다.
+1. **`add_personal_reference_dict`** — `reference_store.add_personal_reference(title=title, content=content, tags=tags or [])` 호출, `{"reference_backend": reference_store.backend_info(), "reference": <결과>}` 반환.
 
-- **`missing_required_fields(req)`** (250~260행, 현재 주석 처리됨): "Week 3+ 저장 전 검증에서 재사용할 예약 함수"라는 주석대로, 이번에 실제로 활성화해서 쓴다. 주석을 풀어 일반 함수로 만든다 (내용은 그대로):
-  ```python
-  def missing_required_fields(req: StructuredRequest) -> list[str]:
-      """kind별 필수 필드 중 값이 없는 것을 반환한다. 빈 list면 완전한 요청."""
-      required = KIND_REQUIRED_FIELDS.get(req.kind, [])
-      return [
-          f for f in required
-          if not getattr(req, f, None)
-          or (isinstance(getattr(req, f), list) and not getattr(req, f))
-      ]
-  ```
-  기존 `KIND_REQUIRED_FIELDS`(19행)를 그대로 사용 — 새로 정의할 것 없음.
+2. **`search_personal_reference_hits`** — 빈 query면 `[]` 반환하도록 strip 후 가드, `safe_limit(top_k, default=2, maximum=20)`로 clamp, `reference_store.search_personal_references(query, limit=limit)` 호출, 각 raw hit을 `{"id", "content", "distance", "metadata": {"title", "tags"}}`로 매핑.
 
-- **`_coerce_structured_request(value)`** (263행)
-  ```python
-  if isinstance(value, StructuredRequest):
-      return value
-  if isinstance(value, dict):
-      return StructuredRequest.model_validate(value)
-  raise RuntimeError(f"예상치 못한 structured output 형식: {type(value)!r}")
-  ```
+3. **`search_saved_request_rows`** — 빈 query면 `[]` 반환하도록 strip 후 가드, `safe_limit(top_k, default=3, maximum=50)`로 clamp, `sqlite_store.search_saved_requests(query, limit=limit)` 결과를 그대로 반환 (결과 없으면 빈 리스트가 자연스럽게 전달됨).
 
-- **`extract_structured_request(text)`** (272행)
-  ```python
-  structured_llm = chat_model().with_structured_output(StructuredRequest, method="function_calling")
-  result = structured_llm.invoke([
-      {"role": "system", "content": join_system_prompt(week02_prompt_parts())},
-      {"role": "user", "content": text},
-  ])
-  return _coerce_structured_request(result)
-  ```
+4. **`add_personal_reference` tool** — `add_personal_reference_dict(REFERENCE_STORE, ...)` 호출, `json_payload({"ok": True, "tool_name": "add_personal_reference", **result})`로 감싸서 반환.
 
-- **`extract_schedule_request(query)`** (`@tool`, 281행)
-  ```python
-  structured = extract_structured_request(query)
-  payload = {
-      "ok": True,
-      "tool_name": "extract_schedule_request",
-      "base_date": current_app_date_iso(),
-      "structured_request": structured.model_dump(),
-  }
-  return json.dumps(payload, ensure_ascii=False)
-  ```
+5. **`search_personal_references` tool** — `top_k` clamp, `search_personal_reference_hits` 호출, `json_payload({"ok": True, "tool_name": ..., "query", "top_k", "reference_backend": REFERENCE_STORE.backend_info(), "hits": hits})` 반환.
 
-### 2. `student_parts/week03_build_nanas_logbook.py` — 메인과제 함수
+6. **`search_saved_requests` tool** — `top_k` clamp, `search_saved_request_rows` 호출, `json_payload({"ok": True, "tool_name": ..., "query", "top_k", "rows": rows})` 반환.
 
-먼저 19~25행의 week02 import 목록에 `missing_required_fields`를 추가한다.
+### 추가 과제
 
-- **`SQLITE_MEMORY_PROMPT`** (31행): Week 1의 `CHAT_MEMORY_PROMPT`(대화 한정 임시 메모리)와 대비되는, "Week 3부터는 SQLite 앱 DB에 저장되어 대화가 끊기거나 앱을 재시작해도 유지된다"는 취지의 prompt 문자열.
+7. **`search_conversation_messages_dict`** — `top_k` clamp; `conversation_id` 정규화(빈 문자열 → `None`); 호출자가 명시적으로 넘기지 않았다면 `current_session_scope()`로 `excluded_conversation_id`를 계산(단, `DEFAULT_SESSION_SCOPE`가 아닐 때만)해서 "방금 한 말"이 검색 결과에 섞이지 않게 함; `conversation_rag_store.sync_from_sqlite(sqlite_store)` 호출 후 `.search(query=..., top_k=limit, exclude_conversation_id=..., conversation_id=...)` 호출; `hits`, `rows`(동일 리스트), `context`(`context_from_hits`로 생성), `rag_backend`(`backend_info()`로 생성), `sync`, `conversation_id`, `excluded_conversation_id`를 담은 dict 반환.
 
-- **`WEEK03_TOOL_CALL_PROMPT`** (34행): "자연어 저장 요청 → 먼저 `extract_schedule_request` 호출 → 결과의 `structured_request` 필드를 그대로 `save_structured_request` 인자로 전달" 순서, "일정 조회는 `personal_list_saved_schedules`, 원본 구조화 요청 조회는 `list_saved_requests`/`get_saved_request`"라는 tool 선택 규칙을 담은 문자열.
+8. **`search_conversation_message_rows`** — 얇은 wrapper: `search_conversation_messages_dict(...)` 호출 후 `result["hits"]` 반환.
 
-- **`save_structured_request`** (330행, `@tool(args_schema=SaveStructuredRequestInput)`) — 저장 전에 `missing_required_fields`로 kind별 필수 필드를 검증하는 단계를 추가한다. 검증 결과(`missing_fields`)가 응답에 그대로 남도록 해서, 실패했을 때 무엇이 빠졌는지 결과물로 확인할 수 있게 한다.
-  ```python
-  req_for_validation = StructuredRequest(
-      kind=kind, title=title, date=date, start_time=start_time, end_time=end_time,
-      members=members or [], priority=priority, reason=reason, original_text=original_text,
-  )
-  missing = missing_required_fields(req_for_validation)
-  if missing:
-      return json_payload(tool_result(
-          "save_structured_request", ok=False,
-          missing_fields=missing,
-          reason=f"필수 필드 누락: {missing}",
-      ))
+9. **`search_conversation_messages` tool** — `top_k` clamp, `search_conversation_messages_dict(SQLITE_STORE, CONVERSATION_RAG_STORE, ...)` 호출, 결과 dict를 `ok`, `tool_name`, `query`, `top_k`와 함께 JSON payload에 펼쳐 넣음.
 
-  payload = {
-      "kind": kind, "title": title, "date": date,
-      "start_time": start_time, "end_time": end_time,
-      "members": members or [], "priority": priority,
-      "reason": reason, "original_text": original_text,
-      "source_schedule_id": source_schedule_id,
-  }
-  payload = {k: v for k, v in payload.items() if v is not None}
-  result = _store().save_structured_request(payload)
-  return json_payload(tool_result("save_structured_request", missing_fields=[], **result))
-  ```
-  (`AppSQLiteStore.save_structured_request(payload: dict)`는 `{"request_id", "kind", "saved_rows", "shared_sync", ...}`를 반환 — `fixed/app_store.py:281`)
+**이번 범위에서 제외:** `search_nana_memory`는 현재 `...` stub 상태 그대로 둡니다 — 가이드상 "참고 코드"(compatibility helper)이며 핵심 구현 대상 4개(`add_personal_reference`, `search_personal_references`, `search_saved_requests`, `search_conversation_messages`)에 포함되지 않고, 사용자도 이번 작업에서는 구현하지 않기로 확인했습니다.
 
-- **`list_saved_requests`** (350행)
-  ```python
-  rows = _store().list_saved_requests(kind=kind, date_from=date_from, date_to=date_to)
-  return json_payload(tool_result("list_saved_requests", rows=rows))
-  ```
-
-- **`get_saved_request`** (362행)
-  ```python
-  row = _store().get_saved_request(request_id)
-  return json_payload(tool_result("get_saved_request", row=row))
-  ```
-
-- **`personal_list_saved_schedules`** (370행)
-  ```python
-  effective_kind = kind or "personal_schedule"
-  schedules = _store().list_schedules(limit=limit, kind=effective_kind, date_from=date_from, date_to=date_to)
-  filters = {"limit": limit, "kind": effective_kind, "date_from": date_from, "date_to": date_to}
-  return json_payload(tool_result("personal_list_saved_schedules", filters=filters, schedules=schedules))
-  ```
-  (`AppSQLiteStore.list_schedules(...)`는 `attendees`/`request_kind`가 포함된 decoded row list 반환 — `fixed/app_store.py` 480행대)
-
-- **`week03_prompt_parts()`** (453행): TODO 두 곳을 실제 지시문으로 채운다 — 현재 날짜(`current_app_date_iso()`), "구조화 후 저장 흐름을 따르라"는 지시, `SQLITE_MEMORY_PROMPT`/`WEEK03_TOOL_CALL_PROMPT` 삽입 위치는 이미 리스트에 있으므로 그 앞뒤 지시 문자열만 추가.
-
-- **`build_week03_agent()`** (465행): week01/02와 동일 패턴으로 채움
-  ```python
-  _WEEK03_AGENT = create_agent(
-      model=chat_model(),
-      tools=week03_tools(),
-      system_prompt=week03_system_prompt(),
-  )
-  ```
-
-### 손대지 않는 부분 (추가과제, 그대로 TODO)
-
-`SaveStructuredRequestInput.unwrap_legacy_payload` 내부(이미 no-op passthrough라 무해함), `_save_input_from`, `save_structured_request_payload`, `_delete_saved_schedules`, `structured_request_from_week01_schedule`, `personal_create_schedule`(Week1 호환), `delete_saved_schedules_dict`, `personal_update_saved_schedule`, `personal_delete_saved_schedules`.
-
-**알려진 한계**: `week03_tools()`(이미 구현됨, 수정 안 함)가 week01의 동작하는 `personal_create_schedule`을 이 파일의 미구현 버전으로 교체해 노출한다. 메인과제 검증 시나리오는 이 tool을 거치지 않지만, LLM이 "일정 만들어줘"류 요청에서 이 tool을 직접 고르면 `...`(None 반환)로 인해 tool 호출이 깨질 수 있다. 이는 추가과제 범위라 이번 계획에서 고치지 않는다.
+10. **`week04_prompt_parts()`** — LLM이 `search_personal_references` / `search_saved_requests` / `search_conversation_messages` 중 상황에 맞는 tool을 고르도록, course의 출처 분리 의도(참고자료 vs 구조화된 DB 기록 vs 원본 채팅 기록)에 맞는 Week 4 전용 prompt 안내를 추가합니다.
 
 ## 검증 방법
 
-1. **정적 확인**: 두 파일 `python -m py_compile`로 문법 오류 없는지 확인.
-
-2. **assert 기반 스크립트** (스크래치패드에 `verify_week03.py` 등으로 작성해 실행, 실제 결과물을 눈으로 확인): agent 전체를 띄우지 않고 tool을 직접 호출해 assert로 결과를 고정 확인한다.
-   ```python
-   import json
-   from student_parts.week02_structure_natural_language_requests import missing_required_fields, StructuredRequest
-   from student_parts.week03_build_nanas_logbook import extract_schedule_request, save_structured_request, personal_list_saved_schedules
-
-   # (a) missing_required_fields 자체 검증
-   complete = StructuredRequest(kind="personal_schedule", title="코칭", date="2026-07-16", members=[], original_text="x")
-   assert missing_required_fields(complete) == []
-   incomplete = StructuredRequest(kind="personal_schedule", title=None, date=None, members=[], original_text="x")
-   assert set(missing_required_fields(incomplete)) == {"title", "date"}
-
-   # (b) 저장 → 조회 세로 슬라이스
-   extracted = json.loads(extract_schedule_request.invoke({"query": "내일 10시 개인 코칭 저장해줘"}))
-   assert extracted["ok"] is True
-   sr = extracted["structured_request"]
-   saved = json.loads(save_structured_request.invoke(sr))
-   assert saved["ok"] is True, saved
-   assert saved["missing_fields"] == []
-
-   listed = json.loads(personal_list_saved_schedules.invoke({}))
-   assert any(s["request_id"] == saved["request_id"] for s in listed["schedules"]), "방금 저장한 일정이 조회 결과에 없음"
-   print("week03 메인과제 검증 통과")
-   ```
-   (`.env`에 `PROXY_TOKEN` 필요 — `extract_schedule_request`가 실제 LLM 호출을 하기 때문)
-
-3. **공식 검증 경로**: `./run.sh --week3` 실행 후 "내일 10시 개인 코칭 저장해줘" → trace에서 `extract_schedule_request` 다음 `save_structured_request` 호출 확인 → "내 일정 보여줘" → `personal_list_saved_schedules`로 조회되는지 확인 → 앱 재시작(또는 새 대화)해도 일정이 남아있는지 확인 (SQLite 파일 기반이라 프로세스 재시작에도 유지되어야 함).
+- 이 모듈에 해당하는 기존 테스트 스위트/테스트 파일이 있다면 프로젝트의 일반적인 테스트 명령으로 실행합니다.
+- `build_week04_agent()`로 직접 확인: 개인 참고자료를 추가한 뒤 관련 질문을 던져서 `search_personal_references`가 호출되고, JSON 출력에 top-level `hits` 키가 있는지 확인합니다.
+- 이전에 저장한 일정/할 일에 대해 질문해서 `search_saved_requests`가 호출되고 top-level `rows` 키가 있는지 확인합니다.
+- (추가 과제) 일반 채팅 기록에 대해 질문해서 `search_conversation_messages`가 호출되고, JSON에 `hits`와 `rows`가 모두 있으며, 기본적으로 현재 대화 자신의 메시지는 제외되는지 확인합니다.
+- `week03_build_nanas_logbook.py`, `fixed/*.py`, `search_nana_memory`, 기타 무관한 파일은 건드리지 않았는지 확인합니다 — 이번 작업은 `week04_retrieve_nanas_memory.py`의 핵심 stub 4개(+ 내부 helper)로 범위가 한정됩니다.
