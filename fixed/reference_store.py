@@ -132,10 +132,15 @@ class PersonalReferenceStore:
         self.collection.add(
             ids=[item["id"] for item in self.DEFAULT_REFERENCES],
             documents=[item["content"] for item in self.DEFAULT_REFERENCES],
-            metadatas=[{"title": item["title"], "tags": ",".join(item["tags"])} for item in self.DEFAULT_REFERENCES],
+            metadatas=[
+                {"title": item["title"], "tags": ",".join(item["tags"])}
+                for item in self.DEFAULT_REFERENCES
+            ],
         )
 
-    def add_personal_reference(self, title: str, content: str, tags: list[str] | None = None) -> dict[str, Any]:
+    def add_personal_reference(
+        self, title: str, content: str, tags: list[str] | None = None
+    ) -> dict[str, Any]:
         """개인 참고자료 하나를 ChromaDB에 저장하고 저장된 메타데이터를 반환합니다."""
 
         reference_id = new_id("ref")

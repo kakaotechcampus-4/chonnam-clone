@@ -212,7 +212,10 @@ WEEK03_TOOL_CALL_PROMPT = """
 
 
 def _store() -> AppSQLiteStore:
-    return AppSQLiteStore(CONFIG.app_db_path)
+    global _SQLITE_STORE
+    if _SQLITE_STORE is None:
+        _SQLITE_STORE = AppSQLiteStore(CONFIG.app_db_path)
+    return _SQLITE_STORE
 
 
 def _tool_name(item: Any) -> str:
