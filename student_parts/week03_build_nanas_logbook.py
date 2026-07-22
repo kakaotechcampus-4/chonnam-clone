@@ -274,12 +274,27 @@ class SaveStructuredRequestInput(StructuredRequest):
     """SQLite 저장 직전에 검증하는 Week 3 입력 스키마입니다."""
 
     kind: RequestKind = Field(default="unknown", description="분류된 요청 종류")
+    # date/start_time/end_time은 강의 1~4주차와 같이 str로 둔다. args_schema는 kind/members 등 나머지
+    # 필드를 여전히 pydantic으로 검증하고, 날짜/시각의 자연어 해석(정규화)은 하지 않는다.
+    date: str | None = Field(default=None, description="일정 날짜(YYYY-MM-DD)")
+    start_time: str | None = Field(default=None, description="시작 시각(HH:MM, 24시간제)")
+    end_time: str | None = Field(default=None, description="종료 시각(HH:MM, 24시간제)")
     source_schedule_id: str | None = Field(default=None, description="Week 1 임시 일정에서 넘어온 원본 일정 ID")
 
     @model_validator(mode="before")
     @classmethod
     def unwrap_legacy_payload(cls, value: Any) -> Any:
-        """예전 trace의 payload wrapper만 짧게 풀고 실제 검증은 필드 스키마에 맡깁니다."""
+        """예전 trace의 payload wrapper를 풀고, 손실을 부르는 두 경우를 여기서 거부합니다.
+
+        하는 일은 두 가지다.
+        1) 언랩: {"payload": {...}} / {"structured_request": {...}}처럼 겹친 wrapper를 한 겹씩 벗긴다.
+        2) 손실 방지 거부(ValueError 2건): (a) 저장 가능한 필드가 하나도 없으면 거부한다
+           (extra='ignore'라 안 막으면 내용이 조용히 사라지고 빈 kind="unknown" row만 남는다),
+           (b) kind 키 자체가 없으면 거부한다.
+
+        검증을 전부 필드 스키마에 맡기지 못하는 이유: 두 경우 모두 필드 기본값이 채워진 뒤에는
+        정상 dict와 구분되지 않는다. 그래서 mode="before"로 기본값 주입 전 원본 dict를 보고,
+        언랩 직후 같은 자리에서 거부를 결박한다(언랩 전에 검사하면 wrapper가 오탐으로 거부됨)."""
 
         if not isinstance(value, dict):
             # dict가 아니면 필드 스키마가 판단하게 둔다.
@@ -514,33 +529,12 @@ def personal_create_schedule(
 
 
 @tool(args_schema=SaveStructuredRequestInput)
-def save_structured_request(
-    kind: RequestKind = "unknown",
-    title: str | None = None,
-    date: str | None = None,
-    start_time: str | None = None,
-    end_time: str | None = None,
-    members: list[str] | None = None,
-    priority: str | None = None,
-    reason: str | None = None,
-    original_text: str = "",
-    source_schedule_id: str | None = None,
-) -> str:
+def save_structured_request(**kwargs: Any) -> str:
     """Week 2 structured_request 필드를 검증한 뒤 SQLite에 저장합니다."""
 
-    payload = {
-        "kind": kind,
-        "title": title,
-        "date": date,
-        "start_time": start_time,
-        "end_time": end_time,
-        "members": members if members is not None else [],
-        "priority": priority,
-        "reason": reason,
-        "original_text": original_text,
-        "source_schedule_id": source_schedule_id,
-    }
-    saved = _store().save_structured_request({k: v for k, v in payload.items() if v is not None})
+    # args_schema가 이미 검증한 인자를 스키마로 한 번 더 감싸 저장 dict로 정리한다(강의 표준 본문).
+    payload = SaveStructuredRequestInput.model_validate(kwargs).model_dump(exclude_none=True)
+    saved = _store().save_structured_request(payload)
     normalized_table = next(
         (row["table"] for row in saved["saved_rows"] if row["table"] != "structured_requests"),
         None,
