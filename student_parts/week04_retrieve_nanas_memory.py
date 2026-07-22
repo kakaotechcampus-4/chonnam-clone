@@ -248,6 +248,7 @@ def search_personal_reference_hits(
     raw_hits = reference_store.search_personal_references(query, limit=top_k)
     return [
         {
+            "source": "personal_reference",
             "id": hit["id"],
             "content": hit["content"],
             "distance": hit["distance"],
@@ -285,6 +286,8 @@ def search_conversation_messages_dict(
         conversation_id=conversation_id,
         exclude_conversation_id=None if conversation_id else current_session_scope(),
     )
+    for hit in hits:
+        hit["source"] = "conversation"
     return {
         "hits": hits,
         "rows": hits,
