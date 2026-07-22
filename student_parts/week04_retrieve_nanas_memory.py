@@ -226,7 +226,7 @@ def add_personal_reference_dict(
     """개인 참고자료를 vector store에 추가하고 backend 정보를 반환합니다."""
 
     # TODO: PersonalReferenceStore.add_personal_reference(...)로 개인 참고자료를 저장하세요.
-    ...
+    return reference_store.add_personal_reference(title,content,tags)
 
 
 def search_personal_reference_hits(
@@ -238,7 +238,9 @@ def search_personal_reference_hits(
     """ChromaDB 검색 결과를 tool이 바로 반환하기 쉬운 hit 구조로 정리합니다."""
 
     # TODO: 개인 참고자료 검색 결과를 id/content/distance/metadata 구조로 정리하세요.
-    ...
+    hits = reference_store.search_personal_references(query,top_k)
+    result = [{"id":hit.get("id"), "content":hit.get("content"), "distance":hit.get("distance"), "metadata":{"title":hit.get("title"),"tags":hit.get("tags")}} for hit in hits]
+    return result
 
 
 def search_saved_request_rows(
@@ -250,7 +252,10 @@ def search_saved_request_rows(
     """SQLite 저장 요청을 검색하고 실제 검색 결과만 반환합니다."""
 
     # TODO: AppSQLiteStore.search_saved_requests(...)로 저장 요청을 검색하세요.
-    ...
+    rows = sqlite_store.search_saved_requests(query,None,top_k)
+    rows = rows if rows else []
+    return rows
+    
 
 
 def search_conversation_messages_dict(
@@ -285,7 +290,11 @@ def add_personal_reference(title: str, content: str, tags: list[str] | None = No
     """개인 참고자료를 ChromaDB에 추가합니다."""
 
     # TODO: 개인 참고자료를 저장하고 JSON 문자열로 반환하세요.
-    ...
+    tags = tags if tags else []
+    result = add_personal_reference_dict(REFERENCE_STORE,title=title,content=content,tags=tags)
+    reference_backend = result.pop("backend")
+    return json_payload({"ok":True,"tool_name":"add_personal_reference", "reference_backend":reference_backend, "reference": result})
+    
 
 
 @tool(args_schema=SearchPersonalReferencesInput)
@@ -293,7 +302,8 @@ def search_personal_references(query: str, top_k: int = 2) -> str:
     """개인 참고자료를 ChromaDB와 OpenAI embedding 기반으로 검색합니다."""
 
     # TODO: query/top_k로 개인 참고자료 vector store를 검색하고 top-level hits를 반환하세요.
-    ...
+    result = search_personal_reference_hits(REFERENCE_STORE,query=query,top_k=safe_limit(top_k))
+    return json_payload({"ok":True,"tool_name":"search_personal_references", "hits":result})
 
 
 @tool(args_schema=SearchSavedRequestsInput)
@@ -301,8 +311,8 @@ def search_saved_requests(query: str, top_k: int = 3) -> str:
     """SQLite에 저장된 구조화 일정/할 일/알림 row를 검색합니다. query에는 LLM이 고른 일정/할 일/알림 핵심어를 넣습니다."""
 
     # TODO: AppSQLiteStore.search_saved_requests(...)로 저장 요청을 검색하고 top-level rows를 반환하세요.
-    ...
-
+    result = search_saved_request_rows(SQLITE_STORE,query=query,top_k=safe_limit(top_k))
+    return json_payload({"ok":True,"tool_name":"search_saved_requests", "rows":result})
 
 @tool(args_schema=SearchConversationMessagesInput)
 def search_conversation_messages(
@@ -353,6 +363,41 @@ def week04_prompt_parts() -> list[str]:
     return [
         *week03_prompt_parts(),
         # TODO: Week 4 Nana memory agent system prompt를 자유롭게 추가하세요.
+        """
+        [Week 4 우선 지시: 이전 주차와 달라진 점]
+
+        Week 1 ~ Week 3의 지시가 프롬프트에 함께 포함될 수 있지만, 아래 Week 4 변경 사항을 가장 우선해서 따른다.
+
+        # 이전 주차와 달라진 점:
+
+        - Week 4에서는 RAG를 활용하여 일정에 대한 조율을 진행하게 된다.
+        - 따라서 "SQLite 저장, RAG, 외부 멤버 일정 조율을 하지 않는다"는 Week 2 지시는 Week 4에서는 따르지 않는다.
+
+        # 이전 주차 지시를 읽을 때 중점:
+        - Week 1에서는 날짜 해석 규칙과 사용자 요청을 일정으로 이해하는 기본 흐름만 참고한다.
+        - Week 2에서는 kind/title/date/start_time/end_time/members 등 StructuredRequest 필드 추출 규칙만 참고한다.
+        - 도구 선택, 저장 여부, 조회/수정/삭제 방식은 반드시 Week 3 지시를 따른다.
+        - 조회/수정/삭제 방식을 진행하기 전에 search_personal_references, search_saved_requests, search_conversation_messages 를 사용하여 필요한 정보를 탐색한다.
+        """,
+        
+        """
+        # 일정에 대해 조회/수정/삭제 방식을 진행하기 전에 다음 tool이 필요한지 여부를 확인하고 진행한다.
+        
+        [search_personal_references]
+        - 개인 참고자료 전용 검색 tool로, LLM이 근거 문서(사용자가 추가한 참고 자료)를 바로 읽을 수 있다.
+        
+        [search_saved_requests]
+        - SQLite에 저장된 structured request/schedule 기록 검색 tool로, 저장된 일정을 검색할 수 있다.
+        
+        [search_conversation_messages]
+        - 앱에 저장된 일반 대화 발화를 검색하는 RAG tool로, 일정 DB 검색과 다른 출처임을 context/rag_backend/sync로 함께 보여준다.
+        
+        
+        # 사용자가 참고자료를 추가하기 원한다면 아래 Tool을 우선적으로 사용한다.
+        
+        [add_personal_reference]
+        - 참고자료 추가 tool로, title/content/tags를 받아 vector store에 저장하고 JSON 문자열을 반환한다.
+        """
     ]
 
 
