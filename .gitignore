@@ -7,6 +7,8 @@ __pycache__/
 !.env.example
 
 data/
+# Local UI trace output (development convenience only).
+data/logs/agent_traces.jsonl
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/

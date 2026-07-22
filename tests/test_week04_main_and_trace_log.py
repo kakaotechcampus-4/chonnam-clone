@@ -1,20 +1,26 @@
 from __future__ import annotations
 
+import importlib
 import json
-import os
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-
-os.environ["PROXY_TOKEN"] = "여기에 api key 입력"
+from pydantic import ValidationError
 
 from fixed import agent_runtime as agent_runtime_module
 from fixed.agent_runtime import AgentRuntime
 from fixed.local_trace_log import LocalTraceLogStore
-from student_parts import week04_retrieve_nanas_memory as week04
+
+
+with (
+    patch("fixed.reference_store.PersonalReferenceStore", autospec=True),
+    patch("fixed.conversation_rag_store.ConversationRAGStore", autospec=True),
+    patch("fixed.app_store.AppSQLiteStore", autospec=True),
+):
+    week04 = importlib.import_module("student_parts.week04_retrieve_nanas_memory")
 
 
 class FakeReferenceStore:
@@ -68,6 +74,33 @@ class FakeSQLiteStore:
         return [{"request_id": "req_test", "title": "코칭 일정"}]
 
 
+class MissingReferenceIdStore(FakeReferenceStore):
+    def add_personal_reference(
+        self,
+        title: str,
+        content: str,
+        tags: list[str] | None = None,
+    ) -> dict[str, object]:
+        return {"title": title, "content": content, "tags": tags or []}
+
+
+class MalformedReferenceSearchStore(FakeReferenceStore):
+    def search_personal_references(
+        self, query: str, limit: int = 3
+    ) -> list[dict[str, object]]:
+        return [{}]
+
+
+class MalformedSavedRequestStore(FakeSQLiteStore):
+    def search_saved_requests(
+        self,
+        query: str,
+        kind: str | None = None,
+        limit: int = 5,
+    ) -> list[dict[str, object]]:
+        return [{"title": "식별자 없는 일정"}]
+
+
 class FakeAppStore:
     def __init__(self) -> None:
         self.messages: list[tuple[str, str, str]] = []
@@ -100,24 +133,59 @@ class RaisingTraceLog:
 
 
 class Week04MainToolTests(unittest.TestCase):
-    def test_add_personal_reference_normalizes_none_tags(self) -> None:
+    def test_add_personal_reference_normalizes_text_and_tags(self) -> None:
         store = FakeReferenceStore()
 
         payload = week04.add_personal_reference_dict(
             store,
-            title="집중 시간",
-            content="오전 회의를 선호한다.",
-            tags=None,
+            title="  집중 시간  ",
+            content="  오전 회의를 선호한다.  ",
+            tags=[" preference ", "", "preference", " meeting "],
         )
 
-        self.assertEqual(store.add_calls[0]["tags"], [])
+        self.assertEqual(store.add_calls[0]["title"], "집중 시간")
+        self.assertEqual(store.add_calls[0]["content"], "오전 회의를 선호한다.")
+        self.assertEqual(store.add_calls[0]["tags"], ["preference", "meeting"])
         self.assertEqual(payload["reference_backend"], {"vector_store": "fake"})
         self.assertEqual(payload["reference"]["reference_id"], "ref_test")
+
+    def test_tool_input_schemas_reject_blank_required_text(self) -> None:
+        invalid_payloads = [
+            (week04.AddPersonalReferenceInput, {"title": " ", "content": "내용"}),
+            (week04.AddPersonalReferenceInput, {"title": "제목", "content": "\t"}),
+            (week04.SearchPersonalReferencesInput, {"query": "  "}),
+            (week04.SearchSavedRequestsInput, {"query": "\n"}),
+        ]
+
+        for schema, payload in invalid_payloads:
+            with self.subTest(schema=schema.__name__, payload=payload):
+                with self.assertRaises(ValidationError):
+                    schema.model_validate(payload)
+
+    def test_helpers_reject_results_that_could_look_successful(self) -> None:
+        with self.assertRaisesRegex(ValueError, r"reference_id.*value="):
+            week04.add_personal_reference_dict(
+                MissingReferenceIdStore(),
+                title="제목",
+                content="내용",
+            )
+
+        with self.assertRaisesRegex(ValueError, r"missing id.*value="):
+            week04.search_personal_reference_hits(
+                MalformedReferenceSearchStore(),
+                query="회의",
+            )
+
+        with self.assertRaisesRegex(ValueError, r"request_id.*value="):
+            week04.search_saved_request_rows(
+                MalformedSavedRequestStore(),
+                query="일정",
+            )
 
     def test_search_personal_references_builds_nested_metadata(self) -> None:
         store = FakeReferenceStore()
 
-        hits = week04.search_personal_reference_hits(store, query="회의", top_k=2)
+        hits = week04.search_personal_reference_hits(store, query="  회의  ", top_k=2)
 
         self.assertEqual(store.search_calls, [{"query": "회의", "limit": 2}])
         self.assertEqual(
@@ -133,7 +201,7 @@ class Week04MainToolTests(unittest.TestCase):
     def test_search_saved_requests_passes_limit_by_keyword(self) -> None:
         store = FakeSQLiteStore()
 
-        rows = week04.search_saved_request_rows(store, query="코칭", top_k=7)
+        rows = week04.search_saved_request_rows(store, query="  코칭  ", top_k=7)
 
         self.assertEqual(rows[0]["request_id"], "req_test")
         self.assertEqual(
@@ -159,6 +227,7 @@ class Week04MainToolTests(unittest.TestCase):
 
         self.assertIn("집중 시간", added_raw)
         self.assertIn("오전", hits_raw)
+        self.assertEqual(reference_store.add_calls[0]["tags"], [])
         self.assertEqual(json.loads(rows_raw)["rows"][0]["request_id"], "req_test")
 
     def test_only_implemented_week04_tools_are_exposed(self) -> None:
@@ -170,12 +239,19 @@ class Week04MainToolTests(unittest.TestCase):
         self.assertIn("search_saved_requests", tool_names)
         self.assertNotIn("search_conversation_messages", tool_names)
         self.assertIn("Week 3의 구조화 및 SQLite 저장 도구", prompt)
+        self.assertIn("출처를 확정할 수 없으면", prompt)
+        self.assertIn("두 검색 도구를 반드시 모두 호출", prompt)
+        self.assertIn("다른 출처까지 검색하기 전에", prompt)
+        self.assertIn("이전 assistant의 검색 실패 답변", prompt)
         self.assertNotIn("search_conversation_messages", prompt)
 
     def test_safe_limit_clamps_and_uses_default(self) -> None:
         self.assertEqual(week04.safe_limit(-1, default=3, maximum=50), 1)
         self.assertEqual(week04.safe_limit(100, default=3, maximum=50), 50)
         self.assertEqual(week04.safe_limit("invalid", default=3, maximum=50), 3)
+        self.assertEqual(week04.safe_limit(None, default=100, maximum=50), 50)
+        with self.assertRaisesRegex(ValueError, "maximum"):
+            week04.safe_limit(3, default=3, maximum=0)
 
 
 class LocalTraceLogTests(unittest.TestCase):
