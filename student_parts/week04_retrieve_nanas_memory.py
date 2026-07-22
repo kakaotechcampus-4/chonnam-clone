@@ -406,7 +406,14 @@ def week04_prompt_parts() -> list[str]:
 
     return [
         *week03_prompt_parts(),
-        # TODO: Week 4 Nana memory agent system prompt를 자유롭게 추가하세요.
+        (
+            "질문 성격에 맞는 검색 tool을 먼저 고른다. "
+            "개인 메모, 참고자료, 선호/취향처럼 자연어로 저장된 사실은 search_personal_references를 쓴다. "
+            "저장된 일정/할 일/알림, 구조화 기록을 물으면 search_saved_requests를 쓴다. "
+            "일반 채팅에서 한 말, 지난 대화 내용을 물으면 search_conversation_messages를 쓴다. "
+            "search_conversation_messages 결과는 assistant 발화만으로 사실을 확정하지 말고 "
+            "user 발화 근거가 있는지 함께 확인한다."
+        ),
     ]
 
 
