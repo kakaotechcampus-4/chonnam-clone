@@ -339,8 +339,15 @@ def search_conversation_messages(
 ) -> str:
     """앱 SQLite 대화 목록을 대화 단위 ChromaDB RAG로 검색합니다. query에는 LLM이 고른 짧은 핵심 명사나 구를 넣습니다."""
 
-    # TODO: 앱 SQLite 대화 목록을 대화 단위 ChromaDB RAG로 검색하고 JSON 문자열로 반환하세요.
-    ...
+    top_k = safe_limit(top_k, default=5, maximum=50)
+    result = search_conversation_messages_dict(
+        SQLITE_STORE,
+        CONVERSATION_RAG_STORE,
+        query=query,
+        top_k=top_k,
+        conversation_id=conversation_id,
+    )
+    return json_payload({"ok": True, "tool_name": "search_conversation_messages", **result})
 
 
 @tool(args_schema=SearchNanaMemoryInput)
@@ -406,6 +413,15 @@ def week04_prompt_parts() -> list[str]:
             "예: '예전에 뭔가 잊지 말라고 알림 해놨던 거 있었는데' → query='알림' "
             "(query='알림 잊지 말라고'처럼 여러 단어를 이어붙이면 정확히 그 문자열이 "
             "저장 내용에 없는 한 매칭되지 않는다). 결과가 비면 다른 짧은 단어로 한 번 더 시도한다."
+        ),
+        (
+            "search_conversation_messages는 구조화 기록이 아니라 그냥 나눈 대화 내용을 찾을 때 "
+            "쓴다(예: '저번에 민수랑 무슨 얘기 했었지?'). 의도적으로 저장한 선호/메모를 찾을 때는 "
+            "search_personal_references를, 구조화된 일정/할 일/알림 기록을 찾을 때는 "
+            "search_saved_requests를 대신 쓴다. 이 tool은 의미 기반 벡터 검색이라 "
+            "search_saved_requests와 달리 문장 그대로 넘겨도 되지만, query에는 짧은 핵심 명사나 "
+            "구만 넣는다. conversation_id를 지정하지 않으면 현재 진행 중인 대화는 자동으로 "
+            "검색 대상에서 빠지므로, 방금 나눈 대화를 스스로 다시 찾으려 하지 않아도 된다."
         ),
     ]
 
