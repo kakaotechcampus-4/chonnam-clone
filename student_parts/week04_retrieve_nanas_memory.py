@@ -290,7 +290,7 @@ def search_conversation_message_rows(
 
 @tool(args_schema=AddPersonalReferenceInput)
 def add_personal_reference(title: str, content: str, tags: list[str] | None = None) -> str:
-    """개인 참고자료를 ChromaDB에 추가합니다."""
+    """지식·선호·위치·습관처럼 일정/할 일/알림이 아닌 개인 참고자료를 기억해 저장합니다. 사용자가 '기억해줘/메모해줘/적어둬'라고 일정이 아닌 정보를 남겨 달라고 하면 이 tool로 title·content(·tags)를 저장합니다."""
 
     payload = add_personal_reference_dict(
         REFERENCE_STORE, title=title, content=content, tags=tags or []
