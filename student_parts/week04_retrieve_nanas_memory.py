@@ -10,7 +10,6 @@ from pydantic import BaseModel, Field
 from fixed.config import CONFIG
 from fixed.conversation_rag_store import ConversationRAGStore
 from fixed.llm import chat_model
-from fixed.runtime_clock import current_app_date_iso
 from fixed.app_store import AppSQLiteStore
 from fixed.reference_store import PersonalReferenceStore
 from fixed.session_scope import DEFAULT_SESSION_SCOPE, current_session_scope
@@ -282,37 +281,11 @@ def search_saved_request_rows(
     """SQLite 저장 요청을 검색하고 실제 검색 결과만 반환합니다."""
 
     # 빈 query는 LIKE '%%'로 전체 row를 긁어오므로 검색 자체를 건너뜁니다.
-    query_text = str(query or "").strip()
-    if not query_text:
+    if not str(query or "").strip():
         return []
 
-    # 1글자 토큰(예: '할', '일')은 raw_json 전반에 과매칭해 노이즈를 만들므로 뺀다.
-    tokens = [token for token in query_text.split() if len(token) >= 2]
-    if len(tokens) <= 1:
-        # 의미있는 토큰이 하나뿐이면 그 토큰으로, 하나도 없으면 원문 그대로 검색한다.
-        rows = sqlite_store.search_saved_requests(tokens[0] if tokens else query_text, limit=top_k)
-    else:
-        # AppSQLiteStore.search_saved_requests는 query를 통짜 LIKE('%...%')로 찾으므로
-        # "병원 알림" 같은 다단어 질의가 "병원 예약 알림"을 놓친다.
-        # 토큰별로 검색해 합치고, 더 많은 토큰과 매칭된 row를 앞으로 정렬한다.
-        collected: dict[str, dict[str, Any]] = {}
-        match_count: dict[str, int] = {}
-        for token in tokens:
-            for row in sqlite_store.search_saved_requests(token, limit=top_k * len(tokens)):
-                request_id = row.get("request_id")
-                if request_id not in collected:
-                    collected[request_id] = row
-                    match_count[request_id] = 0
-                match_count[request_id] += 1
-        rows = sorted(
-            collected.values(),
-            key=lambda row: match_count[row.get("request_id")],
-            reverse=True,
-        )[:top_k]
-
-    # raw_json은 title/date/members 등 정규화 컬럼과 완전히 중복되는 원본 payload라,
-    # LLM에 넘기는 결과에서는 제외해 컨텍스트 낭비를 줄입니다.
-    return [{key: value for key, value in row.items() if key != "raw_json"} for row in rows]
+    # 가이드 TODO대로 AppSQLiteStore.search_saved_requests 결과를 그대로 반환합니다.
+    return sqlite_store.search_saved_requests(query, limit=top_k)
 
 
 def search_conversation_messages_dict(
@@ -504,7 +477,9 @@ def week04_prompt_parts() -> list[str]:
         (
             "검색 도구의 query에는 사용자 문장을 그대로 넣지 말고 핵심 명사나 짧은 구만 넣는다. "
             "search_personal_references·search_conversation_messages는 의미 기반 벡터 검색이고, "
-            "search_saved_requests는 키워드(LIKE) 검색이므로 불필요한 조사는 뺀다."
+            "search_saved_requests는 저장된 제목/원문을 부분 문자열(LIKE)로 찾는다. "
+            "여러 단어를 붙이면 저장된 제목과 정확히 안 맞아 놓칠 수 있으니, search_saved_requests에는 "
+            "가능하면 가장 핵심적인 한 단어(예: '병원', '보고서', '디자인')로 검색하고 필요하면 키워드를 바꿔 다시 검색한다."
         ),
         (
             "search_conversation_messages는 기본적으로 '지금 이 대화'를 검색에서 제외하므로, "
