@@ -25,3 +25,6 @@ dist/
 # Keep later-week student files local until their assignment is published.
 student_parts/week05_load_kanas_past_conversations.py
 student_parts/week06_kanamate_decides_schedule.py
+
+# assignment-stress-test: 프롬프트/manifest는 재사용 자산이라 커밋, 실행 로그만 무시.
+stress_test_prompts/*/results_history/
