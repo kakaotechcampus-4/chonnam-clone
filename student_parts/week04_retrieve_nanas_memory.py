@@ -1,19 +1,17 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Annotated, Any
 
 from langchain.agents import create_agent
 from langchain_core.tools import tool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StringConstraints
 
 from fixed.config import CONFIG
 from fixed.conversation_rag_store import ConversationRAGStore
 from fixed.llm import chat_model
-from fixed.runtime_clock import current_app_date_iso
 from fixed.app_store import AppSQLiteStore
 from fixed.reference_store import PersonalReferenceStore
-from fixed.session_scope import DEFAULT_SESSION_SCOPE, current_session_scope
 from student_parts.week01_wake_up_nana import join_system_prompt
 from student_parts.week03_build_nanas_logbook import week03_prompt_parts, week03_tools
 
@@ -166,42 +164,99 @@ def json_payload(payload: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False)
 
 
-def safe_limit(limit: int, default: int = 5, maximum: int = 50) -> int:
+def _value_preview(value: object, maximum: int = 200) -> str:
+    """오류 메시지에 넣을 값을 지나치게 길지 않은 repr로 만듭니다."""
+
+    preview = repr(value)
+    if len(preview) <= maximum:
+        return preview
+    return preview[: maximum - 3] + "..."
+
+
+def _require_non_empty_text(value: object, *, field_name: str) -> str:
+    """문자열을 trim하고 비어 있으면 실제 입력값을 포함한 오류를 냅니다."""
+
+    if not isinstance(value, str):
+        raise TypeError(
+            f"{field_name} must be a string: "
+            f"type={type(value).__name__}, value={_value_preview(value)}"
+        )
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError(
+            f"{field_name} must not be blank: value={_value_preview(value)}"
+        )
+    return normalized
+
+
+def _normalize_tags(tags: list[str] | None) -> list[str]:
+    """빈 tag를 제거하고 입력 순서를 유지한 채 중복을 없앱니다."""
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for tag in tags or []:
+        if not isinstance(tag, str):
+            raise TypeError(
+                "tag must be a string: "
+                f"type={type(tag).__name__}, value={_value_preview(tag)}"
+            )
+        stripped = tag.strip()
+        if stripped and stripped not in seen:
+            normalized.append(stripped)
+            seen.add(stripped)
+    return normalized
+
+
+def safe_limit(
+    limit: int | str | None,
+    default: int = 5,
+    maximum: int = 50,
+) -> int:
     """사용자/LLM이 넘긴 limit 값을 안전한 양의 정수 범위로 보정합니다."""
 
+    if maximum < 1:
+        raise ValueError(f"maximum must be at least 1: maximum={maximum}")
+    try:
+        fallback = int(default)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"default must be an integer: default={default!r}") from exc
+    fallback = max(1, min(fallback, maximum))
     try:
         value = int(limit)
     except (TypeError, ValueError):
-        value = default
+        value = fallback
     return max(1, min(value, maximum))
+
+
+RequiredText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 
 class AddPersonalReferenceInput(BaseModel):
     """개인 참고자료 추가 입력입니다."""
 
-    title: str
-    content: str
+    title: RequiredText
+    content: RequiredText
     tags: list[str] | None = None
 
 
 class SearchPersonalReferencesInput(BaseModel):
     """개인 참고자료 검색 입력입니다."""
 
-    query: str
+    query: RequiredText
     top_k: int = Field(default=2, ge=1, le=20)
 
 
 class SearchSavedRequestsInput(BaseModel):
     """SQLite 저장 요청 검색 입력입니다."""
 
-    query: str
+    query: RequiredText
     top_k: int = Field(default=3, ge=1, le=50)
 
 
 class SearchConversationMessagesInput(BaseModel):
     """앱 대화 RAG 검색 입력입니다."""
 
-    query: str
+    query: RequiredText
     top_k: int = Field(default=5, ge=1, le=50)
     conversation_id: str | None = None
 
@@ -209,7 +264,7 @@ class SearchConversationMessagesInput(BaseModel):
 class SearchNanaMemoryInput(BaseModel):
     """Week 4 호환 통합 검색 입력입니다."""
 
-    query: str
+    query: RequiredText
     date_from: str | None = None
     date_to: str | None = None
     attendee: str | None = None
@@ -225,8 +280,29 @@ def add_personal_reference_dict(
 ) -> dict[str, Any]:
     """개인 참고자료를 vector store에 추가하고 backend 정보를 반환합니다."""
 
-    # TODO: PersonalReferenceStore.add_personal_reference(...)로 개인 참고자료를 저장하세요.
-    ...
+    normalized_title = _require_non_empty_text(title, field_name="title")
+    normalized_content = _require_non_empty_text(content, field_name="content")
+    normalized_tags = _normalize_tags(tags)
+    reference = reference_store.add_personal_reference(
+        title=normalized_title,
+        content=normalized_content,
+        tags=normalized_tags,
+    )
+    if not isinstance(reference, dict):
+        raise TypeError(
+            "reference store returned a non-dict value: "
+            f"type={type(reference).__name__}, value={_value_preview(reference)}"
+        )
+    reference_id = reference.get("reference_id")
+    if not isinstance(reference_id, str) or not reference_id.strip():
+        raise ValueError(
+            "reference store result is missing reference_id: "
+            f"value={_value_preview(reference)}"
+        )
+    return {
+        "reference_backend": reference_store.backend_info(),
+        "reference": reference,
+    }
 
 
 def search_personal_reference_hits(
@@ -237,8 +313,45 @@ def search_personal_reference_hits(
 ) -> list[dict[str, Any]]:
     """ChromaDB 검색 결과를 tool이 바로 반환하기 쉬운 hit 구조로 정리합니다."""
 
-    # TODO: 개인 참고자료 검색 결과를 id/content/distance/metadata 구조로 정리하세요.
-    ...
+    normalized_query = _require_non_empty_text(query, field_name="query")
+    rows = reference_store.search_personal_references(normalized_query, limit=top_k)
+    if not isinstance(rows, list):
+        raise TypeError(
+            "reference search returned a non-list value: "
+            f"type={type(rows).__name__}, value={_value_preview(rows)}"
+        )
+
+    hits: list[dict[str, Any]] = []
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            raise TypeError(
+                f"reference search row {index} is not a dict: "
+                f"type={type(row).__name__}, value={_value_preview(row)}"
+            )
+        reference_id = row.get("id")
+        content = row.get("content")
+        if not isinstance(reference_id, str) or not reference_id.strip():
+            raise ValueError(
+                f"reference search row {index} is missing id: "
+                f"value={_value_preview(row)}"
+            )
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError(
+                f"reference search row {index} is missing content: "
+                f"value={_value_preview(row)}"
+            )
+        hits.append(
+            {
+                "id": reference_id,
+                "content": content,
+                "distance": row.get("distance"),
+                "metadata": {
+                    "title": row.get("title", ""),
+                    "tags": row.get("tags", ""),
+                },
+            }
+        )
+    return hits
 
 
 def search_saved_request_rows(
@@ -249,8 +362,26 @@ def search_saved_request_rows(
 ) -> list[dict[str, Any]]:
     """SQLite 저장 요청을 검색하고 실제 검색 결과만 반환합니다."""
 
-    # TODO: AppSQLiteStore.search_saved_requests(...)로 저장 요청을 검색하세요.
-    ...
+    normalized_query = _require_non_empty_text(query, field_name="query")
+    rows = sqlite_store.search_saved_requests(normalized_query, limit=top_k)
+    if not isinstance(rows, list):
+        raise TypeError(
+            "saved request search returned a non-list value: "
+            f"type={type(rows).__name__}, value={_value_preview(rows)}"
+        )
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            raise TypeError(
+                f"saved request row {index} is not a dict: "
+                f"type={type(row).__name__}, value={_value_preview(row)}"
+            )
+        request_id = row.get("request_id")
+        if not isinstance(request_id, str) or not request_id.strip():
+            raise ValueError(
+                f"saved request row {index} is missing request_id: "
+                f"value={_value_preview(row)}"
+            )
+    return rows
 
 
 def search_conversation_messages_dict(
@@ -281,27 +412,45 @@ def search_conversation_message_rows(
 
 
 @tool(args_schema=AddPersonalReferenceInput)
-def add_personal_reference(title: str, content: str, tags: list[str] | None = None) -> str:
+def add_personal_reference(
+    title: str, content: str, tags: list[str] | None = None
+) -> str:
     """개인 참고자료를 ChromaDB에 추가합니다."""
 
-    # TODO: 개인 참고자료를 저장하고 JSON 문자열로 반환하세요.
-    ...
+    return json_payload(
+        add_personal_reference_dict(
+            REFERENCE_STORE,
+            title=title,
+            content=content,
+            tags=tags,
+        )
+    )
 
 
 @tool(args_schema=SearchPersonalReferencesInput)
 def search_personal_references(query: str, top_k: int = 2) -> str:
     """개인 참고자료를 ChromaDB와 OpenAI embedding 기반으로 검색합니다."""
 
-    # TODO: query/top_k로 개인 참고자료 vector store를 검색하고 top-level hits를 반환하세요.
-    ...
+    normalized_top_k = safe_limit(top_k, default=2, maximum=20)
+    hits = search_personal_reference_hits(
+        REFERENCE_STORE,
+        query=query,
+        top_k=normalized_top_k,
+    )
+    return json_payload({"hits": hits})
 
 
 @tool(args_schema=SearchSavedRequestsInput)
 def search_saved_requests(query: str, top_k: int = 3) -> str:
     """SQLite에 저장된 구조화 일정/할 일/알림 row를 검색합니다. query에는 LLM이 고른 일정/할 일/알림 핵심어를 넣습니다."""
 
-    # TODO: AppSQLiteStore.search_saved_requests(...)로 저장 요청을 검색하고 top-level rows를 반환하세요.
-    ...
+    normalized_top_k = safe_limit(top_k, default=3, maximum=50)
+    rows = search_saved_request_rows(
+        SQLITE_STORE,
+        query=query,
+        top_k=normalized_top_k,
+    )
+    return json_payload({"rows": rows})
 
 
 @tool(args_schema=SearchConversationMessagesInput)
@@ -329,6 +478,7 @@ def search_nana_memory(
     # TODO: compatibility 통합 검색이 필요하면 개인 참고자료와 SQLite 일정 chunk를 함께 구성하세요.
     ...
 
+
 def week04_tools() -> list[Any]:
     """3주차까지의 도구에 4주차 RAG 도구를 누적한 목록입니다."""
 
@@ -337,7 +487,6 @@ def week04_tools() -> list[Any]:
         add_personal_reference,
         search_personal_references,
         search_saved_requests,
-        search_conversation_messages,
     ]
 
 
@@ -352,7 +501,28 @@ def week04_prompt_parts() -> list[str]:
 
     return [
         *week03_prompt_parts(),
-        # TODO: Week 4 Nana memory agent system prompt를 자유롭게 추가하세요.
+        (
+            "Week 4 memory rules:\n"
+            "- 사용자가 개인 선호, 메모, 참고자료를 기억해 달라고 하면 "
+            "add_personal_reference를 호출한다.\n"
+            "- 일정, 할 일, 알림의 저장 요청은 개인 참고자료로 저장하지 말고 "
+            "Week 3의 구조화 및 SQLite 저장 도구를 사용한다.\n"
+            "- 개인 선호, 습관, 메모, 참고자료를 묻는 것이 명확하면 "
+            "search_personal_references를 호출하고 검색 결과를 근거로 답한다.\n"
+            "- 등록하거나 저장한 일정, 할 일, 알림을 찾는 것이 명확하면 "
+            "search_saved_requests를 호출하고 query에는 검색할 핵심어를 넣는다.\n"
+            "- 과거에 말하거나 기억해 둔 정보를 회상해 달라는 질문에서 그 정보가 개인 참고자료인지 "
+            "저장 요청인지 출처를 확정할 수 없으면 search_personal_references와 "
+            "search_saved_requests를 모두 호출한다. 질문에 '언제'나 '시간'이 있다는 이유만으로 "
+            "일정 검색 하나를 선택하지 않는다.\n"
+            "- 실제로 잡아 둔 일정과 개인 선호를 비교하거나 함께 판단하는 질문에는, "
+            "현재 대화에 일부 정보가 보여도 두 검색 도구를 반드시 모두 호출하고 "
+            "답변에서 출처를 구분한다.\n"
+            "- 출처가 불명확한 질문은 한 검색 결과가 비어 있어도 다른 출처까지 검색하기 전에 "
+            "기록이 없다고 답하지 않는다. 이전 assistant의 검색 실패 답변만으로도 기록 부재를 "
+            "확정하지 않는다.\n"
+            "- 검색 결과가 없으면 기억한다고 추측하지 말고 찾지 못했다고 명확히 답한다."
+        ),
     ]
 
 
