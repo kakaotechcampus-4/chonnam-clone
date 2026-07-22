@@ -429,7 +429,11 @@ def week04_prompt_parts() -> list[str]:
             "일정, 할 일, 알림 저장은 Week 3의 extract_schedule_request와 save_structured_request 흐름을 유지한다."
         ),
         (
-            "개인 선호, 규칙, 메모, 참고자료를 근거로 답할 때는 search_personal_references를 사용한다. "
+            "Week 4 참고자료 검색 필수 규칙: 사용자가 '내가 무엇을 선호하는지', '내가 무엇을 좋아하거나 싫어하는지', "
+            "'전에 기억해 달라고 한 내용이 무엇인지'처럼 자신의 과거 선호, 습관, 규칙, 메모를 묻고 "
+            "현재 사용자 메시지에 답이 직접 들어 있지 않으면 답변 전에 반드시 search_personal_references를 호출한다. "
+            "이 조건에서는 도구를 호출하지 않은 채 '저장된 정보가 없다', '기억하지 못한다', "
+            "'알려주면 기억하겠다'고 답하는 것을 금지한다. 검색한 hits가 비어 있을 때만 관련 참고자료가 없다고 답한다. "
             "SQLite에 저장된 일정, 할 일, 알림의 제목, 원문, 분류 근거를 키워드로 찾을 때는 "
             "search_saved_requests를 사용한다. 정확한 일정 목록이나 날짜 범위 조회에는 "
             "personal_list_saved_schedules를 사용한다."
