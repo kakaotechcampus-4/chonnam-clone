@@ -378,28 +378,9 @@ def search_nana_memory(
 ) -> str:
     """개인 참고자료와 SQLite 저장 일정을 한 번에 검색하고 일정 chunk를 반환합니다."""
 
-    # [AI-assisted] Claude로 초안 생성 후 확인
-    # 변경 사항: 앞서 만든 search_personal_reference_hits / search_saved_request_rows를
-    #            재사용해 참고자료 hit와 SQLite 일정 row를 한 번에 묶고 context 문자열을 만듦.
-    limit = safe_limit(limit)
-    reference_hits = search_personal_reference_hits(REFERENCE_STORE, query=query, top_k=limit)
-    schedule_rows = search_saved_request_rows(SQLITE_STORE, query=query, top_k=limit)
+    # TODO: compatibility 통합 검색이 필요하면 개인 참고자료와 SQLite 일정 chunk를 함께 구성하세요.
 
-    context_lines = ["[개인 참고자료]"]
-    for hit in reference_hits:
-        context_lines.append(f"- {hit['content']}")
-    context_lines.append("[저장된 일정/기록]")
-    for row in schedule_rows:
-        context_lines.append(f"- {row.get('title', '')} ({row.get('date', '')})")
-
-    return json_payload(
-        {
-            "hits": reference_hits,
-            "rows": schedule_rows,
-            "reference_backend": REFERENCE_STORE.backend_info(),
-            "context": "\n".join(context_lines),
-        }
-    )
+    ...
 
 
 def week04_tools() -> list[Any]:
