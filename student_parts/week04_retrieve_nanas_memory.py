@@ -225,8 +225,24 @@ def add_personal_reference_dict(
 ) -> dict[str, Any]:
     """개인 참고자료를 vector store에 추가하고 backend 정보를 반환합니다."""
 
-    # TODO: PersonalReferenceStore.add_personal_reference(...)로 개인 참고자료를 저장하세요.
-    ...
+    normalized_tags = tags or []
+    saved = reference_store.add_personal_reference(
+        title=title,
+        content=content,
+        tags=normalized_tags,
+    )
+
+    if isinstance(saved, dict) and "reference" in saved:
+        reference = saved["reference"]
+        backend = saved.get("reference_backend", "chroma")
+    else:
+        reference = saved
+        backend = "chroma"
+
+    return {
+        "reference_backend": backend,
+        "reference": reference,
+    }
 
 
 def search_personal_reference_hits(
@@ -237,8 +253,39 @@ def search_personal_reference_hits(
 ) -> list[dict[str, Any]]:
     """ChromaDB 검색 결과를 tool이 바로 반환하기 쉬운 hit 구조로 정리합니다."""
 
-    # TODO: 개인 참고자료 검색 결과를 id/content/distance/metadata 구조로 정리하세요.
-    ...
+    limit = safe_limit(top_k, default=2, maximum=20)
+    raw_hits = reference_store.search_personal_references(
+        query=query,
+        limit=limit,
+    )
+
+    hits: list[dict[str, Any]] = []
+    for raw_hit in raw_hits or []:
+        if not isinstance(raw_hit, dict):
+            continue
+
+        metadata = raw_hit.get("metadata")
+        if not isinstance(metadata, dict):
+            metadata = {}
+
+        title = metadata.get("title", raw_hit.get("title"))
+        tags = metadata.get("tags", raw_hit.get("tags", []))
+        if not isinstance(tags, list):
+            tags = [str(tags)] if tags else []
+
+        hits.append(
+            {
+                "id": raw_hit.get("id"),
+                "content": raw_hit.get("content", raw_hit.get("document", "")),
+                "distance": raw_hit.get("distance"),
+                "metadata": {
+                    "title": title,
+                    "tags": tags,
+                },
+            }
+        )
+
+    return hits
 
 
 def search_saved_request_rows(
@@ -249,8 +296,12 @@ def search_saved_request_rows(
 ) -> list[dict[str, Any]]:
     """SQLite 저장 요청을 검색하고 실제 검색 결과만 반환합니다."""
 
-    # TODO: AppSQLiteStore.search_saved_requests(...)로 저장 요청을 검색하세요.
-    ...
+    limit = safe_limit(top_k, default=3, maximum=50)
+    rows = sqlite_store.search_saved_requests(
+        query=query,
+        limit=limit,
+    )
+    return rows or []
 
 
 def search_conversation_messages_dict(
@@ -263,8 +314,58 @@ def search_conversation_messages_dict(
 ) -> dict[str, Any]:
     """SQLite 대화 목록을 lazy sync한 뒤 ChromaDB conversation RAG 결과를 반환합니다."""
 
-    # TODO: SQLite 대화 기록을 ConversationRAGStore에 lazy sync한 뒤 현재 대화를 제외하고 검색하세요.
-    ...
+    limit = safe_limit(top_k, default=5, maximum=50)
+
+    current_scope = current_session_scope()
+    exclude_conversation_id: str | None = None
+    if conversation_id is None and current_scope != DEFAULT_SESSION_SCOPE:
+        exclude_conversation_id = current_scope
+
+    sync_result = conversation_rag_store.sync_from_sqlite(sqlite_store)
+
+    raw_hits = conversation_rag_store.search(
+        query=query,
+        top_k=limit,
+        conversation_id=conversation_id,
+        exclude_conversation_id=exclude_conversation_id,
+    )
+
+    hits: list[dict[str, Any]] = []
+    for raw_hit in raw_hits or []:
+        if not isinstance(raw_hit, dict):
+            continue
+
+        metadata = raw_hit.get("metadata")
+        if not isinstance(metadata, dict):
+            metadata = {}
+
+        hit = {
+            "id": raw_hit.get("id"),
+            "conversation_id": raw_hit.get(
+                "conversation_id",
+                metadata.get("conversation_id"),
+            ),
+            "role": raw_hit.get("role", metadata.get("role")),
+            "content": raw_hit.get("content", raw_hit.get("document", "")),
+            "distance": raw_hit.get("distance"),
+            "metadata": metadata,
+        }
+        hits.append(hit)
+
+    context_lines = []
+    for hit in hits:
+        conversation_label = hit.get("conversation_id") or "unknown"
+        role = hit.get("role") or "unknown"
+        content = hit.get("content") or ""
+        context_lines.append(f"[{conversation_label} / {role}] {content}")
+
+    return {
+        "hits": hits,
+        "rows": hits,
+        "context": "\n".join(context_lines),
+        "rag_backend": "chroma_conversation",
+        "sync": sync_result,
+    }
 
 
 def search_conversation_message_rows(
@@ -276,32 +377,53 @@ def search_conversation_message_rows(
 ) -> list[dict[str, Any]]:
     """앱 SQLite에 저장된 일반 채팅 대화 청크를 RAG 검색합니다."""
 
-    # TODO: search_conversation_messages_dict(...) 결과에서 hits만 반환하세요.
-    ...
+    result = search_conversation_messages_dict(
+        sqlite_store,
+        CONVERSATION_RAG_STORE,
+        query=query,
+        top_k=top_k,
+        conversation_id=conversation_id,
+    )
+    return result.get("hits", [])
 
 
 @tool(args_schema=AddPersonalReferenceInput)
 def add_personal_reference(title: str, content: str, tags: list[str] | None = None) -> str:
     """개인 참고자료를 ChromaDB에 추가합니다."""
 
-    # TODO: 개인 참고자료를 저장하고 JSON 문자열로 반환하세요.
-    ...
+    result = add_personal_reference_dict(
+        REFERENCE_STORE,
+        title=title,
+        content=content,
+        tags=tags,
+    )
+    return json_payload(result)
 
 
 @tool(args_schema=SearchPersonalReferencesInput)
 def search_personal_references(query: str, top_k: int = 2) -> str:
     """개인 참고자료를 ChromaDB와 OpenAI embedding 기반으로 검색합니다."""
 
-    # TODO: query/top_k로 개인 참고자료 vector store를 검색하고 top-level hits를 반환하세요.
-    ...
+    limit = safe_limit(top_k, default=2, maximum=20)
+    hits = search_personal_reference_hits(
+        REFERENCE_STORE,
+        query=query,
+        top_k=limit,
+    )
+    return json_payload({"hits": hits})
 
 
 @tool(args_schema=SearchSavedRequestsInput)
 def search_saved_requests(query: str, top_k: int = 3) -> str:
     """SQLite에 저장된 구조화 일정/할 일/알림 row를 검색합니다. query에는 LLM이 고른 일정/할 일/알림 핵심어를 넣습니다."""
 
-    # TODO: AppSQLiteStore.search_saved_requests(...)로 저장 요청을 검색하고 top-level rows를 반환하세요.
-    ...
+    limit = safe_limit(top_k, default=3, maximum=50)
+    rows = search_saved_request_rows(
+        SQLITE_STORE,
+        query=query,
+        top_k=limit,
+    )
+    return json_payload({"rows": rows})
 
 
 @tool(args_schema=SearchConversationMessagesInput)
@@ -312,8 +434,14 @@ def search_conversation_messages(
 ) -> str:
     """앱 SQLite 대화 목록을 대화 단위 ChromaDB RAG로 검색합니다. query에는 LLM이 고른 짧은 핵심 명사나 구를 넣습니다."""
 
-    # TODO: 앱 SQLite 대화 목록을 대화 단위 ChromaDB RAG로 검색하고 JSON 문자열로 반환하세요.
-    ...
+    result = search_conversation_messages_dict(
+        SQLITE_STORE,
+        CONVERSATION_RAG_STORE,
+        query=query,
+        top_k=safe_limit(top_k, default=5, maximum=50),
+        conversation_id=conversation_id,
+    )
+    return json_payload(result)
 
 
 @tool(args_schema=SearchNanaMemoryInput)
@@ -326,8 +454,65 @@ def search_nana_memory(
 ) -> str:
     """개인 참고자료와 SQLite 저장 일정을 한 번에 검색하고 일정 chunk를 반환합니다."""
 
-    # TODO: compatibility 통합 검색이 필요하면 개인 참고자료와 SQLite 일정 chunk를 함께 구성하세요.
-    ...
+    effective_limit = safe_limit(limit, default=5, maximum=20)
+
+    reference_hits = search_personal_reference_hits(
+        REFERENCE_STORE,
+        query=query,
+        top_k=effective_limit,
+    )
+    saved_rows = search_saved_request_rows(
+        SQLITE_STORE,
+        query=query,
+        top_k=effective_limit,
+    )
+
+    filtered_rows: list[dict[str, Any]] = []
+    for row in saved_rows:
+        row_date = row.get("date")
+        if date_from and row_date and row_date < date_from:
+            continue
+        if date_to and row_date and row_date > date_to:
+            continue
+
+        if attendee:
+            attendees = row.get("attendees")
+            if attendees is None:
+                attendees = _decode_attendees(row.get("attendees_json"))
+            if attendee not in (attendees or []):
+                continue
+
+        normalized = dict(row)
+        if "attendees" not in normalized:
+            normalized["attendees"] = _decode_attendees(
+                normalized.get("attendees_json")
+            )
+        filtered_rows.append(normalized)
+
+    context_parts: list[str] = []
+
+    for hit in reference_hits:
+        metadata = hit.get("metadata") or {}
+        title = metadata.get("title") or "제목 없음"
+        content = hit.get("content") or ""
+        context_parts.append(f"[개인 참고자료: {title}] {content}")
+
+    for row in filtered_rows:
+        title = row.get("title") or "제목 없음"
+        date = row.get("date") or "날짜 없음"
+        start_time = row.get("start_time") or "시간 미정"
+        context_parts.append(
+            f"[저장 일정: {title}] 날짜={date}, 시작={start_time}"
+        )
+
+    return json_payload(
+        {
+            "reference_backend": "chroma",
+            "reference_hits": reference_hits,
+            "saved_request_rows": filtered_rows,
+            "context": "\n".join(context_parts),
+        }
+    )
 
 def week04_tools() -> list[Any]:
     """3주차까지의 도구에 4주차 RAG 도구를 누적한 목록입니다."""
@@ -352,7 +537,42 @@ def week04_prompt_parts() -> list[str]:
 
     return [
         *week03_prompt_parts(),
-        # TODO: Week 4 Nana memory agent system prompt를 자유롭게 추가하세요.
+        f"""
+현재 날짜는 {current_app_date_iso()}입니다.
+
+당신은 Week 4 Nana 메모리 검색 Agent입니다.
+사용자의 질문이 어떤 데이터 출처에 관한 것인지 먼저 구분하고,
+반드시 알맞은 검색 도구를 사용해 저장된 근거를 확인한 뒤 답변하세요.
+
+도구 선택 기준:
+
+- 사용자가 직접 적어 둔 메모, 지식, 링크, 참고자료를 새로 저장
+  → add_personal_reference
+
+- 사용자가 적어 둔 참고자료, 메모, 공부 내용, 링크에 관한 질문
+  → search_personal_references
+
+- SQLite에 저장된 일정, 할 일, 알림, 구조화 요청에 관한 질문
+  → search_saved_requests
+
+- 이전 대화에서 사용자가 말했던 내용이나 과거 채팅 발화에 관한 질문
+  → search_conversation_messages
+
+검색 규칙:
+
+1. 질문에 맞는 출처의 도구만 우선 호출한다.
+2. 질문이 여러 출처에 걸쳐 있으면 관련 도구를 각각 호출하고 결과를 함께 비교한다.
+3. 검색 결과가 비어 있으면 기억하는 것처럼 추측하지 말고, 저장된 근거를 찾지 못했다고 답한다.
+4. search_conversation_messages 결과에서 assistant 발화만 발견된 경우,
+   그것만으로 사용자의 사실이나 선호를 확정하지 않는다.
+5. 현재 대화에서 방금 나온 내용은 과거 기억 검색 결과로 간주하지 않는다.
+6. 참고자료 검색 결과의 hits와 SQLite 검색 결과의 rows를 구분해서 해석한다.
+7. 답변은 검색 결과에 포함된 내용만 근거로 간단하고 자연스러운 한국어로 작성한다.
+
+Week 3의 일정 저장, 조회, 수정, 삭제 기능은 그대로 유지한다.
+새 일정 저장 요청은 기존과 동일하게
+extract_schedule_request → save_structured_request 순서로 처리한다.
+"""
     ]
 
 
