@@ -6,9 +6,11 @@ description: >
   다시 계산하고, 그 구조에 맞는 예시 프롬프트 100개를 생성해 실제 agent를
   실행(AgentRuntime)해서 tool 라우팅이 의도대로 되는지 스트레스 테스트합니다.
   이전에 같은 파일로 만든 프롬프트가 stress_test_prompts/ 아래 있으면 tool
-  시그니처가 안 바뀐 부분만 재사용하고 바뀐 부분만 새로 만듭니다. "스트레스
-  테스트해줘", "100개 프롬프트로 테스트해줘", "tool 충돌 있는지 실제로 돌려서
-  확인해줘" 같은 요청과 student_parts 파일 경로가 함께 오면 사용하세요.
+  시그니처가 안 바뀐 부분만 재사용하고 바뀐 부분만 새로 만듭니다. 실행은 격리된
+  임시 DB/Chroma에서만 이뤄져 실제 앱 데이터(data/kanana_app.sqlite3, data/chroma)는
+  건드리지 않습니다. "스트레스 테스트해줘", "100개 프롬프트로 테스트해줘",
+  "tool 충돌 있는지 실제로 돌려서 확인해줘" 같은 요청과 student_parts 파일
+  경로가 함께 오면 사용하세요.
 ---
 
 # assignment-stress-test
@@ -153,16 +155,43 @@ uv run python .claude/skills/assignment-stress-test/run_harness.py \
 - `conversation_group`이 있는 줄들은 하나의 대화 안에서 순서대로 실행되어야
   하므로 harness가 순차 처리합니다(이미 구현됨). 독립 프롬프트끼리는
   병렬화 여지가 있지만 기본은 순차 — 필요하면 사용자와 병렬화를 상의합니다.
+- **격리는 harness가 자동으로 함**: 실행 전에 `fixed.config.CONFIG`의
+  `app_db_path`/`chroma_dir`을 `--out` 옆 `isolated_data_<out stem>/`으로
+  돌려놓고 시작합니다. 실제 앱이 쓰는 `data/kanana_app.sqlite3`/`data/chroma`는
+  절대 안 건드립니다 — 별도 조치 필요 없습니다. 위치를 바꾸고 싶으면
+  `--isolate-dir`로 지정할 수 있습니다.
+- **백그라운드 실행 시 주의**: Bash 도구의 `run_in_background:true` 위에
+  직접 `nohup ... &`를 또 얹지 않습니다. 이중으로 백그라운드 처리하면 Bash
+  도구가 실제 프로세스 종료 전에 "완료"로 잘못 보고합니다(래퍼 셸만 먼저
+  끝남). `run_in_background:true` 하나만 쓰고, 진짜 완료는 `ps`로 PID 살아있는지
+  확인하거나 `until [ ! -d /proc/<pid> ]; do sleep 5; done` 같은 blocking
+  polling 커맨드를 별도로(역시 `run_in_background:true`로) 돌려서 확인합니다.
 
 ### 6단계 — 집계 및 리포트
 
-`results_history/<타임스탬프>.jsonl`을 읽어:
-- `tool_calls`와 `expected_tool` 비교 → 불일치 건 추출.
-- `error`가 있는 줄 → 예외/validator 거부 집계.
-- 카테고리 3(모호성형)에서 불일치가 몰리면 → tool 설계/프롬프트 라우팅
-  충돌 후보로 강조.
-- 같은 폴더의 이전 `results_history/*.jsonl`이 있으면, 같은 `id`끼리
-  `tool_calls` 비교 → 회귀(저번엔 A tool, 이번엔 B tool) 탐지.
+`aggregate_results.py`(이 스킬 폴더에 이미 있음, run_harness.py와 마찬가지로
+assignment 구조를 모르는 순수 집계 로직)를 씁니다:
+
+```bash
+uv run python .claude/skills/assignment-stress-test/aggregate_results.py \
+  --prompts stress_test_prompts/<stem>/prompts.jsonl \
+  --results stress_test_prompts/<stem>/results_history/<이번 타임스탬프>.jsonl \
+  --previous stress_test_prompts/<stem>/results_history/<직전 타임스탬프>.jsonl   # 있으면
+```
+
+- `--previous`를 주면 회귀(저번엔 A tool, 이번엔 B tool) 자동 비교까지 나옵니다. 없으면 생략.
+- 불일치가 나와도 바로 "코드 버그"로 단정하지 않습니다. 오늘 실제로 겪은 함정:
+  - **schedule_id/request_id를 언급하는 단발성 프롬프트**는, 그 ID로 실제
+    뭔가를 미리 만들어두지 않았으면 "조회부터 하는" 게 정상(week03류 안전규칙이
+    의도한 동작)입니다 — 불일치로 잡혀도 버그 아닙니다. 이런 건 4단계에서
+    애초에 멀티턴(`conversation_group`)으로 설계해야 정확히 테스트됩니다.
+  - **경계값 카테고리에서 `tool_calls`가 아예 빈 배열**로 나오는 경우가 흔합니다
+    — LLM이 이상값(top_k=0, 음수 등)을 눈치채고 tool 호출 자체를 안 하는
+    경우가 많아서입니다. 이건 "validator가 막았다"는 증거가 아니라 "LLM이
+    tool을 안 불렀다"는 뜻이라 **validator 자체의 방어력은 검증 못한 것**입니다.
+    validator를 진짜 확인하려면 agent 경유 말고 tool 객체를 코드에서 직접
+    `.invoke({...이상값...})`해서 `ValidationError`가 나는지 별도로 확인해야
+    합니다.
 
 ## 출력 포맷
 
@@ -188,3 +217,12 @@ uv run python .claude/skills/assignment-stress-test/run_harness.py \
   `stress_test_prompts/*/results_history/` 패턴을 추가해둘 것).
 - 이 문서의 카테고리 이름·예시 문구·tool 이름은 모두 포맷 참고용 샘플입니다.
   실제 실행 시 1~4단계를 다시 계산해서 채웁니다.
+- `run_harness.py`는 항상 격리된 임시 DB/Chroma에서 실행되므로 실제 앱 데이터를
+  걱정할 필요 없습니다. 과거에(이 격리 로직 추가 전) 돌린 적이 있다면 그때
+  생긴 테스트용 대화/일정/참고자료가 실제 `data/`에 남아있을 수 있으니, 이
+  스킬을 오래 안 쓰다가 다시 쓸 때 `data/` 안에 낯선 테스트성 대화가 있는지
+  한 번 확인하는 게 안전합니다.
+- 2단계(캐시 재사용)와 6단계의 회귀 비교는 **같은 파일로 두 번 이상 실행해야만
+  실제로 타는 경로**입니다. 첫 실행에서는 이 두 경로가 전혀 검증되지 않으니,
+  캐시/회귀 기능이 중요한 상황이면 일부러 한 번 더 돌려서 재사용·회귀 탐지가
+  의도대로 되는지 확인하는 걸 권장합니다.

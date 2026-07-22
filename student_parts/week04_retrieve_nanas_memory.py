@@ -15,7 +15,11 @@ from fixed.app_store import AppSQLiteStore
 from fixed.reference_store import PersonalReferenceStore
 from fixed.session_scope import DEFAULT_SESSION_SCOPE, current_session_scope
 from student_parts.week01_wake_up_nana import join_system_prompt
-from student_parts.week03_build_nanas_logbook import week03_prompt_parts, week03_tools
+from student_parts.week03_build_nanas_logbook import (
+    WEEK03_TOOL_CALL_PROMPT,
+    week03_prompt_parts,
+    week03_tools,
+)
 
 
 REFERENCE_STORE = PersonalReferenceStore(CONFIG.chroma_dir)
@@ -407,11 +411,46 @@ def week04_system_prompt() -> str:
     return join_system_prompt(week04_prompt_parts())
 
 
+# week03의 WEEK03_TOOL_CALL_PROMPT 중 "우선순위/긴급도 신호 -> save_structured_request"
+# 문장만 골라내는 정확한 원문. week03 파일은 안 건드리고, week04에서 이 문장만 빼서
+# 아래 _PRIORITY_ROUTING_RULE로 다시 쓴다. week03 원문이 바뀌면 이 상수도 같이
+# 맞춰줘야 하므로, week04_prompt_parts()의 assert가 그 어긋남을 바로 잡아낸다.
+_LEGACY_PRIORITY_ROUTING_SENTENCE = (
+    "새로운 일정/할 일/알림을 저장할 때, 원문에 우선순위·긴급도 표현(무조건/꼭/반드시/중요/급하게/놓치면 안) "
+    "이나 이유 설명이 있으면 날짜·시간이 다 갖춰져 있어도 extract_schedule_request로 구조화하고, 그 결과 필드"
+    "(kind/title/date/start_time/end_time/members/priority/reason/original_text)를 save_structured_request "
+    "인자로 그대로 전달해 저장한다(구조화만 하고 저장을 생략하거나 personal_create_schedule로 대신 저장하지 "
+    "않는다). 그런 신호 없이 제목/날짜/시간/참석자만 있는 단순 개인 일정 생성 요청만 personal_create_schedule을 "
+    "쓴다. "
+)
+
+_PRIORITY_ROUTING_RULE = (
+    "새로운 일정/할 일/알림을 저장할 때, 원문에 우선순위·긴급도 표현(무조건/꼭/반드시/중요/급하게/놓치면 안)이나 "
+    "이유 설명이 있으면, 날짜·시간이 다 갖춰져 있어도 절대 personal_create_schedule을 바로 호출하지 않는다. "
+    "그 즉시 다음 두 단계를 순서대로 실행한다: ① extract_schedule_request(query=사용자 원문 그대로)를 호출해 "
+    "구조화하고, ② 그 결과 필드(kind/title/date/start_time/end_time/members/priority/reason/original_text)를 "
+    "그대로 save_structured_request 인자로 넘겨 저장한다. 이 두 단계를 건너뛰고 personal_create_schedule로 "
+    "대신 저장하는 것은 이 규칙 위반이다. 그런 신호가 전혀 없는, 제목/날짜/시간/참석자만 있는 단순 개인 일정 "
+    "생성 요청에서만 personal_create_schedule을 쓴다."
+)
+
+
 def week04_prompt_parts() -> list[str]:
     """1~4주차 system prompt 조각을 누적합니다."""
 
+    week03_parts = week03_prompt_parts()
+    patched_week03_parts = [
+        part.replace(_LEGACY_PRIORITY_ROUTING_SENTENCE, "") if part is WEEK03_TOOL_CALL_PROMPT else part
+        for part in week03_parts
+    ]
+    assert patched_week03_parts != week03_parts, (
+        "week03의 우선순위 라우팅 문장을 못 찾았습니다 — "
+        "student_parts/week03_build_nanas_logbook.py의 WEEK03_TOOL_CALL_PROMPT 원문이 바뀐 것 같습니다. "
+        "_LEGACY_PRIORITY_ROUTING_SENTENCE를 그 최신 문장에 맞춰 갱신하세요."
+    )
+
     return [
-        *week03_prompt_parts(),
+        *patched_week03_parts,
         (
             "질문 성격에 맞는 검색 tool을 먼저 고른다. "
             "개인 메모, 참고자료, 선호/취향처럼 자연어로 저장된 사실은 search_personal_references를 쓴다. "
@@ -423,6 +462,7 @@ def week04_prompt_parts() -> list[str]:
             "search_conversation_messages 결과는 assistant 발화만으로 사실을 확정하지 말고 "
             "user 발화 근거가 있는지 함께 확인한다."
         ),
+        _PRIORITY_ROUTING_RULE,
     ]
 
 
