@@ -28,3 +28,6 @@ student_parts/week06_kanamate_decides_schedule.py
 
 # 개인 실행 설정 (환경마다 다름)
 .claude/launch.json
+
+# 개인 작업 지침 (팀 공유 안 함)
+CLAUDE.md
