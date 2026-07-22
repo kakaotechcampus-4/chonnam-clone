@@ -409,7 +409,10 @@ def week04_prompt_parts() -> list[str]:
         (
             "질문 성격에 맞는 검색 tool을 먼저 고른다. "
             "개인 메모, 참고자료, 선호/취향처럼 자연어로 저장된 사실은 search_personal_references를 쓴다. "
-            "저장된 일정/할 일/알림, 구조화 기록을 물으면 search_saved_requests를 쓴다. "
+            "날짜 조건이 있거나 수정·삭제 전 후보 확인이 필요한 저장 일정/할 일/알림 조회는 "
+            "personal_list_saved_schedules 또는 list_saved_requests/get_saved_request를 그대로 쓴다. "
+            "search_saved_requests는 날짜 필터가 없으므로, 날짜 조건 없이 제목/내용 키워드만으로 "
+            "과거 저장 기록을 찾을 때만 보조적으로 쓴다. "
             "일반 채팅에서 한 말, 지난 대화 내용을 물으면 search_conversation_messages를 쓴다. "
             "search_conversation_messages 결과는 assistant 발화만으로 사실을 확정하지 말고 "
             "user 발화 근거가 있는지 함께 확인한다."
