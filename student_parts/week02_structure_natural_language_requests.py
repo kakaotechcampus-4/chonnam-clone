@@ -200,10 +200,12 @@ class StructuredRequestBatch(BaseModel):
 def _coerce_structured_request(value: Any) -> StructuredRequest:
     """LangChain structured output 결과를 StructuredRequest로 정규화합니다."""
 
-    if value == StructuredRequest:  # value가 이미 StructuredRequest이면 그대로 반환
-        return StructuredRequest
-    elif value == dict:  # value가 dict이면 검증 후 반환
-        StructuredRequest.model_validate
+    if isinstance(
+        value, StructuredRequest
+    ):  # value가 이미 StructuredRequest이면 그대로 반환
+        return value
+    elif isinstance(value, dict):  # value가 dict이면 검증 후 반환
+        return StructuredRequest.model_validate(value)
     else:  # 이외에는 에러 발생
         raise RuntimeError
 
