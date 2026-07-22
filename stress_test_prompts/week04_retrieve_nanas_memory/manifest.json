@@ -1,0 +1,20 @@
+{
+  "source_file": "student_parts/week04_retrieve_nanas_memory.py",
+  "generated_at": "2026-07-22T19:50:00+09:00",
+  "tool_signatures": {
+    "personal_create_schedule": "sha256:8bc9856b2b8ff2f2",
+    "personal_list_schedules": "sha256:95c4ff4adaff5683",
+    "personal_delete_schedule": "sha256:426d8e4c16a0f0d6",
+    "extract_schedule_request": "sha256:5badbc23bc26f80f",
+    "save_structured_request": "sha256:eb0d04728e3f0926",
+    "list_saved_requests": "sha256:19e1cc15de61c40d",
+    "get_saved_request": "sha256:cc341d382aa4c7b7",
+    "personal_list_saved_schedules": "sha256:c6d65fa869e88a7f",
+    "personal_update_saved_schedule": "sha256:b4574962b8a9dda9",
+    "personal_delete_saved_schedules": "sha256:2371d40f3941ce7d",
+    "add_personal_reference": "sha256:aea5d7cd18bf9799",
+    "search_personal_references": "sha256:467572f9716e5284",
+    "search_saved_requests": "sha256:327ed608a99d06d5",
+    "search_conversation_messages": "sha256:1bf267567bf3a4e9"
+  }
+}

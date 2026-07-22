@@ -15,7 +15,11 @@ from fixed.app_store import AppSQLiteStore
 from fixed.reference_store import PersonalReferenceStore
 from fixed.session_scope import DEFAULT_SESSION_SCOPE, current_session_scope
 from student_parts.week01_wake_up_nana import join_system_prompt
-from student_parts.week03_build_nanas_logbook import week03_prompt_parts, week03_tools
+from student_parts.week03_build_nanas_logbook import (
+    WEEK03_TOOL_CALL_PROMPT,
+    week03_prompt_parts,
+    week03_tools,
+)
 
 
 REFERENCE_STORE = PersonalReferenceStore(CONFIG.chroma_dir)
@@ -225,8 +229,16 @@ def add_personal_reference_dict(
 ) -> dict[str, Any]:
     """개인 참고자료를 vector store에 추가하고 backend 정보를 반환합니다."""
 
-    # TODO: PersonalReferenceStore.add_personal_reference(...)로 개인 참고자료를 저장하세요.
-    ...
+    saved = reference_store.add_personal_reference(title, content, tags or [])
+    return {
+        "reference_backend": saved["backend"],
+        "reference": {
+            "reference_id": saved["reference_id"],
+            "title": saved["title"],
+            "content": saved["content"],
+            "tags": saved["tags"],
+        },
+    }
 
 
 def search_personal_reference_hits(
@@ -237,8 +249,17 @@ def search_personal_reference_hits(
 ) -> list[dict[str, Any]]:
     """ChromaDB 검색 결과를 tool이 바로 반환하기 쉬운 hit 구조로 정리합니다."""
 
-    # TODO: 개인 참고자료 검색 결과를 id/content/distance/metadata 구조로 정리하세요.
-    ...
+    raw_hits = reference_store.search_personal_references(query, limit=top_k)
+    return [
+        {
+            "source": "personal_reference",
+            "id": hit["id"],
+            "content": hit["content"],
+            "distance": hit["distance"],
+            "metadata": {"title": hit["title"], "tags": hit["tags"]},
+        }
+        for hit in raw_hits
+    ]
 
 
 def search_saved_request_rows(
@@ -249,8 +270,10 @@ def search_saved_request_rows(
 ) -> list[dict[str, Any]]:
     """SQLite 저장 요청을 검색하고 실제 검색 결과만 반환합니다."""
 
-    # TODO: AppSQLiteStore.search_saved_requests(...)로 저장 요청을 검색하세요.
-    ...
+    rows = sqlite_store.search_saved_requests(query, limit=top_k)
+    for row in rows:
+        row["members"] = _decode_attendees(row.get("members_json"))
+    return rows
 
 
 def search_conversation_messages_dict(
@@ -263,8 +286,22 @@ def search_conversation_messages_dict(
 ) -> dict[str, Any]:
     """SQLite 대화 목록을 lazy sync한 뒤 ChromaDB conversation RAG 결과를 반환합니다."""
 
-    # TODO: SQLite 대화 기록을 ConversationRAGStore에 lazy sync한 뒤 현재 대화를 제외하고 검색하세요.
-    ...
+    sync = conversation_rag_store.sync_from_sqlite(sqlite_store)
+    hits = conversation_rag_store.search(
+        query=query,
+        top_k=top_k,
+        conversation_id=conversation_id,
+        exclude_conversation_id=None if conversation_id else current_session_scope(),
+    )
+    for hit in hits:
+        hit["source"] = "conversation"
+    return {
+        "hits": hits,
+        "rows": hits,
+        "context": conversation_rag_store.context_from_hits(hits),
+        "rag_backend": conversation_rag_store.backend_info(),
+        "sync": sync,
+    }
 
 
 def search_conversation_message_rows(
@@ -276,32 +313,37 @@ def search_conversation_message_rows(
 ) -> list[dict[str, Any]]:
     """앱 SQLite에 저장된 일반 채팅 대화 청크를 RAG 검색합니다."""
 
-    # TODO: search_conversation_messages_dict(...) 결과에서 hits만 반환하세요.
-    ...
+    return search_conversation_messages_dict(
+        sqlite_store,
+        CONVERSATION_RAG_STORE,
+        query=query,
+        top_k=top_k,
+        conversation_id=conversation_id,
+    )["hits"]
 
 
 @tool(args_schema=AddPersonalReferenceInput)
 def add_personal_reference(title: str, content: str, tags: list[str] | None = None) -> str:
     """개인 참고자료를 ChromaDB에 추가합니다."""
 
-    # TODO: 개인 참고자료를 저장하고 JSON 문자열로 반환하세요.
-    ...
+    result = add_personal_reference_dict(REFERENCE_STORE, title=title, content=content, tags=tags)
+    return json_payload(result)
 
 
 @tool(args_schema=SearchPersonalReferencesInput)
 def search_personal_references(query: str, top_k: int = 2) -> str:
     """개인 참고자료를 ChromaDB와 OpenAI embedding 기반으로 검색합니다."""
 
-    # TODO: query/top_k로 개인 참고자료 vector store를 검색하고 top-level hits를 반환하세요.
-    ...
+    hits = search_personal_reference_hits(REFERENCE_STORE, query=query, top_k=safe_limit(top_k, default=2, maximum=20))
+    return json_payload({"hits": hits})
 
 
 @tool(args_schema=SearchSavedRequestsInput)
 def search_saved_requests(query: str, top_k: int = 3) -> str:
     """SQLite에 저장된 구조화 일정/할 일/알림 row를 검색합니다. query에는 LLM이 고른 일정/할 일/알림 핵심어를 넣습니다."""
 
-    # TODO: AppSQLiteStore.search_saved_requests(...)로 저장 요청을 검색하고 top-level rows를 반환하세요.
-    ...
+    rows = search_saved_request_rows(SQLITE_STORE, query=query, top_k=safe_limit(top_k, default=3, maximum=50))
+    return json_payload({"rows": rows})
 
 
 @tool(args_schema=SearchConversationMessagesInput)
@@ -312,8 +354,14 @@ def search_conversation_messages(
 ) -> str:
     """앱 SQLite 대화 목록을 대화 단위 ChromaDB RAG로 검색합니다. query에는 LLM이 고른 짧은 핵심 명사나 구를 넣습니다."""
 
-    # TODO: 앱 SQLite 대화 목록을 대화 단위 ChromaDB RAG로 검색하고 JSON 문자열로 반환하세요.
-    ...
+    result = search_conversation_messages_dict(
+        SQLITE_STORE,
+        CONVERSATION_RAG_STORE,
+        query=query,
+        top_k=safe_limit(top_k, default=5, maximum=50),
+        conversation_id=conversation_id,
+    )
+    return json_payload(result)
 
 
 @tool(args_schema=SearchNanaMemoryInput)
@@ -326,8 +374,24 @@ def search_nana_memory(
 ) -> str:
     """개인 참고자료와 SQLite 저장 일정을 한 번에 검색하고 일정 chunk를 반환합니다."""
 
-    # TODO: compatibility 통합 검색이 필요하면 개인 참고자료와 SQLite 일정 chunk를 함께 구성하세요.
-    ...
+    capped_limit = safe_limit(limit, default=5, maximum=20)
+    hits = search_personal_reference_hits(REFERENCE_STORE, query=query, top_k=capped_limit)
+    schedules = SQLITE_STORE.list_schedules(limit=capped_limit, date_from=date_from, date_to=date_to)
+    if attendee:
+        schedules = [s for s in schedules if attendee in s.get("attendees", [])]
+
+    lines = [f"[참고자료 {len(hits)}건]", *(hit["content"] for hit in hits)]
+    lines.append(f"[일정 {len(schedules)}건]")
+    lines.extend(f"{s.get('date')} {s.get('title')} (참석: {', '.join(s.get('attendees', []))})" for s in schedules)
+
+    return json_payload(
+        {
+            "reference_backend": REFERENCE_STORE.backend_info(),
+            "hits": hits,
+            "schedules": schedules,
+            "context": "\n".join(lines),
+        }
+    )
 
 def week04_tools() -> list[Any]:
     """3주차까지의 도구에 4주차 RAG 도구를 누적한 목록입니다."""
@@ -347,12 +411,58 @@ def week04_system_prompt() -> str:
     return join_system_prompt(week04_prompt_parts())
 
 
+# week03의 WEEK03_TOOL_CALL_PROMPT 중 "우선순위/긴급도 신호 -> save_structured_request"
+# 문장만 골라내는 정확한 원문. week03 파일은 안 건드리고, week04에서 이 문장만 빼서
+# 아래 _PRIORITY_ROUTING_RULE로 다시 쓴다. week03 원문이 바뀌면 이 상수도 같이
+# 맞춰줘야 하므로, week04_prompt_parts()의 assert가 그 어긋남을 바로 잡아낸다.
+_LEGACY_PRIORITY_ROUTING_SENTENCE = (
+    "새로운 일정/할 일/알림을 저장할 때, 원문에 우선순위·긴급도 표현(무조건/꼭/반드시/중요/급하게/놓치면 안) "
+    "이나 이유 설명이 있으면 날짜·시간이 다 갖춰져 있어도 extract_schedule_request로 구조화하고, 그 결과 필드"
+    "(kind/title/date/start_time/end_time/members/priority/reason/original_text)를 save_structured_request "
+    "인자로 그대로 전달해 저장한다(구조화만 하고 저장을 생략하거나 personal_create_schedule로 대신 저장하지 "
+    "않는다). 그런 신호 없이 제목/날짜/시간/참석자만 있는 단순 개인 일정 생성 요청만 personal_create_schedule을 "
+    "쓴다. "
+)
+
+_PRIORITY_ROUTING_RULE = (
+    "새로운 일정/할 일/알림을 저장할 때, 원문에 우선순위·긴급도 표현(무조건/꼭/반드시/중요/급하게/놓치면 안)이나 "
+    "이유 설명이 있으면, 날짜·시간이 다 갖춰져 있어도 절대 personal_create_schedule을 바로 호출하지 않는다. "
+    "그 즉시 다음 두 단계를 순서대로 실행한다: ① extract_schedule_request(query=사용자 원문 그대로)를 호출해 "
+    "구조화하고, ② 그 결과 필드(kind/title/date/start_time/end_time/members/priority/reason/original_text)를 "
+    "그대로 save_structured_request 인자로 넘겨 저장한다. 이 두 단계를 건너뛰고 personal_create_schedule로 "
+    "대신 저장하는 것은 이 규칙 위반이다. 그런 신호가 전혀 없는, 제목/날짜/시간/참석자만 있는 단순 개인 일정 "
+    "생성 요청에서만 personal_create_schedule을 쓴다."
+)
+
+
 def week04_prompt_parts() -> list[str]:
     """1~4주차 system prompt 조각을 누적합니다."""
 
+    week03_parts = week03_prompt_parts()
+    patched_week03_parts = [
+        part.replace(_LEGACY_PRIORITY_ROUTING_SENTENCE, "") if part is WEEK03_TOOL_CALL_PROMPT else part
+        for part in week03_parts
+    ]
+    assert patched_week03_parts != week03_parts, (
+        "week03의 우선순위 라우팅 문장을 못 찾았습니다 — "
+        "student_parts/week03_build_nanas_logbook.py의 WEEK03_TOOL_CALL_PROMPT 원문이 바뀐 것 같습니다. "
+        "_LEGACY_PRIORITY_ROUTING_SENTENCE를 그 최신 문장에 맞춰 갱신하세요."
+    )
+
     return [
-        *week03_prompt_parts(),
-        # TODO: Week 4 Nana memory agent system prompt를 자유롭게 추가하세요.
+        *patched_week03_parts,
+        (
+            "질문 성격에 맞는 검색 tool을 먼저 고른다. "
+            "개인 메모, 참고자료, 선호/취향처럼 자연어로 저장된 사실은 search_personal_references를 쓴다. "
+            "날짜 조건이 있거나 수정·삭제 전 후보 확인이 필요한 저장 일정/할 일/알림 조회는 "
+            "personal_list_saved_schedules 또는 list_saved_requests/get_saved_request를 그대로 쓴다. "
+            "search_saved_requests는 날짜 필터가 없으므로, 날짜 조건 없이 제목/내용 키워드만으로 "
+            "과거 저장 기록을 찾을 때만 보조적으로 쓴다. "
+            "일반 채팅에서 한 말, 지난 대화 내용을 물으면 search_conversation_messages를 쓴다. "
+            "search_conversation_messages 결과는 assistant 발화만으로 사실을 확정하지 말고 "
+            "user 발화 근거가 있는지 함께 확인한다."
+        ),
+        _PRIORITY_ROUTING_RULE,
     ]
 
 
