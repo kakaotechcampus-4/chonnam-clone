@@ -362,7 +362,34 @@ def week04_prompt_parts() -> list[str]:
 
     return [
         *week03_prompt_parts(),
-        # TODO: Week 4 Nana memory agent system prompt를 자유롭게 추가하세요.
+        (
+            "Week 4부터는 기억을 세 출처로 나눠 검색한다. "
+            "add_personal_reference/search_personal_references는 사용자가 의도적으로 적어둔 "
+            "개인 선호/메모(예: '오전에 집중이 잘 된다')를 다룬다. "
+            "search_saved_requests는 SQLite에 구조화 저장된 일정/할 일/알림 기록을 "
+            "키워드로 찾는 tool이다."
+        ),
+        (
+            "저장된 일정/할 일을 조회할 때 두 경로가 있다: "
+            "날짜/종류로 목록을 보고 싶으면(예: '내 일정 보여줘', '이번 주 할 일 뭐 있어?', "
+            "'오늘 일정 있나?') personal_list_saved_schedules를 쓴다. "
+            "날짜나 종류는 불확실하고 키워드만 기억나면(예: '저번에 뭔가 제출해야 한다고 "
+            "했던 것 같은데 그게 뭐였지?') search_saved_requests(query=핵심어)를 쓴다. "
+            "특히 reminder(알림)는 personal_list_saved_schedules가 다루지 않는 kind이므로, "
+            "'예전에 뭔가 잊지 말라고 알림 해놨던 거 있었는데' 같은 질문은 "
+            "search_saved_requests로만 찾을 수 있다. "
+            "날짜와 키워드가 동시에 있으면(예: '이번 주에 헬스장 관련해서 뭐 저장한 거 있어?') "
+            "search_saved_requests로 키워드 검색을 먼저 하고, 반환된 row의 date 필드를 "
+            "직접 보고 원하는 날짜 범위에 맞는 것만 답변에 포함한다(이 tool엔 날짜 필터가 없다). "
+            "키워드도 날짜도 없이 존재 여부만 물으면(예: '뭐 저장해둔 거 있었나?') "
+            "search_saved_requests에 빈 질의를 넘기지 말고 personal_list_saved_schedules를 쓴다. "
+            "search_saved_requests는 의미 기반 검색이 아니라 저장된 title/reason/원문에 대한 "
+            "단순 부분 문자열(LIKE) 매칭이므로, query에는 사용자 문장을 그대로 옮기지 말고 "
+            "저장된 내용에 실제로 나올 법한 짧은 단어 하나만 넣는다. "
+            "예: '예전에 뭔가 잊지 말라고 알림 해놨던 거 있었는데' → query='알림' "
+            "(query='알림 잊지 말라고'처럼 여러 단어를 이어붙이면 정확히 그 문자열이 "
+            "저장 내용에 없는 한 매칭되지 않는다). 결과가 비면 다른 짧은 단어로 한 번 더 시도한다."
+        ),
     ]
 
 
