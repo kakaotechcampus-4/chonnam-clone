@@ -267,7 +267,7 @@ def search_saved_request_rows(
     """SQLite 저장 요청을 검색하고 실제 검색 결과만 반환합니다."""
 
     # TODO: AppSQLiteStore.search_saved_requests(...)로 저장 요청을 검색하세요.
-    return sqlite_store.search_saved_requests(query, kind = None, limit = top_k)
+    return sqlite_store.search_saved_requests(query, kind=None, limit=top_k)
 
 
 def search_conversation_messages_dict(
@@ -316,12 +316,14 @@ def search_personal_references(query: str, top_k: int = 2) -> str:
     """개인 참고자료를 ChromaDB와 OpenAI embedding 기반으로 검색합니다."""
 
     # TODO: query/top_k로 개인 참고자료 vector store를 검색하고 top-level hits를 반환하세요.
+    if not query.strip():
+        return json_payload({"hits":[]})
     return json_payload(
         {
             "hits": search_personal_reference_hits(
                 REFERENCE_STORE,
                 query=query,
-                top_k=safe_limit(top_k, default=2, maximum=20), q
+                top_k=safe_limit(top_k, default=2, maximum=20),
             )
         }
     )
@@ -332,10 +334,10 @@ def search_saved_requests(query: str, top_k: int = 3) -> str:
     """SQLite에 저장된 구조화 일정/할 일/알림 row를 검색합니다. query에는 LLM이 고른 일정/할 일/알림 핵심어를 넣습니다."""
 
     # TODO: AppSQLiteStore.search_saved_requests(...)로 저장 요청을 검색하고 top-level rows를 반환하세요.
-    rows = search_saved_request_rows(SQLITE_STORE, query = query, top_k=safe_limit(top_k,default = 3, maximum = 50))
+    rows = search_saved_request_rows(
+        SQLITE_STORE, query=query, top_k=safe_limit(top_k, default=3, maximum=50)
+    )
     return json_payload({"rows": rows})
-    
-                                        
 
 
 @tool(args_schema=SearchConversationMessagesInput)
@@ -387,7 +389,17 @@ def week04_prompt_parts() -> list[str]:
 
     return [
         *week03_prompt_parts(),
-        # TODO: Week 4 Nana memory agent system prompt를 자유롭게 추가하세요.
+        "add_personal_reference/search_personal_references는 개인 참고자료를 다룬다.",
+        "search_saved_requests는 SQLite에 저장된 일정/할 일/알림 기록을 다룬다.",
+        "search_conversation_messages는 앱에 저장된 일반 대화 발화를 다룬다.",
+        "'~해 참고해', '~알아둬', '기억해줘'처럼 날짜/시간이 없는 배경 지식이나 규칙은 add_personal_reference로 저장한다.",
+        "'주중에는 15시부터 18시까지 항상 모각코일정이 있어 참고해' → add_personal_reference (반복되는 배경 규칙, 특정 날짜의 일정이 아님)",
+        "날짜나 시작 시간이 특정된 요청(예: '내일 3시에 병원 예약')은 지금까지처럼 Week 1~3 일정 저장 tool을 쓴다.",
+        "등록해둔 참고자료나 배경지식을 물으면 search_personal_references를 호출한다.",
+        "저장된 일정/할 일/알림 기록을 키워드로 찾아달라고 하면 search_saved_requests를 호출한다.",
+        "조건(kind/날짜)으로 목록을 보여달라는 요청은 지금까지처럼 list_saved_requests/personal_list_saved_schedules를 쓴다.",
+        "'내가 방금 뭐라고 했지', '아까 말한 거'처럼 일정/할 일/알림이 아닌 일반 대화 내용을 물으면 search_conversation_messages를 호출한다.",
+        "지금 나누고 있는 대화는 이미 문맥에 있으므로 그 안에서 답하고, 이전 대화 세션의 발화를 찾을 때만 search_conversation_messages를 쓴다.",
     ]
 
 
