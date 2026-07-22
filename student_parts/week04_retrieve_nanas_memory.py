@@ -216,6 +216,63 @@ class SearchNanaMemoryInput(BaseModel):
     limit: int = Field(default=5, ge=1, le=20)
 
 
+# ============================================================================
+#  add_personal_reference 전체 호출 체인 다이어그램
+#
+#  도형 범례(diagram legend)
+#    ┌─────┐            ___
+#    │ 함수 │  = 함수/메서드   ( 배열 ) = 배열/리스트    /___/| = 저장소(DB)
+#    └─────┘            (_____)                  |   || = persistent
+#     .-.                                        |___|/   storage
+#    ( ☁ ) = 네트워크(외부 API)   [0.1, -0.4, ...] = 임베딩 벡터
+#     `-'
+# ----------------------------------------------------------------------------
+#
+#   ┌────────────────────────────────────────────────┐
+#   │ [tool]  add_personal_reference(title, content)  │  이 파일, LangChain tool
+#   └────────────────────────────────────────────────┘
+#                        │  호출
+#                        ▼
+#   ┌────────────────────────────────────────────────┐
+#   │ [helper] add_personal_reference_dict(store, ..) │  이 파일, tags=None -> []
+#   └────────────────────────────────────────────────┘
+#                        │  호출
+#                        ▼
+#   ┌────────────────────────────────────────────────┐
+#   │ [method] store.add_personal_reference(...)      │  fixed/reference_store.py:138
+#   └────────────────────────────────────────────────┘   PersonalReferenceStore 객체
+#            │                              │
+#            │ ① ID 생성                     │ ② 저장 요청
+#            ▼                              ▼
+#     ┌──────────────┐            ┌───────────────────────────┐
+#     │ new_id("ref")│            │ self.collection.add(       │
+#     └──────────────┘            │   ids, documents, metadata)│  ChromaDB Collection 객체
+#     "ref_xxxxxxxxxx"            └───────────────────────────┘
+#     (로컬 계산,                              │
+#      네트워크 없음)                           │ documents 를 벡터로 변환 요청
+#                                             ▼
+#                                    ┌──────────────────────────┐
+#                                    │ OpenAIEmbeddingFunction   │  fixed/reference_store.py:44
+#                                    │        .__call__()        │
+#                                    └──────────────────────────┘
+#                                             │
+#                                             ▼        .-~-.
+#                                         embeddings  ( ☁  ☁ )  OpenAI 임베딩 API
+#                                         .create()    `-~-~-'   (외부 네트워크 호출)
+#                                             │
+#                                             ▼
+#                                     [0.021, -0.44, 0.13, ...]  content 의 임베딩 벡터
+#                                             │
+#                                             ▼
+#                                            ___
+#                                           /___/|   ChromaDB persistent storage
+#                                           |   ||   id + 벡터 + document + metadata 저장
+#                                           |___|/
+#
+#   반환은 역순으로 거슬러 올라옵니다:
+#     storage 저장 완료 -> method 가 dict 반환 -> helper 가 그대로 전달
+#     -> tool 이 json_payload()로 JSON 문자열화 -> agent(LLM)에게 전달
+# ============================================================================
 def add_personal_reference_dict(
     reference_store: PersonalReferenceStore,
     *,
@@ -225,10 +282,57 @@ def add_personal_reference_dict(
 ) -> dict[str, Any]:
     """개인 참고자료를 vector store에 추가하고 backend 정보를 반환합니다."""
 
-    # TODO: PersonalReferenceStore.add_personal_reference(...)로 개인 참고자료를 저장하세요.
-    ...
+    return reference_store.add_personal_reference(title, content, tags or [])
 
 
+# ============================================================================
+#  search_personal_references 전체 호출 체인 다이어그램
+#  (add 는 "글 -> 벡터 -> 저장", search 는 "질문 -> 벡터 -> 유사도 비교 -> 결과" 로 방향이 반대)
+#
+#   ┌────────────────────────────────────────────────┐
+#   │ [tool]  search_personal_references(query,top_k) │  이 파일, LangChain tool
+#   └────────────────────────────────────────────────┘
+#                        │  safe_limit()으로 top_k 를 1~20 으로 보정
+#                        ▼
+#   ┌────────────────────────────────────────────────┐
+#   │ [helper] search_personal_reference_hits(...)    │  이 파일
+#   │          flat dict -> metadata 로 재포장          │
+#   └────────────────────────────────────────────────┘
+#                        │  호출
+#                        ▼
+#   ┌────────────────────────────────────────────────┐
+#   │ [method] store.search_personal_references(...)  │  fixed/reference_store.py:155
+#   └────────────────────────────────────────────────┘
+#                        │  질문(query)을 벡터로 변환 요청
+#                        ▼
+#     ┌───────────────────────────┐
+#     │ self.collection.query(     │  ChromaDB Collection 객체
+#     │   query_texts, n_results)  │
+#     └───────────────────────────┘
+#                        │
+#                        ▼
+#             OpenAIEmbeddingFunction        .-~-.
+#                  .__call__()  ─────────▶  ( ☁  ☁ )  OpenAI 임베딩 API
+#                        │                   `-~-~-'   (외부 네트워크 호출)
+#                        ▼
+#             [0.03, -0.51, 0.20, ...]  질문의 임베딩 벡터
+#                        │
+#                        ▼
+#                       ___
+#                      /___/|   ChromaDB persistent storage
+#                      |   ||   저장된 참고자료 벡터들과 거리(distance) 계산
+#                      |___|/   -> 가까운 top_k 개를 골라 반환
+#                        │
+#                        ▼
+#     반환된 배열 (flat dict 들):
+#     ( {id, title, content, tags, distance},  {..}, ... )
+#                        │  helper 가 metadata 로 재포장
+#                        ▼
+#     ( {id, content, distance, metadata:{title, tags}}, {..}, ... )
+#                        │  tool 이 {"hits": [...]} 로 감싸 json_payload()
+#                        ▼
+#             '{"hits": [...]}'  (JSON 문자열) -> agent(LLM)
+# ============================================================================
 def search_personal_reference_hits(
     reference_store: PersonalReferenceStore,
     *,
@@ -237,10 +341,82 @@ def search_personal_reference_hits(
 ) -> list[dict[str, Any]]:
     """ChromaDB 검색 결과를 tool이 바로 반환하기 쉬운 hit 구조로 정리합니다."""
 
-    # TODO: 개인 참고자료 검색 결과를 id/content/distance/metadata 구조로 정리하세요.
-    ...
+    raw_hits = reference_store.search_personal_references(query, limit=top_k)
+    hits: list[dict[str, Any]] = []
+    """
+    raw[key] 대신 raw.get(key)를 사용하는 이유.
+
+    1. 배경
+       raw는 reference_store.search_personal_references(...)가 반환하는 dict이며,
+       현재 구현에서는 title/content/tags/distance 키가 모두 존재한다.
+
+    2. raw[key] 방식의 문제
+       해당 키가 dict에 없을 경우 KeyError 예외를 발생시킨다.
+
+    3. raw.get(key, default) 사용 효과
+       키가 없을 때 예외를 발생시키지 않고 default 값을 반환한다.
+       reference_store 구현이 변경되어 특정 키가 누락되는 경우에도
+       for 루프 전체가 중단되지 않는다.
+
+    4. default 인자를 생략하는 경우
+       distance/id처럼 값이 없을 때 None을 허용하는 필드는 default 인자를 생략한
+       raw.get(key) 형태로 호출해 None을 그대로 반환하게 한다.
+    """
+    for raw in raw_hits:
+        hits.append(
+            {
+                "id": raw.get("id"),
+                "content": raw.get("content"),
+                "distance": raw.get("distance"),
+                "metadata": {
+                    "title": raw.get("title", ""),
+                    "tags": raw.get("tags", ""),
+                },
+            }
+        )
+    return hits
 
 
+# ============================================================================
+#  search_saved_requests 전체 호출 체인 다이어그램
+#
+#  도형 범례
+#    ┌─────┐              ___
+#    │ 함수 │  = 함수/메서드     /___/|  = 저장소(DB)
+#    └─────┘              |   ||
+#                         |___|/
+#    ( ... )  = 배열/리스트
+#
+#   ┌────────────────────────────────────────────┐
+#   │ [tool] search_saved_requests(query, top_k)  │  이 파일, LangChain tool
+#   └────────────────────────────────────────────┘
+#                     │  safe_limit()으로 top_k 보정
+#                     ▼
+#   ┌────────────────────────────────────────────┐
+#   │ [helper] search_saved_request_rows(...)     │  이 파일
+#   └────────────────────────────────────────────┘
+#                     │  호출
+#                     ▼
+#   ┌────────────────────────────────────────────┐
+#   │ [method] sqlite_store.search_saved_requests │  fixed/app_store.py:454
+#   │          (query, limit=top_k)               │  AppSQLiteStore 객체
+#   └────────────────────────────────────────────┘
+#                     │  SQL LIKE 조건 조립 후 실행
+#                     ▼
+#                    ___
+#                   /___/|   SQLite 파일(structured_requests 테이블)
+#                   |   ||   raw_json/title/reason 컬럼을 LIKE '%query%'로 조회
+#                   |___|/   (임베딩/외부 네트워크 호출 없음)
+#                     │
+#                     ▼
+#     ( {kind, title, raw_json, ...}, {..}, ... )   조회된 row 배열
+#                     │  helper 는 결과를 그대로 반환 (재포장 불필요)
+#                     ▼
+#     tool 이 {"rows": [...]} 로 감싸 json_payload()
+#                     │
+#                     ▼
+#             '{"rows": [...]}'  (JSON 문자열) -> agent(LLM)
+# ============================================================================
 def search_saved_request_rows(
     sqlite_store: AppSQLiteStore,
     *,
@@ -249,8 +425,23 @@ def search_saved_request_rows(
 ) -> list[dict[str, Any]]:
     """SQLite 저장 요청을 검색하고 실제 검색 결과만 반환합니다."""
 
-    # TODO: AppSQLiteStore.search_saved_requests(...)로 저장 요청을 검색하세요.
-    ...
+    """
+    sqlite_store.search_saved_requests(...) 결과를 재가공하지 않는 이유.
+
+    1. 반환 형식이 이미 일치한다.
+       fixed/app_store.py의 search_saved_requests(query, kind=None, limit=5)는
+       structured_requests 테이블의 row를 dict의 list로 반환한다.
+       이 파일의 계약(rows 배열)과 형식이 이미 일치하므로 추가 변환이 필요 없다.
+
+    2. search_personal_reference_hits와 차이가 있다.
+       참고자료 검색(search_personal_reference_hits)은 title/tags를 metadata로
+       옮기는 변환이 필요했지만, 이 함수는 그런 변환 없이 결과를 그대로 반환한다.
+
+    3. 검색 방식이 다르다.
+       query 문자열을 raw_json/title/reason 컬럼에 대해 SQL LIKE 연산으로 비교한다.
+       임베딩 계산이나 외부 API 호출은 발생하지 않는다.
+    """
+    return sqlite_store.search_saved_requests(query, limit=top_k)
 
 
 def search_conversation_messages_dict(
@@ -284,24 +475,71 @@ def search_conversation_message_rows(
 def add_personal_reference(title: str, content: str, tags: list[str] | None = None) -> str:
     """개인 참고자료를 ChromaDB에 추가합니다."""
 
-    # TODO: 개인 참고자료를 저장하고 JSON 문자열로 반환하세요.
-    ...
+    reference = add_personal_reference_dict(REFERENCE_STORE, title=title, content=content, tags=tags)
+    return json_payload(
+        {
+            "reference_backend": reference.get("backend"),
+            "reference": reference,
+        }
+    )
 
 
 @tool(args_schema=SearchPersonalReferencesInput)
 def search_personal_references(query: str, top_k: int = 2) -> str:
     """개인 참고자료를 ChromaDB와 OpenAI embedding 기반으로 검색합니다."""
 
-    # TODO: query/top_k로 개인 참고자료 vector store를 검색하고 top-level hits를 반환하세요.
-    ...
+    """
+    safe_limit(top_k, default=2, maximum=20) 인자 설명.
+
+    1. top_k
+       LLM 또는 호출자가 전달한 원본 값이다. SearchPersonalReferencesInput의
+       Field(ge=1, le=20)로 1차 검증되지만, 타입 변환이 필요한 값(문자열 "3" 등)이나
+       None이 인자로 전달될 가능성에 대비해 safe_limit 내부에서 int(top_k) 변환을 재실행한다.
+
+    2. default=2
+       int(top_k) 변환이 실패하거나 top_k가 None일 때 대체할 값이다.
+
+    3. maximum=20
+       top_k 값의 상한이다. collection.query(n_results=top_k) 호출 시
+       n_results가 과도하게 커지는 것을 제한한다.
+
+    4. safe_limit 함수의 처리 순서
+       (1) int(top_k) 변환을 시도하고, 실패하면 default를 사용한다.
+       (2) 변환에 성공한 값은 max(1, min(value, maximum)) 연산으로
+           1 이상 maximum 이하 범위로 제한한다.
+    """
+    hits = search_personal_reference_hits(
+        REFERENCE_STORE,
+        query=query,
+        top_k=safe_limit(top_k, default=2, maximum=20),
+    )
+    return json_payload({"hits": hits})
 
 
 @tool(args_schema=SearchSavedRequestsInput)
 def search_saved_requests(query: str, top_k: int = 3) -> str:
     """SQLite에 저장된 구조화 일정/할 일/알림 row를 검색합니다. query에는 LLM이 고른 일정/할 일/알림 핵심어를 넣습니다."""
 
-    # TODO: AppSQLiteStore.search_saved_requests(...)로 저장 요청을 검색하고 top-level rows를 반환하세요.
-    ...
+    """
+    safe_limit(top_k, default=3, maximum=50) 인자를 search_personal_references와
+    다르게 설정한 이유.
+
+    1. default=3이다.
+       search_personal_references의 default=2보다 크다. 저장 요청 검색은
+       문자열 포함 여부만 확인하는 LIKE 검색이므로, 결과에 관련 없는 항목이
+       섞일 가능성이 참고자료 벡터 검색보다 낮다.
+
+    2. maximum=50이다.
+       search_personal_references의 maximum=20보다 크다. structured_requests
+       테이블 조회는 벡터 유사도 계산을 거치지 않으므로, 결과 개수가 늘어나도
+       계산 비용이 크게 증가하지 않는다.
+    """
+    rows = search_saved_request_rows(
+        SQLITE_STORE,
+        query=query,
+        top_k=safe_limit(top_k, default=3, maximum=50),
+    )
+    return json_payload({"rows": rows})
 
 
 @tool(args_schema=SearchConversationMessagesInput)
