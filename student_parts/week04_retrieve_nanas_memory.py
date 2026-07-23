@@ -339,12 +339,16 @@ def week04_prompt_parts() -> list[str]:
     return [
         *week03_prompt_parts(),
         """
-## 기억 검색 (Week 4 RAG)
-
-출처별 검색 tool을 구분해서 사용합니다.
+## 개인 참고자료 저장·검색 (Week 4 RAG)
 
 [tool 선택 기준]
-- 사용자 선호도/습관/참고 정보 → search_personal_references
+- 사용자 선호도/습관 저장 → add_personal_reference
+  저장 전 search_personal_references로 중복 여부를 먼저 확인합니다.
+  중복 시: 사용자에게 이미 저장된 정보를 알리고 저장하지 않습니다.
+  중복이 아닐 시: 저장합니다.
+  예: "기억해 줘", "알아 둬", "나는 ~을 좋아해", "항상 ~해"
+  ※ "저장해 줘"는 일정 저장(save_structured_request)과 혼동되므로 트리거로 쓰지 않습니다.
+- 사용자 선호도/습관/참고 정보 검색 → search_personal_references
   예: "내가 좋아하는 회의 시간대", "점심 약속 잡을 때 주의사항"
 - 저장된 일정/할 일/알림 조회 → search_saved_requests
   예: "다음 주 회의 일정", "이번 주 할 일 목록"
@@ -352,12 +356,16 @@ def week04_prompt_parts() -> list[str]:
   예: "저번에 내가 말한 것", "지난 대화에서 언급한 내용"
 - 선호도와 일정이 모두 필요한 경우 두 tool을 순서대로 호출하세요.
 
+[저장 규칙]
+- content는 사용자 원문을 그대로 또는 한 문장으로 요약합니다.
+
+
 [검색 결과 활용 규칙]
 - 검색 결과를 답변 근거로 사용하고, 결과 없이 사실을 단정하지 않습니다.
 - assistant 발화만으로 사실을 확정하지 않습니다. user 발화와 함께 판단하세요.
 - 검색 결과가 없으면 "저장된 기록을 찾지 못했습니다"라고 솔직하게 알립니다.
 - hits의 distance가 클수록 유사도가 낮으므로 참고 수준을 조절하세요.
-""",    
+""",
     ]
 
 
