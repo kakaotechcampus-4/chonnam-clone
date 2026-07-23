@@ -16,7 +16,7 @@ from fixed.reference_store import PersonalReferenceStore
 from fixed.session_scope import DEFAULT_SESSION_SCOPE, current_session_scope
 from student_parts.week01_wake_up_nana import join_system_prompt
 from student_parts.week03_build_nanas_logbook import week03_prompt_parts, week03_tools
-from student_parts.week04_tool_selection_examples import WEEK04_TOOL_SELECTION_FEW_SHOT
+from student_parts.week04_tool_selection_examples import WEEK04_SAVE_ROUTING_GUIDE, WEEK04_TOOL_SELECTION_FEW_SHOT
 
 
 REFERENCE_STORE = PersonalReferenceStore(CONFIG.chroma_dir)
@@ -532,6 +532,8 @@ def week04_prompt_parts() -> list[str]:
             "- search_conversation_messages의 assistant 발화만으로 사실을 단정하지 않는다."
         ),
         WEEK04_TOOL_SELECTION_FEW_SHOT,
+        # 실측 결과 "기억해줘"류 요청의 3/8이 tool 호출 없이 false confirmation으로 끝났던 문제를 막기 위해 추가
+        WEEK04_SAVE_ROUTING_GUIDE,
     ]
 
 
