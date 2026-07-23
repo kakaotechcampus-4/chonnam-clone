@@ -85,4 +85,61 @@ finally:
     m.CONVERSATION_RAG_STORE.sync_from_sqlite(m.SQLITE_STORE)
 
 
+# (D) search_nana_memory: 개인 참고자료 + SQLite 일정 통합 검색 (week04_tools()에는 노출되지 않는 호환 tool이라 tool.invoke()로 직접 호출)
+MARKER_NANA_REF = "WEEK4VERIFY_NANA_REF_9f2a"
+MARKER_NANA_TITLE = "WEEK4VERIFY_NANA_SCHEDULE_9f2a"
+MARKER_NANA_ATTENDEE = "WEEK4VERIFY_NANA_ATTENDEE_9f2a"
+
+nana_add_result = json.loads(
+    m.add_personal_reference.invoke(
+        {
+            "title": "week4 nana_memory 검증용 참고자료",
+            "content": f"검증용 내용입니다. {MARKER_NANA_REF}",
+            "tags": [],
+        }
+    )
+)
+nana_reference_id = nana_add_result["reference"]["reference_id"]
+
+nana_save_result = json.loads(
+    save_structured_request.invoke(
+        {
+            "kind": "personal_schedule",
+            "title": MARKER_NANA_TITLE,
+            "date": "2026-08-01",
+            "members": [MARKER_NANA_ATTENDEE],
+        }
+    )
+)
+assert nana_save_result["ok"] is True, nana_save_result
+nana_schedule_id = next(row["id"] for row in nana_save_result["saved_rows"] if row["table"] == "schedules")
+
+try:
+    result = json.loads(
+        m.search_nana_memory.invoke(
+            {"query": MARKER_NANA_REF, "attendee": MARKER_NANA_ATTENDEE, "limit": 20}
+        )
+    )
+    assert result["ok"] is True, result
+    assert "reference_backend" in result and "context" in result, result
+
+    reference_hits = result["reference_hits"]
+    assert any(MARKER_NANA_REF in hit["content"] for hit in reference_hits), f"reference_hits에 마커가 없음: {reference_hits}"
+
+    chunks = result["chunks"]
+    assert chunks, "attendee 필터 적용 후 chunks가 비어 있음"
+    assert all(
+        MARKER_NANA_ATTENDEE in chunk["metadata"]["attendees"] for chunk in chunks
+    ), f"attendee 필터가 제대로 적용되지 않음: {chunks}"
+    assert any(
+        chunk["metadata"]["title"] == MARKER_NANA_TITLE for chunk in chunks
+    ), f"테스트 일정이 chunks에 없음: {chunks}"
+
+    assert MARKER_NANA_REF in result["context"] and MARKER_NANA_TITLE in result["context"], result["context"]
+    print("(D) search_nana_memory 검증 통과 - reference_hits/chunks/context 모두 마커 포함, attendee 필터 적용 확인")
+finally:
+    m.REFERENCE_STORE.collection.delete(ids=[nana_reference_id])
+    m.SQLITE_STORE.delete_schedule(nana_schedule_id)
+
+
 print("week04 메인/추가과제 검증 통과")

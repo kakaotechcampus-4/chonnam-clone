@@ -48,9 +48,13 @@
 
 9. **`search_conversation_messages` tool** — `top_k` clamp, `search_conversation_messages_dict(SQLITE_STORE, CONVERSATION_RAG_STORE, ...)` 호출, 결과 dict를 `ok`, `tool_name`, `query`, `top_k`와 함께 JSON payload에 펼쳐 넣음.
 
-**이번 범위에서 제외:** `search_nana_memory`는 현재 `...` stub 상태 그대로 둡니다 — 가이드상 "참고 코드"(compatibility helper)이며 핵심 구현 대상 4개(`add_personal_reference`, `search_personal_references`, `search_saved_requests`, `search_conversation_messages`)에 포함되지 않고, 사용자도 이번 작업에서는 구현하지 않기로 확인했습니다.
+10. **`search_nana_memory` tool** 
+    - `search_personal_reference_hits`로 개인 참고자료를 검색하고, `SQLITE_STORE.list_schedules(...)`로 일정 후보를 가져와 `attendee` 필터를 적용한 뒤 `_schedule_chunk(...)`로 chunk화합니다.
+    - 신규 internal helper 3개 추가: `_schedule_attendees(row)` (row의 attendees 정규화, 기존 `_decode_attendees` 재사용), `_schedule_chunk(row)` (일정 row를 id/content/metadata chunk로 변환), `_memory_context(reference_hits, schedule_chunks)` (참고자료 hit와 일정 chunk를 하나의 context 문자열로 결합).
+    - 반환 JSON에 `reference_backend`, `reference_hits`, `chunks`, `context`, `filters`를 포함해 가이드가 요구하는 "reference_backend와 context를 함께 확인하는 compatibility helper" 계약을 만족시킵니다.
+    - `week04_tools()`에는 추가하지 않습니다 — 다른 학생의 완성 참고 구현에서도 이 tool은 agent에 노출되지 않고 독립적으로만 존재했습니다 (호환용 별도 진입점 성격).
 
-10. **`week04_prompt_parts()`** — LLM이 `search_personal_references` / `search_saved_requests` / `search_conversation_messages` 중 상황에 맞는 tool을 고르도록, course의 출처 분리 의도(참고자료 vs 구조화된 DB 기록 vs 원본 채팅 기록)에 맞는 Week 4 전용 prompt 안내를 추가합니다.
+11. **`week04_prompt_parts()`** — LLM이 `search_personal_references` / `search_saved_requests` / `search_conversation_messages` 중 상황에 맞는 tool을 고르도록, course의 출처 분리 의도(참고자료 vs 구조화된 DB 기록 vs 원본 채팅 기록)에 맞는 Week 4 전용 prompt 안내를 추가합니다.
 
 ## 검증 방법
 
@@ -58,4 +62,5 @@
 - `build_week04_agent()`로 직접 확인: 개인 참고자료를 추가한 뒤 관련 질문을 던져서 `search_personal_references`가 호출되고, JSON 출력에 top-level `hits` 키가 있는지 확인합니다.
 - 이전에 저장한 일정/할 일에 대해 질문해서 `search_saved_requests`가 호출되고 top-level `rows` 키가 있는지 확인합니다.
 - (추가 과제) 일반 채팅 기록에 대해 질문해서 `search_conversation_messages`가 호출되고, JSON에 `hits`와 `rows`가 모두 있으며, 기본적으로 현재 대화 자신의 메시지는 제외되는지 확인합니다.
-- `week03_build_nanas_logbook.py`, `fixed/*.py`, `search_nana_memory`, 기타 무관한 파일은 건드리지 않았는지 확인합니다 — 이번 작업은 `week04_retrieve_nanas_memory.py`의 핵심 stub 4개(+ 내부 helper)로 범위가 한정됩니다.
+- `search_nana_memory`를 직접 호출해서 `reference_hits`/`chunks`/`context`/`reference_backend`가 모두 채워지는지, `attendee` 필터가 실제로 적용되는지 확인합니다.
+- `week03_build_nanas_logbook.py`, `fixed/*.py`, 기타 무관한 파일은 건드리지 않았는지 확인합니다 — 이번 작업은 `week04_retrieve_nanas_memory.py`의 stub 5개(+ 내부 helper)로 범위가 한정됩니다.

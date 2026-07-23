@@ -399,6 +399,55 @@ def search_conversation_messages(
     )
 
 
+def _schedule_attendees(row: dict[str, Any]) -> list[str]:
+    attendees = row.get("attendees")
+    if not isinstance(attendees, list):
+        attendees = _decode_attendees(row.get("attendees_json"))
+    return [str(attendee).strip() for attendee in attendees if str(attendee).strip()]
+
+
+def _schedule_chunk(row: dict[str, Any]) -> dict[str, Any]:
+    attendees = _schedule_attendees(row)
+    title = row.get("title") or ""
+    date = row.get("date") or "날짜 미정"
+    start_time = row.get("start_time") or "시간 미정"
+    end_time = row.get("end_time") or ""
+    time_range = f"{start_time}~{end_time}" if end_time else start_time
+    content_parts = [f"{date} {time_range}", title]
+    if attendees:
+        content_parts.append("참석자: " + ", ".join(attendees))
+    return {
+        "id": row.get("schedule_id", ""),
+        "content": " | ".join(part for part in content_parts if part),
+        "metadata": {
+            "schedule_id": row.get("schedule_id", ""),
+            "request_id": row.get("request_id", ""),
+            "title": title,
+            "date": row.get("date", ""),
+            "start_time": row.get("start_time", ""),
+            "end_time": row.get("end_time", ""),
+            "attendees": attendees,
+            "kind": row.get("request_kind", ""),
+        },
+    }
+
+
+def _memory_context(reference_hits: list[dict[str, Any]], schedule_chunks: list[dict[str, Any]]) -> str:
+    lines = ["[Nana memory 통합 검색 결과]"]
+    if reference_hits:
+        lines.append("[참고자료]")
+        for hit in reference_hits:
+            title = (hit.get("metadata") or {}).get("title", "")
+            lines.append(f"- {title}: {hit.get('content', '')}")
+    if schedule_chunks:
+        lines.append("[일정]")
+        for chunk in schedule_chunks:
+            lines.append(f"- {chunk.get('content', '')}")
+    if len(lines) == 1:
+        lines.append("검색된 결과가 없습니다.")
+    return "\n".join(lines)
+
+
 @tool(args_schema=SearchNanaMemoryInput)
 def search_nana_memory(
     query: str,
@@ -409,8 +458,47 @@ def search_nana_memory(
 ) -> str:
     """개인 참고자료와 SQLite 저장 일정을 한 번에 검색하고 일정 chunk를 반환합니다."""
 
-    # TODO: compatibility 통합 검색이 필요하면 개인 참고자료와 SQLite 일정 chunk를 함께 구성하세요.
-    ...
+    normalized_query = query.strip()
+    normalized_date_from = str(date_from or "").strip() or None
+    normalized_date_to = str(date_to or "").strip() or None
+    normalized_attendee = str(attendee or "").strip() or None
+    effective_limit = safe_limit(limit, default=5, maximum=20)
+
+    reference_hits = search_personal_reference_hits(REFERENCE_STORE, query=normalized_query, top_k=effective_limit)
+
+    candidate_limit = min(max(effective_limit * 10, 50), 200)
+    schedule_rows = SQLITE_STORE.list_schedules(
+        limit=candidate_limit,
+        date_from=normalized_date_from,
+        date_to=normalized_date_to,
+    )
+    if normalized_attendee:
+        attendee_key = normalized_attendee.casefold()
+        schedule_rows = [
+            row
+            for row in schedule_rows
+            if any(member.casefold() == attendee_key for member in _schedule_attendees(row))
+        ]
+    schedule_chunks = [_schedule_chunk(row) for row in schedule_rows[:effective_limit]]
+
+    return json_payload(
+        {
+            "ok": True,
+            "tool_name": "search_nana_memory",
+            "query": normalized_query,
+            "limit": effective_limit,
+            "filters": {
+                "date_from": normalized_date_from,
+                "date_to": normalized_date_to,
+                "attendee": normalized_attendee,
+                "limit": effective_limit,
+            },
+            "reference_backend": REFERENCE_STORE.backend_info(),
+            "reference_hits": reference_hits,
+            "chunks": schedule_chunks,
+            "context": _memory_context(reference_hits, schedule_chunks),
+        }
+    )
 
 def week04_tools() -> list[Any]:
     """3주차까지의 도구에 4주차 RAG 도구를 누적한 목록입니다."""
