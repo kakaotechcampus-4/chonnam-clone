@@ -387,7 +387,7 @@ def personal_create_schedule(
     sqlite_save = _store().save_structured_request(save_input.model_dump())
     
     #JSON 문자열 반환
-    return json_payload(tool_result("personal_create_schedule", ok=True, structured_request=created_schedule, sqlite_save=sqlite_save))
+    return json_payload(tool_result("personal_create_schedule", ok=True, created_schedule=created_schedule, structured_request=save_input.model_dump(), sqlite_save=sqlite_save))
 
 
 @tool(args_schema=SaveStructuredRequestInput) 
