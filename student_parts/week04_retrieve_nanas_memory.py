@@ -22,6 +22,7 @@ from student_parts.week04_tool_selection_examples import WEEK04_SAVE_ROUTING_GUI
 REFERENCE_STORE = PersonalReferenceStore(CONFIG.chroma_dir)
 SQLITE_STORE = AppSQLiteStore(CONFIG.app_db_path)
 CONVERSATION_RAG_STORE = ConversationRAGStore(CONFIG.chroma_dir)
+REFERENCE_BACKEND_INFO = REFERENCE_STORE.backend_info()
 _WEEK04_AGENT: Any | None = None
 
 
@@ -228,7 +229,7 @@ def add_personal_reference_dict(
 
     if tags is None: tags = []
     ref_store_dict = reference_store.add_personal_reference(title, content, tags)
-    return {"reference_backend": ref_store_dict["backend"], "reference" : ref_store_dict}
+    return {"reference_backend": REFERENCE_BACKEND_INFO, "reference" : ref_store_dict}
 
 
 def search_personal_reference_hits(
@@ -347,7 +348,7 @@ def search_personal_references(query: str, top_k: int = 2) -> str:
             "tool_name": "search_personal_references",
             "query": normalized_query,
             "top_k": limit,
-            "reference_backend": REFERENCE_STORE.backend_info(),
+            "reference_backend": REFERENCE_BACKEND_INFO,
             "hits": hits,
         }
     )
@@ -493,7 +494,7 @@ def search_nana_memory(
                 "attendee": normalized_attendee,
                 "limit": effective_limit,
             },
-            "reference_backend": REFERENCE_STORE.backend_info(),
+            "reference_backend": REFERENCE_BACKEND_INFO,
             "reference_hits": reference_hits,
             "chunks": schedule_chunks,
             "context": _memory_context(reference_hits, schedule_chunks),
