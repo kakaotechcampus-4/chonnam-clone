@@ -237,15 +237,22 @@ def search_personal_reference_hits(
     """ChromaDB 검색 결과를 tool이 바로 반환하기 쉬운 hit 구조로 정리합니다."""
 
     raw_hits = reference_store.search_personal_references(query, limit=top_k)
-    return [
-        {
-            "id": hit.get("id"),
-            "content": hit.get("content"),
-            "distance": hit.get("distance"),
-            "metadata": {"title": hit.get("title", ""), "tags": hit.get("tags", "")},
-        }
-        for hit in raw_hits
-    ]
+    results = []
+    for hit in raw_hits:
+        # ChromaDB metadata는 스칼라 값만 저장 가능해서, PersonalReferenceStore가 tags list를
+        # ","로 이어붙인 문자열로 저장한다(fixed/reference_store.py). 검색 결과에서는 그 문자열을
+        # 다시 list로 풀어서, add_personal_reference의 반환값(tags: list)과 타입을 맞춘다.
+        raw_tags = hit.get("tags", "") or ""
+        tags = [tag for tag in raw_tags.split(",") if tag]
+        results.append(
+            {
+                "id": hit.get("id"),
+                "content": hit.get("content"),
+                "distance": hit.get("distance"),
+                "metadata": {"title": hit.get("title", ""), "tags": tags},
+            }
+        )
+    return results
 
 
 def search_saved_request_rows(
@@ -361,7 +368,7 @@ def week04_tools() -> list[Any]:
         add_personal_reference,
         search_personal_references,
         search_saved_requests,
-        search_conversation_messages,
+        # search_conversation_messages,
     ]
 
 
