@@ -18,9 +18,16 @@ from student_parts.week01_wake_up_nana import join_system_prompt
 from student_parts.week03_build_nanas_logbook import week03_prompt_parts, week03_tools
 
 
-REFERENCE_STORE = PersonalReferenceStore(CONFIG.chroma_dir)
-SQLITE_STORE = AppSQLiteStore(CONFIG.app_db_path)
-CONVERSATION_RAG_STORE = ConversationRAGStore(CONFIG.chroma_dir)
+class Stores:
+    """앱 저장소 세 개를 한 덩어리로 묶어, 테스트가 하나만 교체하면 되게 한다."""
+
+    def __init__(self, chroma_dir: str, app_db_path: str) -> None:
+        self.reference = PersonalReferenceStore(chroma_dir)
+        self.sqlite = AppSQLiteStore(app_db_path)
+        self.conversation = ConversationRAGStore(chroma_dir)
+
+
+STORES = Stores(CONFIG.chroma_dir, CONFIG.app_db_path)
 _WEEK04_AGENT: Any | None = None
 
 
@@ -298,7 +305,7 @@ def search_conversation_message_rows(
 
     return search_conversation_messages_dict(
         sqlite_store,
-        CONVERSATION_RAG_STORE,
+        STORES.conversation,
         query=query,
         top_k=top_k,
         conversation_id=conversation_id,
@@ -309,7 +316,7 @@ def search_conversation_message_rows(
 def add_personal_reference(title: str, content: str, tags: list[str] | None = None) -> str:
     """개인 참고자료를 ChromaDB에 추가합니다."""
 
-    result = add_personal_reference_dict(REFERENCE_STORE, title=title, content=content, tags=tags)
+    result = add_personal_reference_dict(STORES.reference, title=title, content=content, tags=tags)
     return json_payload({"ok": True, "tool_name": "add_personal_reference", **result})
 
 
@@ -318,7 +325,7 @@ def search_personal_references(query: str, top_k: int = 2) -> str:
     """개인 참고자료를 ChromaDB와 OpenAI embedding 기반으로 검색합니다."""
 
     top_k = safe_limit(top_k, default=2, maximum=20)
-    hits = search_personal_reference_hits(REFERENCE_STORE, query=query, top_k=top_k)
+    hits = search_personal_reference_hits(STORES.reference, query=query, top_k=top_k)
     return json_payload({"ok": True, "tool_name": "search_personal_references", "hits": hits})
 
 
@@ -327,7 +334,7 @@ def search_saved_requests(query: str, top_k: int = 3) -> str:
     """SQLite에 저장된 구조화 일정/할 일/알림 row를 검색합니다. query에는 LLM이 고른 일정/할 일/알림 핵심어를 넣습니다."""
 
     top_k = safe_limit(top_k, default=3, maximum=50)
-    rows = search_saved_request_rows(SQLITE_STORE, query=query, top_k=top_k)
+    rows = search_saved_request_rows(STORES.sqlite, query=query, top_k=top_k)
     return json_payload({"ok": True, "tool_name": "search_saved_requests", "rows": rows})
 
 
@@ -341,8 +348,8 @@ def search_conversation_messages(
 
     top_k = safe_limit(top_k, default=5, maximum=50)
     result = search_conversation_messages_dict(
-        SQLITE_STORE,
-        CONVERSATION_RAG_STORE,
+        STORES.sqlite,
+        STORES.conversation,
         query=query,
         top_k=top_k,
         conversation_id=conversation_id,
