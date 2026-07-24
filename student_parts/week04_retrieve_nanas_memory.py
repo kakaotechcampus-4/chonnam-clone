@@ -225,6 +225,14 @@ def add_personal_reference_dict(
     """개인 참고자료를 vector store에 추가하고 backend 정보를 반환합니다."""
     # PersonalReferenceStore.add_personal_reference(...)로 개인 참고자료를 저장
     # tags가 None이면 빈 리스트로 변경
+
+    # 가드 추가
+
+    if not title.strip():
+        raise ValueError("title is empty")
+    if not content.strip():
+        raise ValueError("content is empty")
+
     saved = reference_store.add_personal_reference(
         title=title, content=content, tags=tags or []
     )
@@ -242,23 +250,38 @@ def search_personal_reference_hits(
     top_k: int = 2,
 ) -> list[dict[str, Any]]:
     """ChromaDB 검색 결과를 tool이 바로 반환하기 쉬운 hit 구조로 정리합니다."""
+
+    # 가드 추가
+    if not query.strip():
+        raise ValueError("query is empty")
+
     # query와 top_k로 ChromaDB 개인 참고자료를 검색
     hits = reference_store.search_personal_references(query=query, limit=top_k)
 
     # course repo 기준 계약에 맞게 top-level {"hits": [...]} JSON을 반환
     # hit에 id, content, distance, metadata(title/tags)
-    return [
-        {
-            "id": hit.get("id"),
-            "content": hit.get("content"),
-            "distance": hit.get("distance"),
-            "metadata": {
-                "title": hit.get("title", ""),
-                "tags": hit.get("tags", ""),
-            },
-        }
-        for hit in hits
-    ]
+
+    result = []
+    for hit in hits:
+        # id 가 None이면 제외
+        if hit.get("id") is None:
+            continue
+        # tags를 컴마 단위로 쪼개는 방법을 선택
+
+        raw_tags = hit.get("tags", "")
+        result.append(
+            {
+                "id": hit.get("id"),
+                "content": hit.get("content"),
+                "distance": hit.get("distance"),
+                "metadata": {
+                    "title": hit.get("title", ""),
+                    "tags": raw_tags.split(",") if raw_tags else [],
+                },
+            }
+        )
+
+    return result
 
 
 def search_saved_request_rows(
@@ -270,7 +293,21 @@ def search_saved_request_rows(
     """SQLite 저장 요청을 검색하고 실제 검색 결과만 반환합니다."""
 
     # SQLITE_STORE.search_saved_requests(query, limit)를 호출 후 반환
-    return sqlite_store.search_saved_requests(query=query, limit=top_k)
+    rows = sqlite_store.search_saved_requests(query=query, limit=top_k)
+    return [
+        {
+            "request_id": row.get("request_id"),
+            "kind": row.get("kind"),
+            "title": row.get("title"),
+            "date": row.get("date"),
+            "start_time": row.get("start_time"),
+            "end_time": row.get("end_time"),
+            "attendees": _decode_attendees(row.get("members_json")),
+            "priority": row.get("priority"),
+            "reason": row.get("reason"),
+        }
+        for row in rows
+    ]
 
 
 def search_conversation_messages_dict(
@@ -370,7 +407,6 @@ def week04_tools() -> list[Any]:
         add_personal_reference,
         search_personal_references,
         search_saved_requests,
-        search_conversation_messages,
     ]
 
 
@@ -385,7 +421,24 @@ def week04_prompt_parts() -> list[str]:
 
     return [
         *week03_prompt_parts(),
-        # TODO: Week 4 Nana memory agent system prompt를 자유롭게 추가하세요.
+        """
+        너는 Week 4 Nana 개인 기억 agent다.
+        Nana가 다루는 개인 기억은 출처가 서로 다른 두 종류로 나뉜다.
+
+        1) 개인 참고자료 
+           - 사용자가 "나는 ~를 선호한다", "~는 되도록 피해줘" 같은 개인적인 선호나 습관을 알려주면
+             add_personal_reference로 title/content(/tags)를 저장한다.
+           - 일정을 잡거나 추천할 때 참고할 개인 선호가 필요하면 search_personal_references로 검색한다.
+
+        2) 저장된 구조화 일정/할 일/알림 기록
+           - "저번에 저장한 회의 뭐였지", "그 할 일 언제로 잡았었지"처럼 과거에 저장된 구체적인
+             일정/할 일/알림 기록을 확인해야 하면 search_saved_requests로 검색한다.
+
+        질문이 개인 선호/습관에 관한 것이면 search_personal_references를,
+        과거에 저장한 구체적인 일정/할 일/알림 기록에 관한 것이면 search_saved_requests를 사용한다.
+        둘 다 관련 있어 보이면 두 tool을 모두 호출해서 근거를 모은 뒤 답한다.
+        검색 결과가 없으면 없다고 솔직히 말하고, 근거 없는 내용을 지어내지 않는다.
+    """,
     ]
 
 
