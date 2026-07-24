@@ -30,14 +30,18 @@ WEEK04_MEMORY_PROMPT = """
   새 일정/할 일/알림 생성 요청과 혼동하지 않는다.
 - "내가 예전에 적어둔 선호/규칙/메모"에 관한 질문이면 search_personal_references를 호출해
   개인 참고자료(vector store)에서 근거를 찾는다.
-- "내가 저장/등록해둔 일정, 할 일, 알림"에 관한 질문이면 search_saved_requests를 호출해
-  SQLite에 저장된 구조화 기록에서 근거를 찾는다.
+- "저장해둔 일정/할 일/알림 중에 [키워드]가 들어간 거 찾아줘"처럼 특정 단어나 문구로
+  관련 기록을 찾을 때는 search_saved_requests를 호출한다.
+- "이번 주 일정 보여줘", "오늘 할 일 목록" 처럼 날짜/기간/종류 조건으로 저장된 일정 목록을 조회할 때는
+  search_saved_requests가 아니라 personal_list_saved_schedules를 호출한다.
 
-- 두 출처가 모두 관련 있어 보이면(예: 저장해둔 선호 시간대를 참고해서 일정을 추천해야 하는 경우)
-  두 tool을 모두 호출해 근거를 모은 뒤 답한다.
+- 개인 참고자료와 저장된 일정 기록이 모두 관련 있어 보이면(예: 저장해둔 선호 시간대를 참고해서 일정 시간을 추천해야 하는 경우),
+  search_personal_references와 함께 상황에 맞는 저장 일정 tool(키워드로 찾을 땐 search_saved_requests, 조건부 목록이 필요하면 personal_list_saved_schedules)
+  을 호출해 근거를 모은 뒤 답한다.
 
 - search_personal_references의 결과는 hits, search_saved_requests의 결과는 rows에 들어있다.
-  두 tool 다 결과가 비어 있으면 근거 없이 추측하지 말고 모른다고 답하거나 되묻는다.
+  세 tool(search_personal_references, search_saved_requests, personal_list_saved_schedules) 다 결과가 비어 있으면 
+  근거 없이 추측하지 말고 모른다고 답하거나 되묻는다.
 """
 
 # [4주차 수강생 구현 가이드]
@@ -264,7 +268,7 @@ def search_personal_reference_hits(
     """ChromaDB 검색 결과를 tool이 바로 반환하기 쉬운 hit 구조로 정리합니다."""
 
     # TODO: 개인 참고자료 검색 결과를 id/content/distance/metadata 구조로 정리하세요.
-    hits=reference_store.search_personal_references(query, limit=safe_limit(top_k))
+    hits=reference_store.search_personal_references(query, limit=top_k)
     return [
         {
             "id": hit["id"],
@@ -288,7 +292,7 @@ def search_saved_request_rows(
     """SQLite 저장 요청을 검색하고 실제 검색 결과만 반환합니다."""
 
     # TODO: AppSQLiteStore.search_saved_requests(...)로 저장 요청을 검색하세요.
-    return sqlite_store.search_saved_requests(query, limit=safe_limit(top_k))
+    return sqlite_store.search_saved_requests(query, limit=top_k)
 
 
 
@@ -334,7 +338,7 @@ def search_personal_references(query: str, top_k: int = 2) -> str:
     """개인 참고자료를 ChromaDB와 OpenAI embedding 기반으로 검색합니다."""
 
     # TODO: query/top_k로 개인 참고자료 vector store를 검색하고 top-level hits를 반환하세요.
-    hits= search_personal_reference_hits(REFERENCE_STORE, query= query, top_k= top_k)
+    hits= search_personal_reference_hits(REFERENCE_STORE, query= query, top_k= safe_limit(top_k, default=2, maximum=20))
     return json_payload({"query":query, "hits":hits})
 
 
@@ -343,7 +347,7 @@ def search_saved_requests(query: str, top_k: int = 3) -> str:
     """SQLite에 저장된 구조화 일정/할 일/알림 row를 검색합니다. query에는 LLM이 고른 일정/할 일/알림 핵심어를 넣습니다."""
 
     # TODO: AppSQLiteStore.search_saved_requests(...)로 저장 요청을 검색하고 top-level rows를 반환하세요.
-    rows=search_saved_request_rows(SQLITE_STORE, query= query, top_k= top_k)
+    rows=search_saved_request_rows(SQLITE_STORE, query= query, top_k= safe_limit(top_k, default=3, maximum=50))
     return json_payload({"query":query, "rows":rows})
 
 
