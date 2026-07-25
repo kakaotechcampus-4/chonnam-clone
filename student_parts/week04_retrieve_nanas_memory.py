@@ -329,7 +329,8 @@ def search_conversation_message_rows(
 
 @tool(args_schema=AddPersonalReferenceInput)
 def add_personal_reference(title: str, content: str, tags: list[str] | None = None) -> str:
-    """개인 참고자료를 ChromaDB에 추가합니다."""
+    """날짜도 없고 사용자가 직접 처리할 행동도 아닌 순수 사실/선호/지식을 개인 참고자료로 ChromaDB에 저장합니다.
+    일정/할 일/리마인더처럼 날짜가 있거나 사용자가 해야 할 행동이면 이 tool 대신 extract_schedule_request를 사용합니다."""
     add_ref = add_personal_reference_dict(REFERENCE_STORE, title=title, content=content, tags=tags)
     return json_payload({"ok": True, "tool_name": "add_personal_reference", **add_ref})
     
@@ -337,7 +338,8 @@ def add_personal_reference(title: str, content: str, tags: list[str] | None = No
 
 @tool(args_schema=SearchPersonalReferencesInput)
 def search_personal_references(query: str, top_k: int = 2) -> str:
-    """개인 참고자료를 ChromaDB와 OpenAI embedding 기반으로 검색합니다."""
+    """add_personal_reference로 저장해 둔 개인 메모/선호/지식을 임베딩 기반 의미 검색으로 찾습니다.
+    저장된 일정/할 일/알림처럼 구조화된 기록을 찾을 때는 search_saved_requests를 사용합니다."""
 
     normalized_query = query.strip()
     limit = safe_limit(top_k, default=2, maximum=20)
@@ -356,7 +358,10 @@ def search_personal_references(query: str, top_k: int = 2) -> str:
 
 @tool(args_schema=SearchSavedRequestsInput)
 def search_saved_requests(query: str, top_k: int = 3) -> str:
-    """SQLite에 저장된 구조화 일정/할 일/알림 row를 검색합니다. query에는 LLM이 고른 일정/할 일/알림 핵심어를 넣습니다."""
+    """저장된 일정/할 일/알림의 제목·사유·원문에 특정 키워드가 포함됐는지 검색합니다.
+    날짜나 종류로 목록 전체를 보고 싶을 때는 personal_list_saved_schedules를 사용하고,
+    이 tool은 원문 내용에 특정 단어가 있는지 찾아야 할 때만 사용합니다.
+    query에는 LLM이 고른 일정/할 일/알림 핵심어를 넣습니다."""
 
     normalized_query = query.strip()
     limit = safe_limit(top_k, default=3, maximum=50)
@@ -378,7 +383,9 @@ def search_conversation_messages(
     top_k: int = 5,
     conversation_id: str | None = None,
 ) -> str:
-    """앱 SQLite 대화 목록을 대화 단위 ChromaDB RAG로 검색합니다. query에는 LLM이 고른 짧은 핵심 명사나 구를 넣습니다."""
+    """참고자료나 저장된 일정과 달리, 사용자와 예전에 나눈 일반 대화 내용 자체를 대화 단위로 묶어 의미 기반 검색합니다.
+    conversation_id를 지정하지 않으면 현재 진행 중인 대화는 검색 결과에서 제외됩니다.
+    query에는 LLM이 고른 짧은 핵심 명사나 구를 넣습니다."""
 
     normalized_query = query.strip()
     limit = safe_limit(top_k, default=5, maximum=50)
@@ -457,7 +464,9 @@ def search_nana_memory(
     attendee: str | None = None,
     limit: int = 5,
 ) -> str:
-    """개인 참고자료와 SQLite 저장 일정을 한 번에 검색하고 일정 chunk를 반환합니다."""
+    """개인 참고자료와 SQLite 저장 일정을 한 번에 검색하는 이전 버전 호환용 통합 tool입니다.
+    week04_tools()에는 노출되지 않으며, 출처별 tool(search_personal_references/search_saved_requests) 대신
+    한 번의 호출로 둘 다 확인해야 하는 외부 호출/검증 코드에서 직접 invoke합니다."""
 
     normalized_query = query.strip()
     normalized_date_from = str(date_from or "").strip() or None
