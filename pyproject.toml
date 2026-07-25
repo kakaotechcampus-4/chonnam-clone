@@ -23,6 +23,12 @@ package = false
 line-length = 100
 indent-width = 4
 target-version = "py311"
+# fixed/ 는 채점 기준으로 제공된 코드라 원본 그대로 유지해야 함.
+# (저장 시 포매터가 줄바꿈을 넣어 원본과 달라지는 것을 방지)
+extend-exclude = ["fixed"]
+# 에디터(ruff LSP)는 파일 경로를 명시적으로 넘기는데, 그 경우 기본적으로 exclude가 무시됨.
+# force-exclude 를 켜야 저장 시 포맷에도 exclude가 적용된다.
+force-exclude = true
 
 [tool.ruff.lint]
 # E: pycodestyle, F: pyflakes, UP: pyupgrade, B: bugbear, I: isort
