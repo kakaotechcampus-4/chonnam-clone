@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from functools import cache
 from typing import Any
 
 from langchain.agents import create_agent
@@ -18,10 +19,28 @@ from student_parts.week01_wake_up_nana import join_system_prompt
 from student_parts.week03_build_nanas_logbook import week03_prompt_parts, week03_tools
 
 
-REFERENCE_STORE = PersonalReferenceStore(CONFIG.chroma_dir)
-SQLITE_STORE = AppSQLiteStore(CONFIG.app_db_path)
-CONVERSATION_RAG_STORE = ConversationRAGStore(CONFIG.chroma_dir)
 _WEEK04_AGENT: Any | None = None
+
+
+@cache
+def _reference_store() -> PersonalReferenceStore:
+    """첫 reference tool 호출 시 vector store를 만들고 앱 실행 동안 재사용합니다."""
+
+    return PersonalReferenceStore(CONFIG.chroma_dir)
+
+
+@cache
+def _sqlite_store() -> AppSQLiteStore:
+    """첫 SQLite tool 호출 시 앱 저장소를 만들고 앱 실행 동안 재사용합니다."""
+
+    return AppSQLiteStore(CONFIG.app_db_path)
+
+
+@cache
+def _conversation_rag_store() -> ConversationRAGStore:
+    """첫 대화 RAG 호출 시 vector store를 만들고 앱 실행 동안 재사용합니다."""
+
+    return ConversationRAGStore(CONFIG.chroma_dir)
 
 
 # [4주차 수강생 구현 가이드]
@@ -40,11 +59,11 @@ _WEEK04_AGENT: Any | None = None
 # 구현 위치와 사용할 코드
 #   - 이 파일(student_parts/week04_retrieve_nanas_memory.py)의 개인 참고자료/RAG tool을 구현합니다.
 #   - 개인 참고자료 저장소는 fixed/reference_store.py의 PersonalReferenceStore이며,
-#     이 파일 상단의 REFERENCE_STORE가 CONFIG.chroma_dir 기준 인스턴스입니다.
+#     _reference_store()가 첫 tool 호출 때 CONFIG.chroma_dir 기준 인스턴스를 만듭니다.
 #   - SQLite 저장 요청 검색은 fixed/app_store.py의 AppSQLiteStore를 사용하고,
-#     이 파일 상단의 SQLITE_STORE가 CONFIG.app_db_path 기준 인스턴스입니다.
+#     _sqlite_store()가 첫 tool 호출 때 CONFIG.app_db_path 기준 인스턴스를 만듭니다.
 #   - 일반 채팅 발화 검색은 fixed/conversation_rag_store.py의 ConversationRAGStore를 사용하고,
-#     이 파일 상단의 CONVERSATION_RAG_STORE가 CONFIG.chroma_dir 기준 인스턴스입니다.
+#     _conversation_rag_store()가 첫 tool 호출 때 CONFIG.chroma_dir 기준 인스턴스를 만듭니다.
 #   - 각 tool 입력은 Pydantic args_schema로 검증하고,
 #     search_personal_reference_hits(), search_saved_request_rows(), search_conversation_message_rows()에서 조회 결과를 정리합니다.
 #   - tool 함수 add_personal_reference/search_personal_references/search_saved_requests/search_conversation_messages는
@@ -55,7 +74,7 @@ _WEEK04_AGENT: Any | None = None
 #
 # 메인과제 구현 대상
 #   1. add_personal_reference
-#      - title/content/tags를 REFERENCE_STORE.add_personal_reference에 넘깁니다.
+#      - title/content/tags를 _reference_store().add_personal_reference에 넘깁니다.
 #      - tags가 None이면 빈 list로 바꿉니다.
 #      - 이 tool 안에서 reference_backend와 reference가 있는 JSON payload를 완성합니다.
 #
@@ -66,7 +85,7 @@ _WEEK04_AGENT: Any | None = None
 #      - hit에는 id, content, distance, metadata(title/tags)가 들어가야 답변 근거로 쓰기 쉽습니다.
 #
 #   3. search_saved_requests
-#      - SQLITE_STORE.search_saved_requests(query, limit)를 호출합니다.
+#      - _sqlite_store().search_saved_requests(query, limit)를 호출합니다.
 #      - top_k는 이 tool 안에서 안전한 범위로 정리합니다.
 #      - 검색 결과가 없으면 rows=[]를 그대로 반환합니다.
 #      - course repo 기준 계약에 맞게 top-level {"rows": [...]} JSON을 반환합니다.
@@ -225,11 +244,17 @@ def add_personal_reference_dict(
 ) -> dict[str, Any]:
     """개인 참고자료를 vector store에 추가하고 backend 정보를 반환합니다."""
 
-    reference = reference_store.add_personal_reference(
+    saved_reference = reference_store.add_personal_reference(
         title=title,
         content=content,
         tags=tags or [],
     )
+    reference = {
+        "reference_id": saved_reference.get("reference_id"),
+        "title": saved_reference.get("title"),
+        "content": saved_reference.get("content"),
+        "tags": saved_reference.get("tags") or [],
+    }
     return {
         "reference_backend": reference_store.backend_info(),
         "reference": reference,
@@ -327,7 +352,7 @@ def search_conversation_message_rows(
 
     result = search_conversation_messages_dict(
         sqlite_store,
-        CONVERSATION_RAG_STORE,
+        _conversation_rag_store(),
         query=query,
         top_k=top_k,
         conversation_id=conversation_id,
@@ -401,8 +426,9 @@ def _memory_context(
 def add_personal_reference(title: str, content: str, tags: list[str] | None = None) -> str:
     """개인 참고자료를 ChromaDB에 추가합니다."""
 
+    reference_store = _reference_store()
     result = add_personal_reference_dict(
-        REFERENCE_STORE,
+        reference_store,
         title=title,
         content=content,
         tags=tags,
@@ -422,8 +448,9 @@ def search_personal_references(query: str, top_k: int = 2) -> str:
 
     normalized_query = query.strip()
     limit = safe_limit(top_k, default=2, maximum=20)
+    reference_store = _reference_store()
     hits = search_personal_reference_hits(
-        REFERENCE_STORE,
+        reference_store,
         query=normalized_query,
         top_k=limit,
     )
@@ -433,7 +460,7 @@ def search_personal_references(query: str, top_k: int = 2) -> str:
             "tool_name": "search_personal_references",
             "query": normalized_query,
             "top_k": limit,
-            "reference_backend": REFERENCE_STORE.backend_info(),
+            "reference_backend": reference_store.backend_info(),
             "hits": hits,
         }
     )
@@ -446,7 +473,7 @@ def search_saved_requests(query: str, top_k: int = 3) -> str:
     normalized_query = query.strip()
     limit = safe_limit(top_k, default=3, maximum=50)
     rows = search_saved_request_rows(
-        SQLITE_STORE,
+        _sqlite_store(),
         query=normalized_query,
         top_k=limit,
     )
@@ -472,8 +499,8 @@ def search_conversation_messages(
     normalized_query = query.strip()
     limit = safe_limit(top_k, default=5, maximum=50)
     result = search_conversation_messages_dict(
-        SQLITE_STORE,
-        CONVERSATION_RAG_STORE,
+        _sqlite_store(),
+        _conversation_rag_store(),
         query=normalized_query,
         top_k=limit,
         conversation_id=conversation_id,
@@ -504,14 +531,16 @@ def search_nana_memory(
     normalized_date_to = str(date_to or "").strip() or None
     normalized_attendee = str(attendee or "").strip() or None
     effective_limit = safe_limit(limit, default=5, maximum=20)
+    reference_store = _reference_store()
+    sqlite_store = _sqlite_store()
 
     reference_hits = search_personal_reference_hits(
-        REFERENCE_STORE,
+        reference_store,
         query=normalized_query,
         top_k=effective_limit,
     )
     candidate_limit = min(max(effective_limit * 10, 50), 200)
-    schedule_rows = SQLITE_STORE.list_schedules(
+    schedule_rows = sqlite_store.list_schedules(
         limit=candidate_limit,
         date_from=normalized_date_from,
         date_to=normalized_date_to,
@@ -537,7 +566,7 @@ def search_nana_memory(
                 "attendee": normalized_attendee,
                 "limit": effective_limit,
             },
-            "reference_backend": REFERENCE_STORE.backend_info(),
+            "reference_backend": reference_store.backend_info(),
             "reference_hits": reference_hits,
             "chunks": schedule_chunks,
             "context": _memory_context(reference_hits, schedule_chunks),

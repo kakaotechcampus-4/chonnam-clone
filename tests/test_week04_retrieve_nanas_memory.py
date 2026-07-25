@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,21 +12,7 @@ from unittest.mock import patch
 from fixed.config import CONFIG
 from fixed.session_scope import conversation_session_scope
 
-
-_TEST_DATA = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
-_ORIGINAL_CONFIG = {
-    "proxy_token": CONFIG.proxy_token,
-    "app_db_path": CONFIG.app_db_path,
-    "chroma_dir": CONFIG.chroma_dir,
-}
-object.__setattr__(CONFIG, "proxy_token", None)
-object.__setattr__(CONFIG, "app_db_path", Path(_TEST_DATA.name) / "app.sqlite3")
-object.__setattr__(CONFIG, "chroma_dir", Path(_TEST_DATA.name) / "chroma")
-try:
-    import student_parts.week04_retrieve_nanas_memory as week04
-finally:
-    for _name, _value in _ORIGINAL_CONFIG.items():
-        object.__setattr__(CONFIG, _name, _value)
+import student_parts.week04_retrieve_nanas_memory as week04
 
 
 class ReferenceStoreFake:
@@ -43,7 +31,7 @@ class ReferenceStoreFake:
     ) -> dict[str, Any]:
         call = {"title": title, "content": content, "tags": tags}
         self.add_calls.append(call)
-        return {"reference_id": "ref_1", **call}
+        return {"reference_id": "ref_1", **call, "backend": self.backend_info()}
 
     def search_personal_references(self, query: str, limit: int) -> list[dict[str, Any]]:
         self.search_calls.append({"query": query, "limit": limit})
@@ -106,6 +94,81 @@ class ScheduleStoreFake:
         return self.rows
 
 
+class StoreLifecycleTests(unittest.TestCase):
+    def test_week03_and_week04_import_order_does_not_mutate_config_or_create_stores(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        import_orders = [
+            (
+                "import student_parts.week03_build_nanas_logbook\n"
+                "import student_parts.week04_retrieve_nanas_memory as week04"
+            ),
+            (
+                "import student_parts.week04_retrieve_nanas_memory as week04\n"
+                "import student_parts.week03_build_nanas_logbook"
+            ),
+        ]
+
+        for imports in import_orders:
+            script = (
+                "from fixed.config import CONFIG\n"
+                "before = (CONFIG.proxy_token, CONFIG.app_db_path, CONFIG.chroma_dir)\n"
+                f"{imports}\n"
+                "after = (CONFIG.proxy_token, CONFIG.app_db_path, CONFIG.chroma_dir)\n"
+                "assert before == after\n"
+                "assert week04._reference_store.cache_info().currsize == 0\n"
+                "assert week04._sqlite_store.cache_info().currsize == 0\n"
+                "assert week04._conversation_rag_store.cache_info().currsize == 0\n"
+            )
+            completed = subprocess.run(
+                [sys.executable, "-c", script],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_store_getters_create_once_on_first_use(self) -> None:
+        reference_store = object()
+        sqlite_store = object()
+        conversation_store = object()
+        week04._reference_store.cache_clear()
+        week04._sqlite_store.cache_clear()
+        week04._conversation_rag_store.cache_clear()
+        try:
+            with (
+                patch.object(
+                    week04,
+                    "PersonalReferenceStore",
+                    return_value=reference_store,
+                ) as reference_constructor,
+                patch.object(
+                    week04,
+                    "AppSQLiteStore",
+                    return_value=sqlite_store,
+                ) as sqlite_constructor,
+                patch.object(
+                    week04,
+                    "ConversationRAGStore",
+                    return_value=conversation_store,
+                ) as conversation_constructor,
+            ):
+                self.assertIs(week04._reference_store(), reference_store)
+                self.assertIs(week04._reference_store(), reference_store)
+                self.assertIs(week04._sqlite_store(), sqlite_store)
+                self.assertIs(week04._sqlite_store(), sqlite_store)
+                self.assertIs(week04._conversation_rag_store(), conversation_store)
+                self.assertIs(week04._conversation_rag_store(), conversation_store)
+        finally:
+            week04._reference_store.cache_clear()
+            week04._sqlite_store.cache_clear()
+            week04._conversation_rag_store.cache_clear()
+
+        reference_constructor.assert_called_once_with(CONFIG.chroma_dir)
+        sqlite_constructor.assert_called_once_with(CONFIG.app_db_path)
+        conversation_constructor.assert_called_once_with(CONFIG.chroma_dir)
+
+
 class PersonalReferenceTests(unittest.TestCase):
     def test_add_normalizes_none_tags_and_returns_backend(self) -> None:
         store = ReferenceStoreFake()
@@ -120,6 +183,10 @@ class PersonalReferenceTests(unittest.TestCase):
         self.assertEqual(store.add_calls[0]["tags"], [])
         self.assertEqual(result["reference_backend"]["vector_store"], "fake")
         self.assertEqual(result["reference"]["reference_id"], "ref_1")
+        self.assertEqual(
+            set(result["reference"]),
+            {"reference_id", "title", "content", "tags"},
+        )
 
     def test_search_restructures_hits_and_preserves_distance(self) -> None:
         store = ReferenceStoreFake()
@@ -156,7 +223,7 @@ class PersonalReferenceTests(unittest.TestCase):
 
     def test_public_tools_return_source_aware_unescaped_json(self) -> None:
         store = ReferenceStoreFake()
-        with patch.object(week04, "REFERENCE_STORE", store):
+        with patch.object(week04, "_reference_store", return_value=store):
             added_raw = week04.add_personal_reference.invoke(
                 {
                     "title": "집중 시간",
@@ -174,6 +241,10 @@ class PersonalReferenceTests(unittest.TestCase):
         self.assertNotIn("\\u", added_raw)
         self.assertEqual(added["tool_name"], "add_personal_reference")
         self.assertEqual(added["reference"]["tags"], [])
+        self.assertEqual(
+            set(added["reference"]),
+            {"reference_id", "title", "content", "tags"},
+        )
         self.assertEqual(searched["query"], "오전 회의")
         self.assertEqual(searched["top_k"], 2)
         self.assertEqual(searched["reference_backend"]["vector_store"], "fake")
@@ -236,7 +307,7 @@ class SavedRequestSearchTests(unittest.TestCase):
 
     def test_public_tool_returns_effective_query_limit_and_rows(self) -> None:
         store = SavedRequestStoreFake([{"request_id": "req_한글", "title": "과제"}])
-        with patch.object(week04, "SQLITE_STORE", store):
+        with patch.object(week04, "_sqlite_store", return_value=store):
             raw = week04.search_saved_requests.invoke(
                 {"query": "  과제  ", "top_k": 3}
             )
@@ -323,7 +394,7 @@ class ConversationRAGTests(unittest.TestCase):
 
     def test_rows_helper_uses_shared_rag_store(self) -> None:
         rag_store = ConversationRAGStoreFake([self.hit])
-        with patch.object(week04, "CONVERSATION_RAG_STORE", rag_store):
+        with patch.object(week04, "_conversation_rag_store", return_value=rag_store):
             rows = week04.search_conversation_message_rows(
                 object(),
                 query="오전 회의",
@@ -335,8 +406,8 @@ class ConversationRAGTests(unittest.TestCase):
     def test_public_tool_returns_traceable_rag_envelope(self) -> None:
         rag_store = ConversationRAGStoreFake([self.hit])
         with (
-            patch.object(week04, "SQLITE_STORE", object()),
-            patch.object(week04, "CONVERSATION_RAG_STORE", rag_store),
+            patch.object(week04, "_sqlite_store", return_value=object()),
+            patch.object(week04, "_conversation_rag_store", return_value=rag_store),
             conversation_session_scope("conv_current"),
         ):
             raw = week04.search_conversation_messages.invoke(
@@ -398,8 +469,8 @@ class CompatibilityMemorySearchTests(unittest.TestCase):
     ) -> tuple[dict[str, Any], ScheduleStoreFake]:
         schedule_store = ScheduleStoreFake(self.schedule_rows if rows is None else rows)
         with (
-            patch.object(week04, "REFERENCE_STORE", self.reference_store),
-            patch.object(week04, "SQLITE_STORE", schedule_store),
+            patch.object(week04, "_reference_store", return_value=self.reference_store),
+            patch.object(week04, "_sqlite_store", return_value=schedule_store),
         ):
             raw = week04.search_nana_memory.invoke(
                 {
@@ -469,8 +540,8 @@ class CompatibilityMemorySearchTests(unittest.TestCase):
         reference_store.search_personal_references = lambda query, limit: []
         schedule_store = ScheduleStoreFake([])
         with (
-            patch.object(week04, "REFERENCE_STORE", reference_store),
-            patch.object(week04, "SQLITE_STORE", schedule_store),
+            patch.object(week04, "_reference_store", return_value=reference_store),
+            patch.object(week04, "_sqlite_store", return_value=schedule_store),
         ):
             result = json.loads(
                 week04.search_nana_memory.invoke(
