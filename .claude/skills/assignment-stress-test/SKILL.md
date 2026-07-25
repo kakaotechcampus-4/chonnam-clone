@@ -129,24 +129,42 @@ tool 개수를 N이라 할 때, 아래 5개 카테고리로 100개를 나눕니�
    (`expected_hits: []` — 관련 fixture가 없는 질문), 통합 검색 recall.
    ⚠️ **top_k 함정**: 1단계에서 파싱한 tool의 top_k 기본값보다 `expected_hits`
    개수가 크면 recall 1.0이 원천 불가능합니다. 라벨 설계 시 반드시 반영하세요.
+   ⚠️ **배경 데이터 경쟁**: 격리 DB여도 앱 초기화 코드가 심는 기본/데모 데이터가
+   존재할 수 있습니다 (week04에서 실제 겪음 — 격리 DB에 데모 참고자료가 있어
+   fixture가 top_k 슬롯을 그 문서들과 경쟁했고, 그만큼 recall이 구조적으로
+   깎였습니다). 배경 데이터는 지우지 말고 현실적 배경 코퍼스로 간주하되,
+   그 존재를 manifest.md에 명시하고 expected_hits를 배경 경쟁을 감안해
+   보수적으로 잡으세요.
+   ⚠️ **호환/통합 tool 라벨 함정**: docstring에 "호환"이라 적혔거나 개별 tool들을
+   합쳐놓은 통합 tool은 `expected_tool`로 강제하지 마세요 — agent가 개별 tool
+   조합으로 같은 결과를 내면 그것도 정답입니다 (week04의 search_nana_memory에서
+   실제 겪음). 이런 프롬프트는 `expected_tool: null`로 두고 `expected_hits`만
+   평가하세요.
 
 ### 3.5단계 — fixture 정의 (검색 품질형을 만들 때만)
 
 캐시 폴더에 `fixtures.jsonl`을 만듭니다 (git 커밋 대상). 한 줄 형식:
 
 ```json
-{"fixture_id": "f001", "seed_module": "student_parts.week04_retrieve_nanas_memory", "seed_via": "add_personal_reference", "payload": {"title": "...", "content": "... [FXT:f001]", "tags": ["..."]}, "note": "무슨 검증용인지"}
+{"fixture_id": "f001", "seed_module": "student_parts.week04_retrieve_nanas_memory", "seed_via": "add_personal_reference", "payload": {"title": "...", "content": "...", "tags": ["..."]}, "id_fields": ["reference_id"], "note": "무슨 검증용인지"}
 ```
 
 - `seed_via`는 **대상 파일(또는 이전 주차 파일)에 실재하는** 저장 tool/함수 이름.
   1단계 구조 탐색에서 발견한 것만 씁니다. harness가 이름으로 import·호출하므로
   (LangChain tool이면 `.invoke(payload)`, 일반 함수면 `fn(**payload)`) harness는
   과제 구조를 계속 몰라도 됩니다.
-- **마커 규약**: 모든 payload는 직렬화 문자열 어딘가에 `[FXT:<fixture_id>]`를
-  포함해야 합니다(검색 결과로 노출되는 텍스트 필드에 넣을 것 — 예: 참고자료는
-  content, SQLite 요청은 reason/original_text). 집계기가 tool_result에서 이
-  마커를 스캔해 어떤 fixture가 반환됐는지 판정합니다. 마커 없으면 seed 단계에서
-  즉시 실패합니다.
+- **id 값 스캔 규약**: fixture 판정은 payload에 인공 마커를 심는 게 아니라,
+  seed 호출의 **반환값에서 저장 id를 수집**하는 방식입니다. `id_fields`에
+  "반환값 어느 키의 값이 id인지"를 선언하면(예: 참고자료는 `["reference_id"]`,
+  SQLite 저장은 `["request_id", "id"]` — saved_rows[].id까지 재귀 수집됨)
+  harness가 seed 시 그 값들을 `fixture_map_*.json`에 기록하고, 집계기가
+  tool_result 직렬화 문자열에서 그 id 값의 등장을 스캔합니다. 테스트 데이터가
+  오염되지 않고, 반환 구조 지식은 코드가 아니라 fixtures 데이터에만 들어갑니다.
+  id_fields는 1단계에서 파싱한 저장 함수의 반환 구조를 근거로 정하세요.
+  id를 하나도 못 뽑으면 seed가 즉시 실패합니다.
+- **사각지대 주의**: 이 방식은 검색 tool이 결과에 id를 포함해 반환할 때만
+  동작합니다. id 없이 content만 반환하는 tool이 있으면 그 경로는 못 잡습니다 —
+  1단계에서 반환 구조를 확인하고, 그런 tool이 있으면 리포트에 명시하세요.
 - 유사쌍(비슷한 문서 2~3개)을 일부러 포함해야 순위 평가가 의미를 가집니다.
 - fixture는 agent를 거치지 않고 store 함수 직접 호출로 심습니다(결정론 보장).
 
@@ -163,6 +181,15 @@ tool 개수를 N이라 할 때, 아래 5개 카테고리로 100개를 나눕니�
   걱정 없습니다. 검색 품질형은 별도 파일 `retrieval_prompts.jsonl`로 관리해도
   되고(기존 100줄 자산을 안 건드리는 장점), prompts.jsonl에 합쳐도 됩니다 —
   harness의 `--prompts`에 어느 파일을 주는지만 다릅니다.
+- **라벨을 나중에 고칠 때는 이력을 남깁니다**: 실행 결과를 보고 라벨이 틀렸다고
+  판단해 수정하면(라벨 오류 기각), 그 프롬프트의 `reason` 필드에 "원래 라벨 →
+  바뀐 라벨 + 근거 + 재검토 조건"을 적고 manifest.md에도 한 줄 기록하세요.
+  이력이 없으면 다음 실행자가 완화된 라벨을 원래 기준인 줄 알게 됩니다.
+- **manifest 등록은 retrieval 세트도 포함합니다**: manifest.json의
+  `tool_signatures`에 검색 tool들의 해시를, `fixtures_hash`에 fixtures.jsonl
+  전체 sha256을 넣고, `prompt_files`에 라우팅/검색 파일 경로를 둘 다 나열하세요.
+  manifest에 없는 프롬프트 파일은 다음 스킬 실행 때 캐시 판단이 불가능해
+  재생성으로 덮일 수 있습니다.
 - `conversation_group`은 독립 프롬프트면 `null`, 멀티턴 시나리오면 같은
   그룹 문자열(예: `"scenario_a"`)로 묶고, 그룹 안에서는 실행 순서가 곧
   `id` 오름차순이 되게 합니다.
@@ -194,9 +221,23 @@ uv run python .claude/skills/assignment-stress-test/run_harness.py \
   --out stress_test_prompts/<stem>/results_history/<타임스탬프>_retrieval.jsonl
 ```
 
-harness가 격리 직후·실행 전에 fixture를 심고, seed 결과를 `--out` 옆
-`fixture_map_<stem>.json`에 남깁니다. fixture 없이 검색 품질형을 돌리면 격리
-DB가 비어 있어 전부 "빈 결과"가 나오니 의미가 없습니다 — 반드시 함께 줄 것.
+harness가 격리 직후·실행 전에 fixture를 심고, fixture_id ↔ 발급된 id 매핑을
+`--out` 옆 `fixture_map_<stem>.json`에 남깁니다. fixture 없이 검색 품질형을
+돌리면 격리 DB가 비어 있어 전부 "빈 결과"가 나오니 의미가 없습니다 — 반드시
+함께 줄 것.
+
+집계할 때는 그 fixture_map을 `--fixture-map`으로 넘깁니다 (id는 실행마다 새로
+발급되므로 **반드시 같은 실행의 map**을 써야 하고, `--previous` 회귀 비교 시엔
+이전 실행의 map을 `--previous-fixture-map`으로 따로 줍니다):
+
+```bash
+uv run python .claude/skills/assignment-stress-test/aggregate_results.py \
+  --prompts stress_test_prompts/<stem>/retrieval_prompts.jsonl \
+  --results stress_test_prompts/<stem>/results_history/<이번>.jsonl \
+  --fixture-map stress_test_prompts/<stem>/results_history/fixture_map_<이번>.json \
+  --previous stress_test_prompts/<stem>/results_history/<이전>.jsonl \
+  --previous-fixture-map stress_test_prompts/<stem>/results_history/fixture_map_<이전>.json
+```
 
 - `active-week`은 파일명 `weekNN_...`에서 정규식으로 뽑습니다. 하드코딩 금지.
 - 100개 전부 실제 LLM 호출이라 시간·비용이 듭니다. 실행 전에 사용자에게
@@ -242,7 +283,8 @@ uv run python .claude/skills/assignment-stress-test/aggregate_results.py \
     `.invoke({...이상값...})`해서 `ValidationError`가 나는지 별도로 확인해야
     합니다.
 - **검색 품질 리포트 해석** (expected_hits 라벨이 있을 때 자동으로 붙는 섹션):
-  - recall/precision/MRR/위반 카운트는 전부 마커 스캔 기반 **결정론 계산**입니다.
+  - recall/precision/MRR/위반 카운트는 전부 id 값 스캔 기반 **결정론 계산**입니다
+    (fixture_map의 id ↔ tool_result 문자열 대조; 과거 마커 방식 결과도 하위호환).
     여기까지는 AI 판단이 개입하지 않습니다.
   - recall 실패를 버그로 단정하기 전에 확인할 것: ① tool의 top_k 기본값이
     기대 개수보다 작지 않은지(라벨 설계 오류), ② agent가 검색 query를 어떻게
@@ -256,6 +298,21 @@ uv run python .claude/skills/assignment-stress-test/aggregate_results.py \
     근거로 썼는지(faithfulness), 검색에 없는 내용을 지어냈는지. 이 판단으로
     케이스를 기각할 때는 근거를 라벨 오류 / 의도된 동작 / 진짜 버그 중
     하나로 분류해 명시합니다.
+
+### 6.5단계 — 1차 실행 후 라벨 재검토 (신규 프롬프트 세트는 필수)
+
+새로 만든 프롬프트 세트의 첫 실행 결과는 "코드 검증"이 아니라 **"라벨 검증"**
+으로 먼저 읽습니다. 라벨도 생성물이라 첫 샷에 틀릴 수 있기 때문입니다
+(week04 실전에서 10개 중 1개가 라벨 오류였습니다).
+
+1. 모든 불일치/실패를 라벨 오류 / 의도된 동작 / 진짜 버그로 분류합니다.
+2. 라벨 오류로 판정한 건은 4단계 규칙대로 `reason`에 이력을 남기고 고친 뒤,
+   **고친 라벨로 기존 결과를 재집계**해서(재실행 불필요 — 집계는 결정론)
+   깨끗한 기준선을 만듭니다.
+3. 기각률이 비정상적으로 높으면(예: 불일치의 절반 이상을 라벨 오류로 기각)
+   자기채점 편향을 의심하고, 기각 근거를 사용자에게 보여주고 확인받습니다.
+4. 이 과정에서 발견한 새 함정 패턴은 이 문서의 해당 절에 추가합니다 —
+   함정이 문서에 쌓여야 다음 cold run의 첫 샷 품질이 올라갑니다.
 
 ## 출력 포맷
 

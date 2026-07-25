@@ -4,18 +4,22 @@
 구조는 전혀 모르는 순수 집계 로직이라 매주 다시 짤 필요가 없다.
 
 검색 품질 평가 (프롬프트에 expected_hits 필드가 있을 때만 동작):
-  - run_harness가 fixture를 심을 때 payload에 넣은 마커 "[FXT:<fixture_id>]"를
-    tool_result 이벤트 내용에서 스캔해, 어떤 fixture가 어떤 순서로 반환됐는지 복원한다.
-    tool/스키마 구조를 몰라도 되는 이유가 이 마커 방식이다.
+  - 판정은 "id 값 스캔" 방식: run_harness가 seed 시 기록한 fixture_map
+    (fixture_id ↔ 저장 시 발급된 실제 id 목록)을 --fixture-map으로 받아,
+    tool_result 직렬화 문자열에서 그 id 값(예: ref_xxx, req_xxx, sch_xxx)의
+    등장을 스캔해 어떤 fixture가 어떤 순서로 반환됐는지 복원한다.
+    tool/스키마 구조를 몰라도 되고, 테스트 데이터도 오염되지 않는다.
+  - 하위호환: 과거 마커 방식으로 만든 결과를 위해 "[FXT:<fixture_id>]" 마커
+    스캔도 병행한다 (--fixture-map 없이도 마커가 있으면 동작).
   - expected_hits=[...]: 반드시 반환돼야 할 fixture → recall/순위(hit@1, MRR) 계산.
   - expected_hits=[]: 아무 fixture도 반환되면 안 됨 (빈 결과가 정답인 프롬프트).
   - forbidden_hits=[...]: 반환되면 안 되는 fixture → 위반 카운트.
-  - 순위는 tool_result 직렬화 문자열에서 마커가 처음 등장한 순서로 근사한다
-    (hits 리스트가 관련도순으로 직렬화되므로 실용적으로 일치).
+  - 순위는 tool_result 직렬화 문자열에서 id/마커가 처음 등장한 위치 순서로
+    근사한다 (hits 리스트가 관련도순으로 직렬화되므로 실용적으로 일치).
 
 사용법:
   uv run python aggregate_results.py --prompts <prompts.jsonl> --results <results.jsonl> \
-      [--previous <이전_results.jsonl>]
+      [--fixture-map <fixture_map_*.json>] [--previous <이전_results.jsonl>]
 """
 
 from __future__ import annotations
@@ -29,8 +33,8 @@ from pathlib import Path
 MARKER_RE = re.compile(r"\[FXT:([A-Za-z0-9_\-]+)\]")
 
 
-def returned_fixtures(events: list[dict]) -> list[str]:
-    """tool_result 이벤트들에서 fixture 마커를 등장 순서대로 (중복 제거) 뽑는다."""
+def returned_fixtures(events: list[dict], id_to_fid: dict[str, str] | None = None) -> list[str]:
+    """tool_result 이벤트들에서 fixture id/마커를 등장 위치 순서대로 (중복 제거) 뽑는다."""
 
     ranked: list[str] = []
     for ev in events or []:
@@ -38,11 +42,28 @@ def returned_fixtures(events: list[dict]) -> list[str]:
             continue
         content = ev.get("content")
         text = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)
+        found: list[tuple[int, str]] = []  # (등장 위치, fixture_id)
         for m in MARKER_RE.finditer(text):
-            fid = m.group(1)
+            found.append((m.start(), m.group(1)))
+        for id_value, fid in (id_to_fid or {}).items():
+            pos = text.find(id_value)
+            if pos != -1:
+                found.append((pos, fid))
+        for _, fid in sorted(found):
             if fid not in ranked:
                 ranked.append(fid)
     return ranked
+
+
+def load_fixture_map(path: Path) -> dict[str, str]:
+    """fixture_map_*.json을 {id 값: fixture_id} 역매핑으로 뒤집는다."""
+
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    id_to_fid: dict[str, str] = {}
+    for fid, entry in raw.items():
+        for id_value in entry.get("ids") or []:
+            id_to_fid[str(id_value)] = fid
+    return id_to_fid
 
 
 def _load_jsonl(path: Path) -> dict[str, dict]:
@@ -62,11 +83,17 @@ def main() -> None:
     parser.add_argument("--prompts", required=True, help="prompts.jsonl 경로")
     parser.add_argument("--results", required=True, help="이번 실행 results.jsonl 경로")
     parser.add_argument("--previous", default=None, help="회귀 비교용 이전 results.jsonl 경로 (선택)")
+    parser.add_argument("--fixture-map", default=None, help="run_harness가 남긴 fixture_map_*.json 경로 (검색 품질 평가용)")
+    parser.add_argument(
+        "--previous-fixture-map", default=None, help="이전 실행의 fixture_map (검색 회귀 비교용; 생략 시 --fixture-map 재사용)"
+    )
     args = parser.parse_args()
 
     prompts = _load_jsonl(Path(args.prompts))
     results = _load_jsonl(Path(args.results))
     previous = _load_jsonl(Path(args.previous)) if args.previous else {}
+    id_to_fid = load_fixture_map(Path(args.fixture_map)) if args.fixture_map else {}
+    prev_id_to_fid = load_fixture_map(Path(args.previous_fixture_map)) if args.previous_fixture_map else id_to_fid
 
     matches = 0
     mismatches: list[tuple] = []
@@ -117,7 +144,7 @@ def main() -> None:
         expected_hits = p.get("expected_hits")
         if expected_hits is not None and not r.get("error"):
             retrieval_evaluated += 1
-            ranked = returned_fixtures(r.get("events") or [])
+            ranked = returned_fixtures(r.get("events") or [], id_to_fid)
 
             if expected_hits == []:
                 # 빈 결과가 정답 — fixture가 하나라도 반환되면 위반
@@ -143,7 +170,7 @@ def main() -> None:
                     forbidden_violations.append((pid, p["text"], fid, ranked))
 
             if prev_r is not None:
-                prev_ranked = returned_fixtures(prev_r.get("events") or [])
+                prev_ranked = returned_fixtures(prev_r.get("events") or [], prev_id_to_fid)
                 if prev_ranked != ranked:
                     retrieval_regressions.append((pid, p["text"], prev_ranked, ranked))
 

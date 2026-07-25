@@ -24,14 +24,18 @@ week_agent_registry가 첫 실행 시점에 importlib로 지연 import하므로,
 
 검색 품질 평가용 fixture seeding (--fixtures):
   fixtures.jsonl 한 줄 형식:
-    {"fixture_id": str, "seed_module": str, "seed_via": str, "payload": dict, "note": str}
+    {"fixture_id": str, "seed_module": str, "seed_via": str, "payload": dict,
+     "id_fields": [str, ...], "note": str}
   - CONFIG 격리 직후, 프롬프트 실행 전에 seed_module을 import해 seed_via를 payload로
     호출한다 (LangChain tool이면 .invoke(payload), 일반 함수면 fn(**payload) →
     실패 시 fn(payload)). agent를 거치지 않으므로 결정론적이다.
-  - 모든 payload는 직렬화 문자열 어딘가에 마커 "[FXT:<fixture_id>]"를 포함해야 한다.
-    집계기(aggregate_results.py)가 tool_result 내용에서 이 마커를 스캔해 어떤
-    fixture가 검색됐는지 판정한다. 마커 없으면 seed 단계에서 즉시 실패시킨다.
-  - seed 결과(반환값 원본)는 --out 옆 fixture_map_<out stem>.json에 기록한다 (디버깅용).
+  - fixture 판정은 "id 값 스캔" 방식이다: seed 반환값을 재귀 탐색해 id_fields에
+    선언된 키의 값(예: reference_id, request_id, saved_rows[].id)을 전부 수집하고,
+    집계기(aggregate_results.py)가 tool_result 직렬화 문자열에서 그 id 값의 등장을
+    스캔해 어떤 fixture가 반환됐는지 판정한다. payload에 인공 마커를 심지 않으므로
+    테스트 데이터가 오염되지 않는다. id를 하나도 못 뽑으면 즉시 실패시킨다.
+  - fixture_id ↔ 수집된 id 목록은 --out 옆 fixture_map_<out stem>.json에 기록한다.
+    집계기가 이 파일을 --fixture-map으로 받아 역매핑에 쓴다.
 
 사용법:
   uv run python run_harness.py --prompts <prompts.jsonl> --active-week <N> --out <results.jsonl>
@@ -65,6 +69,22 @@ def _isolate_config(isolate_dir: Path) -> None:
     object.__setattr__(CONFIG, "chroma_dir", isolate_dir / "chroma")
 
 
+def _collect_ids(value: Any, id_fields: list[str]) -> list[str]:
+    """seed 반환값을 재귀 탐색해 id_fields 키에 해당하는 값을 전부 문자열로 수집한다."""
+
+    found: list[str] = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key in id_fields and isinstance(item, (str, int)) and str(item).strip():
+                found.append(str(item))
+            else:
+                found.extend(_collect_ids(item, id_fields))
+    elif isinstance(value, list):
+        for item in value:
+            found.extend(_collect_ids(item, id_fields))
+    return found
+
+
 def _seed_fixtures(fixtures_path: Path, out_path: Path) -> None:
     """fixtures.jsonl을 격리 DB/Chroma에 심는다. _isolate_config() 이후에만 호출해야 한다."""
 
@@ -76,10 +96,10 @@ def _seed_fixtures(fixtures_path: Path, out_path: Path) -> None:
 
     for row in rows:
         fid = row["fixture_id"]
-        marker = f"[FXT:{fid}]"
         payload = row["payload"]
-        if marker not in json.dumps(payload, ensure_ascii=False):
-            raise RuntimeError(f"fixture {fid}: payload에 마커 {marker} 가 없습니다 — 채점 불가라 중단")
+        id_fields = row.get("id_fields") or []
+        if not id_fields:
+            raise RuntimeError(f"fixture {fid}: id_fields 선언이 없습니다 — 채점 불가라 중단")
 
         module = importlib.import_module(row["seed_module"])
         target = getattr(module, row["seed_via"], None)
@@ -98,8 +118,14 @@ def _seed_fixtures(fixtures_path: Path, out_path: Path) -> None:
                 result = json.loads(result)
             except Exception:
                 pass
-        fixture_map[fid] = {"seed_via": row["seed_via"], "result": result}
-        print(f"[seed] {fid} via {row['seed_via']}")
+        ids = _collect_ids(result, id_fields)
+        if not ids:
+            raise RuntimeError(
+                f"fixture {fid}: seed 반환값에서 id_fields={id_fields} 로 id를 하나도 못 뽑았습니다 — "
+                f"반환 구조를 확인하고 id_fields를 고치세요. 반환값: {json.dumps(result, ensure_ascii=False)[:300]}"
+            )
+        fixture_map[fid] = {"seed_via": row["seed_via"], "ids": ids, "result": result}
+        print(f"[seed] {fid} via {row['seed_via']} ids={ids}")
 
     map_path = out_path.parent / f"fixture_map_{out_path.stem}.json"
     map_path.write_text(json.dumps(fixture_map, ensure_ascii=False, indent=2), encoding="utf-8")
