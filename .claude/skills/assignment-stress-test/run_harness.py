@@ -22,9 +22,21 @@ week_agent_registry가 첫 실행 시점에 importlib로 지연 import하므로,
 패치된 CONFIG를 보고 자기 store 싱글턴(REFERENCE_STORE 등)을 만든다 — 이 순서가
 깨지면(예: fixed.agent_runtime을 먼저 import하면) 격리가 안 먹으니 주의.
 
+검색 품질 평가용 fixture seeding (--fixtures):
+  fixtures.jsonl 한 줄 형식:
+    {"fixture_id": str, "seed_module": str, "seed_via": str, "payload": dict, "note": str}
+  - CONFIG 격리 직후, 프롬프트 실행 전에 seed_module을 import해 seed_via를 payload로
+    호출한다 (LangChain tool이면 .invoke(payload), 일반 함수면 fn(**payload) →
+    실패 시 fn(payload)). agent를 거치지 않으므로 결정론적이다.
+  - 모든 payload는 직렬화 문자열 어딘가에 마커 "[FXT:<fixture_id>]"를 포함해야 한다.
+    집계기(aggregate_results.py)가 tool_result 내용에서 이 마커를 스캔해 어떤
+    fixture가 검색됐는지 판정한다. 마커 없으면 seed 단계에서 즉시 실패시킨다.
+  - seed 결과(반환값 원본)는 --out 옆 fixture_map_<out stem>.json에 기록한다 (디버깅용).
+
 사용법:
   uv run python run_harness.py --prompts <prompts.jsonl> --active-week <N> --out <results.jsonl>
   (--isolate-dir로 격리 디렉터리 위치를 직접 지정할 수도 있음, 기본은 --out 옆 자동 생성)
+  (--fixtures <fixtures.jsonl>을 주면 실행 전에 격리 DB/Chroma에 fixture를 심는다)
 """
 
 from __future__ import annotations
@@ -33,6 +45,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 
 def _find_repo_root(start: Path) -> Path:
@@ -52,6 +65,47 @@ def _isolate_config(isolate_dir: Path) -> None:
     object.__setattr__(CONFIG, "chroma_dir", isolate_dir / "chroma")
 
 
+def _seed_fixtures(fixtures_path: Path, out_path: Path) -> None:
+    """fixtures.jsonl을 격리 DB/Chroma에 심는다. _isolate_config() 이후에만 호출해야 한다."""
+
+    import importlib
+
+    fixture_map: dict[str, Any] = {}
+    with fixtures_path.open(encoding="utf-8") as f:
+        rows = [json.loads(line) for line in f if line.strip()]
+
+    for row in rows:
+        fid = row["fixture_id"]
+        marker = f"[FXT:{fid}]"
+        payload = row["payload"]
+        if marker not in json.dumps(payload, ensure_ascii=False):
+            raise RuntimeError(f"fixture {fid}: payload에 마커 {marker} 가 없습니다 — 채점 불가라 중단")
+
+        module = importlib.import_module(row["seed_module"])
+        target = getattr(module, row["seed_via"], None)
+        if target is None:
+            raise RuntimeError(f"fixture {fid}: {row['seed_module']}에 {row['seed_via']} 없음")
+
+        if hasattr(target, "invoke"):  # LangChain tool
+            result: Any = target.invoke(payload)
+        else:
+            try:
+                result = target(**payload)
+            except TypeError:
+                result = target(payload)
+        if isinstance(result, str):
+            try:
+                result = json.loads(result)
+            except Exception:
+                pass
+        fixture_map[fid] = {"seed_via": row["seed_via"], "result": result}
+        print(f"[seed] {fid} via {row['seed_via']}")
+
+    map_path = out_path.parent / f"fixture_map_{out_path.stem}.json"
+    map_path.write_text(json.dumps(fixture_map, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"[seed] fixture {len(fixture_map)}개 심음 → {map_path}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="assignment-stress-test 실행기")
     parser.add_argument("--prompts", required=True, help="prompts.jsonl 경로")
@@ -61,6 +115,11 @@ def main() -> None:
         "--isolate-dir",
         default=None,
         help="격리 DB/Chroma 디렉터리 (기본: <out 파일 부모>/isolated_data_<out stem>/)",
+    )
+    parser.add_argument(
+        "--fixtures",
+        default=None,
+        help="검색 품질 평가용 fixtures.jsonl 경로 (실행 전 격리 DB/Chroma에 심음)",
     )
     args = parser.parse_args()
 
@@ -72,6 +131,10 @@ def main() -> None:
     isolate_dir = Path(args.isolate_dir) if args.isolate_dir else out_path.parent / f"isolated_data_{out_path.stem}"
     _isolate_config(isolate_dir)
     print(f"[격리] 실제 앱 DB 안 건드림 — 이번 실행 전용 격리 디렉터리: {isolate_dir}")
+
+    if args.fixtures:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        _seed_fixtures(Path(args.fixtures), out_path)
 
     from fixed.agent_runtime import AgentRuntime
 
