@@ -271,12 +271,29 @@ def search_conversation_messages_dict(
 ) -> dict[str, Any]:
     """SQLite 대화 목록을 lazy sync한 뒤 ChromaDB conversation RAG 결과를 반환합니다."""
 
-    # TODO: SQLite 대화 기록을 ConversationRAGStore에 lazy sync한 뒤 현재 대화를 제외하고 검색하세요.
-    ...
+    sync = conversation_rag_store.sync_from_sqlite(sqlite_store)
+    exclude_conversation_id = current_session_scope()
+    if exclude_conversation_id == DEFAULT_SESSION_SCOPE:
+        exclude_conversation_id = None
+    hits = conversation_rag_store.search(
+        query=query,
+        top_k=top_k,
+        exclude_conversation_id=exclude_conversation_id,
+        conversation_id=conversation_id,
+    )
+    return {
+        "query": query,
+        "hits": hits,
+        "rows": hits,
+        "context": conversation_rag_store.context_from_hits(hits),
+        "rag_backend": conversation_rag_store.backend_info(),
+        "sync": sync,
+    }
 
 
 def search_conversation_message_rows(
     sqlite_store: AppSQLiteStore,
+    conversation_rag_store: ConversationRAGStore = CONVERSATION_RAG_STORE,
     *,
     query: str,
     top_k: int = 5,
@@ -284,8 +301,14 @@ def search_conversation_message_rows(
 ) -> list[dict[str, Any]]:
     """앱 SQLite에 저장된 일반 채팅 대화 청크를 RAG 검색합니다."""
 
-    # TODO: search_conversation_messages_dict(...) 결과에서 hits만 반환하세요.
-    ...
+    payload = search_conversation_messages_dict(
+        sqlite_store,
+        conversation_rag_store,
+        query=query,
+        top_k=top_k,
+        conversation_id=conversation_id,
+    )
+    return payload["hits"]
 
 
 @tool(args_schema=AddPersonalReferenceInput)
@@ -324,8 +347,15 @@ def search_conversation_messages(
 ) -> str:
     """앱 SQLite 대화 목록을 대화 단위 ChromaDB RAG로 검색합니다. query에는 LLM이 고른 짧은 핵심 명사나 구를 넣습니다."""
 
-    # TODO: 앱 SQLite 대화 목록을 대화 단위 ChromaDB RAG로 검색하고 JSON 문자열로 반환하세요.
-    ...
+    limit = safe_limit(top_k, default=5, maximum=50)
+    payload = search_conversation_messages_dict(
+        SQLITE_STORE,
+        CONVERSATION_RAG_STORE,
+        query=query,
+        top_k=limit,
+        conversation_id=conversation_id,
+    )
+    return json_payload(payload)
 
 
 @tool(args_schema=SearchNanaMemoryInput)
@@ -341,6 +371,7 @@ def search_nana_memory(
     # TODO: compatibility 통합 검색이 필요하면 개인 참고자료와 SQLite 일정 chunk를 함께 구성하세요.
     ...
 
+
 def week04_tools() -> list[Any]:
     """3주차까지의 도구에 4주차 RAG 도구를 누적한 목록입니다."""
 
@@ -349,10 +380,7 @@ def week04_tools() -> list[Any]:
         add_personal_reference,
         search_personal_references,
         search_saved_requests,
-        # [2회차 이월] search_conversation_messages(대화 발화 RAG)는 아직 미구현 stub이라
-        # 잠정 미노출한다. 노출하면 agent가 빈 tool을 호출해 데모가 깨질 수 있다(Week 3 P3 선례).
-        # 2회차에서 search_conversation_messages_dict/rows를 구현할 때 아래 줄을 원복한다:
-        # search_conversation_messages,
+        search_conversation_messages,
     ]
 
 
@@ -372,7 +400,17 @@ def week04_prompt_parts() -> list[str]:
         "search_personal_references로 뜻이 비슷한 자료를 검색해 근거로 삼는다.\n"
         "- 기록장에 저장된 일정·할 일·알림 기록에 대해 물으면 "
         "search_saved_requests로 저장 기록을 검색한다.\n"
+        "- 예전 채팅에서 나눈 일반 대화 내용(구조화되지 않은 발화)에 대해 물으면 "
+        "search_conversation_messages로 대화 청크를 검색한다. conversation_id는 사용자가 특정 대화를 "
+        "콕 집어 지목했을 때만 채운다. 비워두면 지금 진행 중인 대화가 검색에서 자동으로 제외되므로 "
+        "'방금 한 말'은 이 tool로 찾지 않는다.\n"
         "- 검색 결과가 없으면 지어내지 말고 없다고 정직하게 답한다.",
+        "## Week 4 기억 범위 재정의(상속된 '기억 범위'를 덮어쓴다)\n"
+        "- 상속된 '기억 범위'의 '다른 대화는 보이지 않는다'는 Week 1 임시 일정에만 적용된다.\n"
+        "- 다른 대화에서 나눈 일반 대화 발화는 search_conversation_messages로 검색해 답할 수 있다"
+        "(제외 범위는 위 '출처 구분'의 conversation_id 규칙을 따른다).\n"
+        "- 따라서 '예전/어제/다른 대화에서 무슨 얘기 했지?' 같은 질문에 '볼 수 없다'고 먼저 거절하지 말고, "
+        "반드시 search_conversation_messages를 먼저 호출해 확인한 뒤 그 결과로 답한다.",
     ]
 
 
