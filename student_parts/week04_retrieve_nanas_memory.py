@@ -244,21 +244,14 @@ def search_personal_reference_hits(
     """ChromaDB 검색 결과를 tool이 바로 반환하기 쉬운 hit 구조로 정리합니다."""
 
     # TODO: 개인 참고자료 검색 결과를 id/content/distance/metadata 구조로 정리하세요.
-    found = reference_store.query(query_texts=[query], n_results=top_k)
-    
-    ids = found.get("ids", [[]])[0]
-    contents = found.get("contents", [[]])[0]
-    distances = found.get("distances", [[]])[0]
-    metadatas = found.get("metadatas", [[]])[0]
+    hits = reference_store.search_personal_references(query, limit=top_k)
     return [
         {
-            "id": ids[index],
-            "content": contents[index],
-            "distance": distances[index],
-            "metadata": metadatas[index] if index < len(metadatas) and metadatas[index] else {},
+            "id": h["id"], "content": h["content"], "distance": h["distance"],
+            "metadata": {"title": h["title"], "tags": h["tags"]}
         }
-        for index in range(len(ids))
-    ]
+        for h in hits
+        ]
 
 
 def search_saved_request_rows(
@@ -270,7 +263,7 @@ def search_saved_request_rows(
     """SQLite 저장 요청을 검색하고 실제 검색 결과만 반환합니다."""
 
     # TODO: AppSQLiteStore.search_saved_requests(...)로 저장 요청을 검색하세요.
-    rows = sqlite_store.search_saved_requests(query, top_k)
+    rows = sqlite_store.search_saved_requests(query, limit=top_k)
     return rows
 
 def search_conversation_messages_dict(
@@ -296,8 +289,7 @@ def search_conversation_message_rows(
 ) -> list[dict[str, Any]]:
     """앱 SQLite에 저장된 일반 채팅 대화 청크를 RAG 검색합니다."""
 
-    # TODO: search_conversation_messages_dict(...) 결과에서 hits만 반환하세요.
-    ...
+    # TODO: search_conversation_messages_dict(...) 결과에서 hits만 반환하세요.)
 
 
 @tool(args_schema=AddPersonalReferenceInput)
@@ -367,7 +359,6 @@ def week04_tools() -> list[Any]:
         add_personal_reference,
         search_personal_references,
         search_saved_requests,
-        search_conversation_messages,
     ]
 
 
@@ -385,10 +376,10 @@ def week04_prompt_parts() -> list[str]:
         # TODO: Week 4 Nana memory agent system prompt를 자유롭게 추가하세요.
         "사용자가 참고할 메모/자료를 저장해달라고 하면 add_personal_reference로 title/content/tags를 저장한다. "
         "사용자 질문을 보고 필요한 검색 tool 하나를 먼저 호출한다. "
-        "프로젝트 발표, UI, 사용자가 저장한 메모, 참고자료, 기억, 자연어로 저장된 사실은 search_personal_references를 사용한다. "
-        "저장된 요청, SQLite row, 구조화 일정/할 일/알림, kind(group_schedule, todo, reminder)를 묻는 질문은 search_saved_requests를 사용한다. "
+        "프로젝트 발표, UI, 사용자가 저장한 메모, 참고자료, 기억, 자연어로 저장된 사실은 search_personal_references 도구를 호출한다. "
+        "저장된 요청, SQLite row, 구조화 일정/할 일/알림, kind(group_schedule, todo, reminder)를 묻는 질문은 search_saved_requests 도구를 호출한다. "
         "tool의 query에는 사용자 질문을 그대로 넣거나 검색에 필요한 핵심 문구를 넣는다. "
-        "tool_result의 hits 또는 rows를 근거로 짧게 답한다."
+        "도구 실행 결과(hits 또는 rows)가 반환되면, 그 데이터를 근거로 짧고 정확하게 답변한다."
     ]
 
 
