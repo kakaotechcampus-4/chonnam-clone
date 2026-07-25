@@ -304,8 +304,8 @@ def _delete_saved_schedules(
     filters={"schedule_ids": schedule_ids or None,"date":date,"title":title,"start_time":start_time,"time_unspecified":time_unspecified, "delete_all": delete_all}
     if delete_all :
         deleted = store.delete_all_schedules()
-    if not any([filters["schedule_ids"], date, title, start_time, time_unspecified]):
-        return {"deleted_count":len(deleted),"filters":filters,"deleted":deleted}
+    elif not any([filters["schedule_ids"], date, title, start_time, time_unspecified]):
+        return {"deleted_count":len(deleted),"filters":filters,"deleted":deleted, "error":"삭제 조건 부족"}
     # TODO: deleted_count, filters, deleted가 포함된 tool 결과 dict를 반환하세요.
     
     else :
