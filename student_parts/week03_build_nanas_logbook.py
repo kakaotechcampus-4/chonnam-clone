@@ -38,7 +38,9 @@ SQLITE_MEMORY_PROMPT = (
 WEEK03_TOOL_CALL_PROMPT = (
     "## Week 3 tool 호출 순서\n"
     "- 저장 요청이면 아래 순서를 그대로 따른다.\n"
-    "  1) extract_schedule_request(query=사용자 요청 원문)를 호출해 자연어를 구조화한다.\n"
+    "  1) extract_schedule_request(query=사용자 요청 원문)를 호출해 자연어를 구조화한다. "
+    "이 결과가 ok=false이면 구조화에 실패한 것이므로 save_structured_request를 호출하지 말고, "
+    "구조화에 실패했음을 사용자에게 정직하게 알린다.\n"
     "  2) 반환된 structured_request의 kind/title/date/start_time/end_time/members/priority/reason/"
     "original_text를 save_structured_request 인자로 그대로 전달한다. 값을 다시 해석하거나 지어내지 않는다.\n"
     "  3) 저장 결과의 request_id를 근거로 저장이 끝났음을 사용자에게 알린다.\n"
