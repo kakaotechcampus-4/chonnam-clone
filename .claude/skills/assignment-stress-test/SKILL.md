@@ -120,6 +120,35 @@ tool 개수를 N이라 할 때, 아래 5개 카테고리로 100개를 나눕니�
    필드로 묶어 순서 보장을 표시합니다.
 5. **주제 이탈형** (소수): 이 파일의 tool 어디에도 안 걸리는 일반 잡담.
    tool을 안 부르는 게 맞는 경우도 검증 대상입니다.
+6. **검색 품질형** (검색 tool이 있는 파일만): "올바른 tool을 골랐나"가 아니라
+   "그 tool이 **관련 있는 결과를 반환했나**"를 재는 별도 축입니다. fixture로
+   미리 심어둔 문서(아래 3.5단계)를 근거로, 라벨에 `expected_hits`(반드시
+   검색돼야 할 fixture_id 목록)와 `forbidden_hits`(나오면 안 되는 것)를 답니다.
+   구성: 직접 매칭, 패러프레이즈(동의어로 임베딩 의미 매칭 확인), 유사쌍 순위
+   (비슷한 문서 2개 중 하나만 정답 — 어느 쪽이 상위인지), 빈 결과가 정답
+   (`expected_hits: []` — 관련 fixture가 없는 질문), 통합 검색 recall.
+   ⚠️ **top_k 함정**: 1단계에서 파싱한 tool의 top_k 기본값보다 `expected_hits`
+   개수가 크면 recall 1.0이 원천 불가능합니다. 라벨 설계 시 반드시 반영하세요.
+
+### 3.5단계 — fixture 정의 (검색 품질형을 만들 때만)
+
+캐시 폴더에 `fixtures.jsonl`을 만듭니다 (git 커밋 대상). 한 줄 형식:
+
+```json
+{"fixture_id": "f001", "seed_module": "student_parts.week04_retrieve_nanas_memory", "seed_via": "add_personal_reference", "payload": {"title": "...", "content": "... [FXT:f001]", "tags": ["..."]}, "note": "무슨 검증용인지"}
+```
+
+- `seed_via`는 **대상 파일(또는 이전 주차 파일)에 실재하는** 저장 tool/함수 이름.
+  1단계 구조 탐색에서 발견한 것만 씁니다. harness가 이름으로 import·호출하므로
+  (LangChain tool이면 `.invoke(payload)`, 일반 함수면 `fn(**payload)`) harness는
+  과제 구조를 계속 몰라도 됩니다.
+- **마커 규약**: 모든 payload는 직렬화 문자열 어딘가에 `[FXT:<fixture_id>]`를
+  포함해야 합니다(검색 결과로 노출되는 텍스트 필드에 넣을 것 — 예: 참고자료는
+  content, SQLite 요청은 reason/original_text). 집계기가 tool_result에서 이
+  마커를 스캔해 어떤 fixture가 반환됐는지 판정합니다. 마커 없으면 seed 단계에서
+  즉시 실패합니다.
+- 유사쌍(비슷한 문서 2~3개)을 일부러 포함해야 순위 평가가 의미를 가집니다.
+- fixture는 agent를 거치지 않고 store 함수 직접 호출로 심습니다(결정론 보장).
 
 ### 4단계 — 프롬프트 생성 (재사용 안 된 부분만)
 
@@ -128,6 +157,12 @@ tool 개수를 N이라 할 때, 아래 5개 카테고리로 100개를 나눕니�
 {"id": "p001", "text": "...", "expected_tool": "search_saved_requests", "category": "ambiguous", "reason": "날짜 조건 없이 키워드만 있어서 이 tool이 맞음", "conversation_group": null, "tool_signature_hash": "sha256:..."}
 ```
 - `expected_tool`은 tool 안 부르는 게 맞으면 `null`.
+- **검색 품질형만** 필드 2개 추가: `expected_hits`(fixture_id 배열; `[]`이면
+  "아무 fixture도 반환되면 안 됨"), `forbidden_hits`(반환되면 안 되는 fixture_id
+  배열). 이 필드가 아예 없는 프롬프트는 기존처럼 라우팅만 평가되므로 하위호환
+  걱정 없습니다. 검색 품질형은 별도 파일 `retrieval_prompts.jsonl`로 관리해도
+  되고(기존 100줄 자산을 안 건드리는 장점), prompts.jsonl에 합쳐도 됩니다 —
+  harness의 `--prompts`에 어느 파일을 주는지만 다릅니다.
 - `conversation_group`은 독립 프롬프트면 `null`, 멀티턴 시나리오면 같은
   그룹 문자열(예: `"scenario_a"`)로 묶고, 그룹 안에서는 실행 순서가 곧
   `id` 오름차순이 되게 합니다.
@@ -148,6 +183,20 @@ uv run python .claude/skills/assignment-stress-test/run_harness.py \
   --active-week <weekNN에서 뽑은 정수> \
   --out stress_test_prompts/<stem>/results_history/<타임스탬프>.jsonl
 ```
+
+검색 품질형(expected_hits 라벨)을 돌릴 때는 `--fixtures`를 추가합니다:
+
+```bash
+uv run python .claude/skills/assignment-stress-test/run_harness.py \
+  --prompts stress_test_prompts/<stem>/retrieval_prompts.jsonl \
+  --active-week <N> \
+  --fixtures stress_test_prompts/<stem>/fixtures.jsonl \
+  --out stress_test_prompts/<stem>/results_history/<타임스탬프>_retrieval.jsonl
+```
+
+harness가 격리 직후·실행 전에 fixture를 심고, seed 결과를 `--out` 옆
+`fixture_map_<stem>.json`에 남깁니다. fixture 없이 검색 품질형을 돌리면 격리
+DB가 비어 있어 전부 "빈 결과"가 나오니 의미가 없습니다 — 반드시 함께 줄 것.
 
 - `active-week`은 파일명 `weekNN_...`에서 정규식으로 뽑습니다. 하드코딩 금지.
 - 100개 전부 실제 LLM 호출이라 시간·비용이 듭니다. 실행 전에 사용자에게
@@ -192,6 +241,21 @@ uv run python .claude/skills/assignment-stress-test/aggregate_results.py \
     validator를 진짜 확인하려면 agent 경유 말고 tool 객체를 코드에서 직접
     `.invoke({...이상값...})`해서 `ValidationError`가 나는지 별도로 확인해야
     합니다.
+- **검색 품질 리포트 해석** (expected_hits 라벨이 있을 때 자동으로 붙는 섹션):
+  - recall/precision/MRR/위반 카운트는 전부 마커 스캔 기반 **결정론 계산**입니다.
+    여기까지는 AI 판단이 개입하지 않습니다.
+  - recall 실패를 버그로 단정하기 전에 확인할 것: ① tool의 top_k 기본값이
+    기대 개수보다 작지 않은지(라벨 설계 오류), ② agent가 검색 query를 어떻게
+    바꿔 넣었는지(events의 tool_call arguments 확인 — 검색 자체는 정상인데
+    query 재작성이 문제인 경우가 흔함), ③ 임베딩 vs LIKE 검색 특성(SQLite
+    LIKE는 동의어를 못 잡는 게 정상).
+  - "빈 결과가 정답" 위반은 임베딩 검색이 관련도 컷 없이 top_k를 무조건
+    채우는 특성 때문에 자주 납니다 — tool 버그가 아니라 관련도 임계값 설계
+    이슈로 분류하세요.
+  - **AI(LLM-judge) 판단은 마지막 층만**: 최종 answer가 검색 결과를 실제
+    근거로 썼는지(faithfulness), 검색에 없는 내용을 지어냈는지. 이 판단으로
+    케이스를 기각할 때는 근거를 라벨 오류 / 의도된 동작 / 진짜 버그 중
+    하나로 분류해 명시합니다.
 
 ## 출력 포맷
 
@@ -211,7 +275,13 @@ uv run python .claude/skills/assignment-stress-test/aggregate_results.py \
   않습니다 — 전부 "현재 파일에서 발견"으로 동작해야 합니다.
 - 구조가 완전히 다른 미래 파일도 최소한 "함수명 + docstring만으로 프롬프트
   생성"까지는 내려갈 수 있어야 합니다(1.3/1.4의 fallback).
-- `stress_test_prompts/<stem>/prompts.jsonl`, `manifest.json`, `manifest.md`는
+- 검색 품질형 프롬프트의 캐시 판단에는 tool 시그니처 해시에 **fixture 세트
+  해시**(fixtures.jsonl 전체의 sha256)를 결합합니다 — fixture가 바뀌면 검색
+  품질형만 무효화되고 라우팅형 캐시는 유지됩니다. manifest에 `fixtures_hash`와
+  임베딩 backend 정보(모델명)를 함께 기록하세요. 임베딩 모델이 바뀌면 검색
+  점수 변화가 회귀가 아니라 환경 변화일 수 있어 구분이 필요합니다.
+- `stress_test_prompts/<stem>/prompts.jsonl`, `retrieval_prompts.jsonl`,
+  `fixtures.jsonl`, `manifest.json`, `manifest.md`는
   재사용 자산이므로 git 커밋 대상입니다. `results_history/`는 실행마다
   쌓이는 로그라 `.gitignore` 대상입니다(레포 최상위 `.gitignore`에 이미
   `stress_test_prompts/*/results_history/` 패턴을 추가해둘 것).
