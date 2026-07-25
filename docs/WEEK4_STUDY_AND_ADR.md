@@ -4,6 +4,7 @@
 - 브랜치: `junyoung/week4` (base = 최신 `junyoung/final` + `main` 강의자료)
 - 범위: **Week 4 메인 과제 완료**, 강의 추가 과제는 보류
 - 구현 커밋: `c009d2f`
+- 멘토 리뷰: [PR #101](https://github.com/kakaotechcampus-4/chonnam-clone/pull/101) (`CHANGES_REQUESTED`)
 
 이 문서는 구현 코드의 동작을 설명하고, 구현 과정에서 선택한 설계의 배경·결정·결과를 ADR로 기록한다.
 
@@ -224,21 +225,199 @@ tool 본문에는 저장 방식이나 metadata 변환 로직을 넣지 않았다
 **코드**
 
 ```python
-rows = reference_store.search_personal_references(query, limit=top_k)
-if not isinstance(rows, list):
-    raise TypeError(...)
+def search_personal_reference_hits(
+    reference_store: PersonalReferenceStore,
+    *,
+    query: str,
+    top_k: int = 2,
+) -> list[dict[str, Any]]:
+    """ChromaDB 검색 결과를 tool이 바로 반환하기 쉬운 hit 구조로 정리합니다."""
 
-hits = []
-for index, row in enumerate(rows):
-    if not isinstance(row, dict):
-        raise TypeError(...)
-    if not row.get("id") or not row.get("content"):
-        raise ValueError(...)
-    hits.append({...})
-return hits
+    normalized_query = _require_non_empty_text(query, field_name="query")
+    rows = reference_store.search_personal_references(normalized_query, limit=top_k)
+    if not isinstance(rows, list):
+        raise TypeError(
+            "reference search returned a non-list value: "
+            f"type={type(rows).__name__}, value={_value_preview(rows)}"
+        )
+
+    hits: list[dict[str, Any]] = []
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            raise TypeError(
+                f"reference search row {index} is not a dict: "
+                f"type={type(row).__name__}, value={_value_preview(row)}"
+            )
+        reference_id = row.get("id")
+        content = row.get("content")
+        if not isinstance(reference_id, str) or not reference_id.strip():
+            raise ValueError(
+                f"reference search row {index} is missing id: "
+                f"value={_value_preview(row)}"
+            )
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError(
+                f"reference search row {index} is missing content: "
+                f"value={_value_preview(row)}"
+            )
+        hits.append(
+            {
+                "id": reference_id,
+                "content": content,
+                "distance": row.get("distance"),
+                "metadata": {
+                    "title": row.get("title", ""),
+                    "tags": _normalize_reference_tags(row.get("tags")),
+                },
+            }
+        )
+    return hits
 ```
 
-**동작**
+#### 코드 줄 단위 해설
+
+| 코드 | 해설 |
+|---|---|
+| `def search_personal_reference_hits(` | 개인 참고자료 store의 검색 결과를 tool 응답용 hit 목록으로 바꾸는 helper를 정의한다. LangChain tool 자체가 아니라 일반 Python 함수이므로 store를 바꿔 끼우며 단위 테스트할 수 있다. |
+| `reference_store: PersonalReferenceStore,` | 검색을 수행할 store 객체를 받는다. 함수 안에서 전역 `REFERENCE_STORE`를 직접 사용하지 않아 테스트용 가짜 store도 전달할 수 있다. 타입 힌트는 이 객체가 어떤 인터페이스를 제공해야 하는지 알려준다. |
+| `*,` | 이 기호 뒤의 인자는 키워드로만 전달할 수 있다. 따라서 `query="회의"`와 `top_k=2`처럼 이름을 명시해야 하며, 인자 순서를 잘못 넣는 실수를 줄인다. |
+| `query: str,` | 의미 검색에 사용할 사용자 질문이다. `str` 타입 힌트가 있지만 Python이 실행 시 자동으로 타입을 검사해 주는 것은 아니므로 아래에서 실제 값도 검증한다. |
+| `top_k: int = 2,` | 최대 검색 결과 수다. 호출자가 생략하면 두 건을 요청한다. 이 helper 자체는 범위를 보정하지 않으며, tool 계층에서 `safe_limit()`으로 보정한 값을 받는 구조다. |
+| `) -> list[dict[str, Any]]:` | 반환값이 dict 여러 개를 담은 list임을 표시한다. dict 내부에는 문자열뿐 아니라 `distance` 같은 숫자나 `None`도 들어갈 수 있어 값 타입을 `Any`로 표시했다. |
+| `"""..."""` | 이 함수가 ChromaDB의 원본 검색 row를 tool이 쓰기 좋은 hit 구조로 변환한다는 책임을 설명하는 docstring이다. |
+| `normalized_query = _require_non_empty_text(...)` | query가 문자열인지 확인하고 앞뒤 공백을 제거한다. 빈 문자열이나 공백뿐인 질문은 store에 보내지 않고 즉시 오류로 처리한다. `field_name="query"`는 오류 메시지에 어떤 입력이 잘못됐는지 표시하기 위한 이름이다. |
+| `rows = reference_store.search_personal_references(...)` | 검증된 query로 실제 vector search를 실행한다. `limit=top_k`처럼 키워드 인자로 전달해 결과 개수를 명확히 지정한다. 반환값은 아직 store 내부 형식이다. |
+| `if not isinstance(rows, list):` | store가 약속한 list 대신 dict, 문자열, `None` 등을 반환했는지 검사한다. 결과가 0건인 빈 list는 정상 값이므로 이 조건에 걸리지 않는다. |
+| `raise TypeError(` | 반환 컨테이너의 타입이 잘못됐으므로 `TypeError`를 발생시킨다. 잘못된 값을 빈 검색 결과로 위장하지 않는다. |
+| `"reference search returned ..."` | 오류의 원인을 사람이 바로 찾을 수 있도록 “검색 결과가 list가 아니다”라는 문맥을 넣는다. 인접한 문자열 리터럴 두 개는 Python이 하나의 문자열로 자동 결합한다. |
+| `f"type={type(rows).__name__}, ..."` | 실제 반환 타입 이름과 값의 미리보기를 오류 메시지에 넣는다. `_value_preview()`를 사용해 매우 긴 값이 로그를 과도하게 채우는 것을 막는다. |
+| `hits: list[dict[str, Any]] = []` | 검증과 변환을 마친 최종 hit를 쌓을 빈 list를 만든다. 타입 힌트는 이 list에 어떤 값이 들어가는지 명시한다. |
+| `for index, row in enumerate(rows):` | store가 반환한 row를 순서대로 검사한다. `enumerate()`로 0부터 시작하는 위치도 함께 얻어, 잘못된 row가 몇 번째인지 오류에 표시한다. 기존 검색 순서는 바꾸지 않는다. |
+| `if not isinstance(row, dict):` | 각 row가 key로 필드에 접근할 수 있는 dict인지 확인한다. 바깥 컨테이너가 list여도 내부 값이 올바르다는 보장은 없으므로 별도로 검사한다. |
+| `raise TypeError(...)` | row 자체의 자료형이 잘못됐을 때 오류를 발생시킨다. 메시지에는 `index`, 실제 타입, 값 미리보기가 들어간다. |
+| `reference_id = row.get("id")` | 검색 근거를 식별할 `id`를 꺼낸다. `row["id"]`와 달리 key가 없어도 바로 `KeyError`를 내지 않고 `None`을 받아 아래에서 문맥이 있는 오류로 바꾼다. |
+| `content = row.get("content")` | LLM이 답변 근거로 읽을 문서 본문을 꺼낸다. `id`와 마찬가지로 아래에서 타입과 빈 값을 함께 검사한다. |
+| `if not isinstance(reference_id, str) or not reference_id.strip():` | id가 문자열이 아니거나 공백뿐인 문자열이면 잘못된 row로 판단한다. `or`는 앞 조건이 참이면 뒤를 평가하지 않으므로 문자열이 아닌 값에 `.strip()`을 호출하지 않는다. |
+| `raise ValueError(...)` | row의 컨테이너 타입은 dict로 맞지만 필수 값의 내용이 잘못됐으므로 `ValueError`를 사용한다. 어느 row에서 문제가 났는지와 실제 row 미리보기를 남긴다. |
+| `if not isinstance(content, str) or not content.strip():` | content도 문자열이면서 실제 문자가 있어야 한다. 본문 없는 hit가 정상 검색 근거로 LLM에 전달되는 것을 막는다. |
+| `raise ValueError(...)` | id 검증과 같은 방식으로 본문 누락을 구체적인 오류로 알린다. |
+| `hits.append(` | 검증을 통과한 원본 row를 공개 tool 계약의 형태로 변환해 결과 list에 추가한다. |
+| `"id": reference_id,` | 필수 식별자를 최상위 필드로 유지한다. |
+| `"content": content,` | 답변에 직접 사용할 본문을 최상위 필드로 유지한다. |
+| `"distance": row.get("distance"),` | vector search 거리를 전달한다. 현재는 별도 타입 검증을 하지 않으므로 값이 없으면 `None`이 된다. 일반적으로 거리가 작을수록 query와 더 가깝다. |
+| `"metadata": {` | 본문 자체가 아닌 설명용 필드를 하위 dict로 묶는다. 이 경계가 store의 평평한 row를 tool 응답 구조로 바꾸는 핵심이다. |
+| `"title": row.get("title", ""),` | 제목이 있으면 사용하고 key가 없으면 빈 문자열을 넣어 `title` key 자체는 항상 유지한다. 값이 명시적으로 `None`이면 기본값이 적용되지 않고 `None`이 남는다는 점은 별도 검증이 필요한 부분이다. |
+| `"tags": _normalize_reference_tags(row.get("tags")),` | store가 준 쉼표 구분 문자열 또는 list를 공개 계약인 `list[str]`로 정규화한다. 태그가 없을 때는 항상 `[]`를 넣는다. |
+| `return hits` | 모든 row의 검증과 변환이 끝난 목록을 반환한다. 검색 결과가 없었다면 반복문을 실행하지 않으므로 정상적으로 빈 list를 반환한다. |
+
+이 함수의 흐름을 짧게 묶으면 `query 검증 → store 검색 → list 검증 → 각 row 검증 → tool hit 구조로 변환 → 반환`이다.
+
+#### 멘토 리뷰 — `tags` 응답 타입
+
+**멘토 리뷰 원문**
+
+> tags 기본값이 빈 문자열인데, PersonalReferenceStore가 tags를 list[str]로 준다면 타입이 불일치합니다.
+>
+> LLM/다운스트림이 tags를 iterable로 가정하면 빈 문자열일 때 for t in tags가 문자 단위 iteration을 해버립니다.
+>
+> store가 항상 list를 준다면 그대로 두셔도 됩니다. 의도라면 주석 한 줄 부탁드립니다 !
+
+[PR 리뷰 원문](https://github.com/kakaotechcampus-4/chonnam-clone/pull/101#discussion_r3642908660)
+
+**리뷰가 말하고자 한 점**
+
+이 리뷰는 `hits: list[dict[str, Any]]`처럼 검색 결과 전체를 list로 선언한 부분을 지적한 것이 아니다. 바깥의 `hits` list와 각 hit 안의 `metadata.tags` 타입은 서로 다른 문제다.
+
+```python
+[
+    {
+        "id": "ref_1",
+        "metadata": {
+            "tags": "preference,meeting",
+        },
+    }
+]
+```
+
+위에서 검색 결과 전체는 정상적으로 list이지만 `tags`는 문자열이다. 호출하는 쪽에서 `metadata.tags`를 태그 목록이라고 생각하고 순회하면 `"preference"`와 `"meeting"`이 아니라 `p`, `r`, `e` 같은 문자 단위로 순회한다. 빈 문자열 자체에는 순회할 문자가 없지만, 같은 필드에 값이 들어오는 순간 문자열의 문자 단위 순회 문제가 나타난다.
+
+`Any`를 더 구체적인 타입으로 바꾸면 정적 타입 검사로 실수를 발견하는 데는 도움이 된다. 하지만 `Any`가 문자열을 만든 원인은 아니며, 타입 힌트만 바꿔도 실제 값은 자동으로 list가 되지 않는다. 실제 반환값을 변환해야 한다.
+
+**저장할 때는 list인데 검색할 때는 문자열이 된 이유**
+
+현재 구현을 실제 store까지 따라가 보면 다음과 같이 두 계약이 다르다.
+
+- `add_personal_reference()`의 저장 응답: `tags or []`이므로 `list[str]`
+- `search_personal_references()`의 검색 응답: ChromaDB metadata의 쉼표 구분 값을 그대로 꺼내므로 `str`
+
+저장 함수는 처음에 태그를 list로 받는다.
+
+```python
+tags = ["preference", "meeting"]
+```
+
+그런데 ChromaDB metadata에 기록할 때 `join()`을 사용해 하나의 문자열로 바꾼다.
+
+```python
+metadatas=[
+    {
+        "title": title,
+        "tags": ",".join(tags or []),
+    }
+]
+```
+
+따라서 ChromaDB 내부에는 다음 값이 저장된다.
+
+```python
+"preference,meeting"
+```
+
+저장 함수의 응답은 DB에 넣은 metadata를 다시 읽는 것이 아니라 입력받았던 `tags`를 그대로 돌려주므로 list다. 반면 검색 함수는 ChromaDB에서 꺼낸 문자열을 다시 분리하지 않고 그대로 반환한다.
+
+```text
+저장 입력          ["preference", "meeting"]
+    ↓ join
+ChromaDB 저장값    "preference,meeting"
+    ↓ 복원 과정 없음
+검색 반환값        "preference,meeting"
+```
+
+문자열 저장은 성능 최적화라기보다 저장소 경계의 단순성과 호환성을 위한 선택으로 보는 것이 맞다. 문자열은 ChromaDB metadata가 안정적으로 처리하는 기본 타입이고, 태그가 없을 때도 빈 문자열 `""`로 저장할 수 있다. 현재 ChromaDB는 metadata의 배열도 지원하지만 빈 배열은 허용하지 않는다. 프로젝트가 `chromadb>=0.5`처럼 넓은 버전 범위를 허용한다는 점까지 고려하면, 제공 코드가 문자열을 사용한 정확한 의도는 주석 없이는 확정할 수 없지만 보수적인 호환 방식으로 이해할 수 있다.
+
+[ChromaDB metadata 배열 공식 문서](https://docs.trychroma.com/docs/collections/add-data)
+
+따라서 현재 검색 경로에서 `row.get("tags", "")`는 store가 실제 반환한 타입과는 일치한다. 문제는 저장 응답과 검색 응답의 공개 타입이 다르고, 검색 경계에서 저장용 문자열을 애플리케이션용 list로 복원하지 않았다는 점이다.
+
+**적용한 해결**
+
+`fixed/reference_store.py`의 저장 방식을 바꾸지 않고, 우리가 작성한 검색 helper에서 ChromaDB의 저장용 문자열을 `list[str]`로 복원했다. 즉, 저장소 내부 표현은 문자열이어도 tool이 외부에 공개하는 계약은 항상 list로 유지한다.
+
+```python
+"metadata": {
+    "title": row.get("title", ""),
+    "tags": _normalize_reference_tags(row.get("tags")),
+}
+```
+
+변환 결과는 다음과 같다.
+
+```text
+"preference,meeting" → ["preference", "meeting"]
+""                   → []
+```
+
+이렇게 하면 기본값도 `""`가 아니라 `[]`가 되고 저장 응답과 검색 응답의 타입도 `list[str]`로 같아진다. 이미 list를 반환하는 test double이나 향후 store 구현도 받아들일 수 있도록 문자열과 list 양쪽을 정규화한다.
+
+다음 세 가지를 테스트로 검증했다.
+
+- 태그가 없으면 빈 list를 반환한다.
+- 쉼표 구분 문자열을 `list[str]`로 변환한다.
+- store가 이미 list를 반환하면 같은 태그 목록을 유지한다.
+
+문자열을 유지하면서 주석으로 계약을 설명하는 방법도 있지만, 후속 코드가 태그 단위로 순회하기에는 list 계약이 더 자연스럽다. 따라서 검색 helper에서 list로 복원하는 방식으로 구현했다.
+
+**구현 결과**
 
 `PersonalReferenceStore`의 검색 결과는 `id`, `title`, `content`, `tags`, `distance`가 같은 단계에 있는 dict다. helper는 이를 다음 형태로 바꾼다.
 
@@ -249,7 +428,7 @@ return hits
   "distance": 0.12,
   "metadata": {
     "title": "집중 시간",
-    "tags": "preference,meeting"
+    "tags": ["preference", "meeting"]
   }
 }
 ```
@@ -262,7 +441,7 @@ return hits
 - `metadata`: 문서 제목과 분류 정보
 - `distance`: vector 검색 결과를 확인하는 값
 
-title과 tags는 부가 metadata이므로 누락되면 빈 문자열로 처리해 응답 key를 유지한다. 반면 id와 content는 각각 근거의 식별자와 본문이므로 필수다. 둘 중 하나가 없으면 빈 hit를 정상 결과처럼 만들지 않고, row 위치와 실제 값을 포함한 오류를 낸다. 검색 순서와 distance는 store가 반환한 그대로 유지한다.
+title과 tags는 부가 metadata이므로 응답 key는 항상 유지한다. title이 누락되면 빈 문자열을 사용하고 tags는 `list[str]` 계약에 맞춰 빈 list를 사용한다. 반면 id와 content는 각각 근거의 식별자와 본문이므로 필수다. 둘 중 하나가 없으면 빈 hit를 정상 결과처럼 만들지 않고, row 위치와 실제 값을 포함한 오류를 낸다. 검색 순서와 distance는 store가 반환한 그대로 유지한다.
 
 **구현 근거**
 
@@ -312,11 +491,157 @@ def search_saved_request_rows(sqlite_store, *, query, top_k=3):
     rows = sqlite_store.search_saved_requests(normalized_query, limit=top_k)
     if not isinstance(rows, list):
         raise TypeError(...)
+
+    result_rows = []
     for index, row in enumerate(rows):
         if not isinstance(row, dict) or not row.get("request_id"):
             raise ValueError(...)
-    return rows
+        result_rows.append(_saved_request_hit_from_row(row, row_index=index))
+    return result_rows
 ```
+
+**이 함수가 하는 일**
+
+이 helper는 Week 3에서 SQLite에 저장한 일정·할 일·알림을 검색해 Week 4 tool에 전달한다. 흐름은 다음 네 단계다.
+
+```text
+검색어가 비어 있지 않은지 검사
+    ↓
+AppSQLiteStore에서 최대 top_k건 검색
+    ↓
+전체 결과가 list이고 각 row가 dict인지 검사
+    ↓
+각 row에 필수 식별자 request_id가 있는지 검사
+```
+
+함수는 검사를 통과한 row를 `_saved_request_hit_from_row()`에 전달해 store 내부 형식을 tool 공개 형식으로 바꾼 뒤 반환한다.
+
+#### 멘토 리뷰 — store 반환값과 tool 계약의 강결합
+
+**멘토 리뷰 원문**
+
+> search_saved_request_rows가 AppSQLiteStore.search_saved_requests의 반환을 그대로 반환하고 있습니다.
+>
+> store가 컬럼을 추가하거나 변경하면 tool 응답 스키마도 자동으로 변합니다. tool은 안정적인 게약을 제공해야 하는데, store에 강결합되어있습니다.
+
+[PR 리뷰 원문](https://github.com/kakaotechcampus-4/chonnam-clone/pull/101#discussion_r3642903470)
+
+**리뷰가 말하고자 한 점**
+
+`AppSQLiteStore.search_saved_requests()`는 `SELECT *`의 결과를 `dict(row)`로 만들어 반환한다. 현재 helper는 row의 타입과 `request_id`만 검사한 뒤 그 dict 전체를 그대로 내보낸다. 이 구조에서는 DB에 내부 관리용 컬럼 하나를 추가해도 tool 응답에 자동으로 노출되고, 컬럼 이름을 바꾸거나 삭제하면 tool 응답도 예고 없이 바뀐다.
+
+즉, DB 테이블의 스키마가 곧 LLM이 보는 공개 API 스키마가 된다. 저장소 구현과 tool 계약 사이에 변환 경계가 없다는 것이 “강결합”의 의미다.
+
+예를 들어 에이전트가 답변에 필요한 내용이 제목과 일정 시간뿐이어도 현재 row에는 다음 값이 함께 들어간다.
+
+```python
+{
+    "request_id": "req_123",
+    "kind": "personal_schedule",
+    "title": "코칭 일정",
+    "date": "2026-07-25",
+    "start_time": "10:00",
+    "end_time": "11:00",
+    "members_json": "[]",
+    "priority": None,
+    "reason": "발표 준비",
+    "raw_json": "{...}",
+    "created_at": "2026-07-25T09:00:00",
+}
+```
+
+`search_saved_requests` tool이 이 row를 반환하면 tool result가 trace에 기록되므로 모든 컬럼이 trace에 나타나고 LLM도 전부 읽는다. 그 결과 다음 문제가 생길 수 있다.
+
+- 답변에 필요 없는 내부 필드와 중복 데이터가 노출된다.
+- tool result와 trace가 길어지고 LLM이 읽는 토큰도 늘어난다.
+- DB에 내부 컬럼을 추가하면 별도 코드 변경 없이 tool 응답에도 노출된다.
+- DB 컬럼 이름을 변경하면 LLM이 받는 응답 계약도 예고 없이 달라진다.
+- 이후 민감한 내부 컬럼이 생기면 의도하지 않은 노출 경로가 될 수 있다.
+
+멘토 리뷰는 단순히 trace를 보기 좋게 줄이라는 뜻을 넘어서, DB 내부 구조와 LLM에 공개하는 tool 응답 구조를 분리하라는 의미다.
+
+**필드를 함수 안에 직접 고정하면 수리하기 어려운가**
+
+tool이 안정적인 공개 계약을 가지려면 어떤 필드를 공개할지는 어딘가에 명시해야 한다. 필드를 고정하는 것 자체가 문제는 아니다. 문제는 여러 함수에 같은 필드 목록을 복사해 두는 것이다.
+
+따라서 `search_saved_request_rows()` 안에 긴 dict를 직접 작성하는 것보다, `SavedRequestHit`이라는 하나의 응답 모델이나 전용 변환 함수에 계약을 모으는 편이 낫다. DB 필드와 tool 필드의 관계를 한 곳에서 관리하면 이후 수정 지점도 한 곳으로 제한된다.
+
+```python
+class SavedRequestHit(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    request_id: str
+    kind: str
+    title: str | None = None
+    date: str | None = None
+    start_time: str | None = None
+    end_time: str | None = None
+    members: list[str] = Field(default_factory=list)
+    priority: str | None = None
+    reason: str | None = None
+    original_text: str = ""
+```
+
+여기서 `SavedRequestHit`은 새로운 저장소가 아니라 “Week 4 검색 결과 한 건을 외부에 어떤 모양으로 보여줄지”를 정의하는 경계다.
+
+```text
+SQLite의 내부 row
+    ↓
+SavedRequestHit 검증·변환
+    ↓
+Week 4 tool 응답
+    ↓
+trace와 LLM
+```
+
+검색 helper는 `members_json`과 `raw_json`을 공개 타입으로 변환한 뒤 이 모델에 정의된 결과만 반환한다.
+
+```python
+hit = SavedRequestHit.model_validate(
+    {
+        "request_id": row.get("request_id"),
+        "kind": row.get("kind"),
+        "title": row.get("title"),
+        "date": row.get("date"),
+        "start_time": row.get("start_time"),
+        "end_time": row.get("end_time"),
+        "members": _decode_string_list(row.get("members_json"), ...),
+        "priority": row.get("priority"),
+        "reason": row.get("reason"),
+        "original_text": raw_payload.get("original_text", ""),
+    }
+)
+return hit.model_dump()
+```
+
+이렇게 하면 DB row에 `internal_debug_note` 같은 새 컬럼이 추가되어도 `SavedRequestHit`에 정의하지 않은 값은 tool 응답에 포함되지 않는다. 반대로 tool 응답에 새 정보가 필요하면 모델 한 곳을 의도적으로 수정하고 테스트한다.
+
+어떤 필드를 공개할지는 agent가 일정·할 일·알림 질문에 답하는 데 실제로 필요한 범위로 확정한다. 참석자가 필요하면 DB의 `members_json` 문자열을 그대로 노출하기보다 `members: list[str]`로 변환해 모델에 추가하는 것이 tool 관점에서 자연스럽다.
+
+**이 문제가 3.6에만 있는가**
+
+아니다. Week 3에도 store row를 tool 결과로 그대로 넘기는 경로가 있다.
+
+- `list_saved_requests`: `list_saved_requests()`의 row 목록을 그대로 반환
+- `get_saved_request`: `get_saved_request()`의 단일 row를 그대로 반환
+- `personal_list_saved_schedules`: `list_schedules()`의 일정 row 목록을 그대로 반환
+
+Week 4의 `week04_tools()`는 `week03_tools()`도 함께 노출하므로, Week 3 tool이 선택되면 그 raw row도 tool result와 trace에 나타날 수 있다.
+
+PR #101에서는 새로 작성한 Week 4 helper가 변경분이었기 때문에 이 위치에 리뷰가 달린 것으로 본다. 이 리뷰가 “3.6만 raw row를 노출한다”는 의미는 아니다.
+
+**적용한 대응 범위**
+
+멘토가 직접 지적한 Week 4의 `search_saved_requests` 경로에만 `SavedRequestHit` 변환 경계를 추가했다. Week 3 tool까지 동시에 바꾸면 이전 주차의 tool 응답 계약, 테스트, 기존 동작이 함께 달라질 수 있으므로 이번 수정 범위를 불필요하게 넓히지 않았다.
+
+Week 3의 raw row 노출은 문서에 인지 사항으로 남기고 이번 PR에서는 수정하지 않는다. 이후 공통 응답 모델을 적용하는 별도 리팩터링이 필요할 때 함께 검토한다.
+
+Week 4 수정에서 다음 내용을 테스트했다.
+
+- 정상 DB row가 정해진 `SavedRequestHit` 필드만 반환한다.
+- DB row에 임의의 추가 컬럼이 있어도 tool 응답에 포함되지 않는다.
+- 필수 `request_id`가 없거나 잘못된 타입이면 명확한 오류를 낸다.
+- 검색 결과가 없으면 기존 계약대로 빈 list를 반환한다.
 
 **동작**
 
@@ -332,7 +657,7 @@ search_saved_requests(query, kind=None, limit=5)
 
 **구현 의도**
 
-helper는 검색 정책을 새로 만들지 않고 기존 SQLite store의 계약을 그대로 사용한다. 결과의 `raw_json` 등 근거 필드도 제거하지 않는다. 다만 반환 계약이 깨졌을 때 식별자 없는 row를 정상 검색 결과로 전달하지 않는 guard만 담당한다.
+helper는 기존 SQLite store의 검색 정책은 그대로 사용하지만 store의 반환 스키마 자체를 공개 계약으로 사용하지 않는다. 식별자 없는 row를 차단한 뒤 `SavedRequestHit`에서 필요한 필드만 선택한다. `members_json`은 `members: list[str]`로 바꾸고 `raw_json`에서는 답변 근거인 `original_text`만 꺼내므로 DB 내부 표현도 tool 결과에 직접 노출되지 않는다.
 
 **구현 근거**
 
@@ -432,6 +757,143 @@ starter 코드에는 추가 과제인 `search_conversation_messages`도 목록�
 - 이전 assistant가 찾지 못했다고 한 답변 자체를 기록 부재의 근거로 삼지 않는다.
 
 두 검색 결과는 합쳐서 재정렬하지 않는다. 개인 참고자료의 `hits`와 구조화 요청의 `rows`를 각각 유지한 채 agent가 필요한 근거를 골라 답변한다. 이 방식은 starter 안내의 “LLM이 질문 성격에 따라 둘 중 하나 또는 둘 다 선택”한다는 범위 안에 있다.
+
+---
+
+### 3.10 로컬 trace 편의 기능 — 과제 경계와 관찰 가능성 리뷰
+
+이 기능은 Week 4 메인 과제 요구사항이 아니라 실제 UI 대화의 질문·답변·trace를 로컬 JSONL로 확인하기 위해 추가한 개발 편의 기능이다. 스터디의 핵심 구현이나 ADR에서는 제외했지만, PR에서 이 코드에 세 가지 리뷰가 달렸으므로 관련 코드와 판단을 함께 기록한다.
+
+#### 멘토 리뷰 — 제공 코드인 `fixed/` 수정
+
+**관련 코드**
+
+```python
+from fixed.local_trace_log import LocalTraceLogStore
+
+class AgentRuntime:
+    def __init__(
+        self,
+        active_week: int | None = None,
+        trace_log_store: LocalTraceLogStore | None = None,
+    ) -> None:
+        ...
+```
+
+**멘토 리뷰 원문**
+
+> 과제 가이드에 "fixed/ 등 제공 코드는 수정하지 않는다" 인데, 이번 PR 에서 fixed/agent_runtime.py 와 fixed/local_trace_log.py 를 고치셨습니다. pr 본문에 개발 편의 기능이라고 명시하긴 했는데, 이걸 의도하신 건지 궁금합니다 !
+>
+> LocalTraceLogStore도 fixed/에 두신 이유가 있을까요 !
+
+[PR 리뷰 원문](https://github.com/kakaotechcampus-4/chonnam-clone/pull/101#discussion_r3642884224)
+
+**리뷰가 말하고자 한 점**
+
+기능 자체가 유용한지와 별개로 과제의 수정 가능 영역을 벗어났다는 뜻이다. `AgentRuntime`은 모든 주차의 UI 실행을 연결하는 공통 프레임워크이고, `fixed/local_trace_log.py`도 새 파일이지만 `fixed/` 아래에 두었으므로 제출 관점에서는 제공 코드 변경에 포함된다.
+
+`data/logs/agent_traces.jsonl`을 `.gitignore`에 넣은 것은 생성된 로그 데이터만 제외한다. 이미 Git이 추적하는 `fixed/agent_runtime.py`의 변경이나 새 Python 소스는 제외하지 않는다.
+
+**어떻게 해결하면 좋은가**
+
+과제 규칙을 우선하면 PR에서 다음 변경을 제거하는 것이 가장 확실하다.
+
+- `fixed/agent_runtime.py`의 trace 저장 연동을 원복한다.
+- `fixed/local_trace_log.py`와 그 전용 테스트를 제출 변경에서 제외한다.
+- 로컬 확인이 계속 필요하면 제출하지 않는 별도 로컬 브랜치나 외부 실행 스크립트로 유지한다.
+
+공통 UI 실행 결과를 기록하려면 `fixed/`가 기술적으로 자연스러운 위치일 수는 있다. 그러나 현재 과제에서는 디렉터리 책임보다 “제공 코드를 수정하지 않는다”는 제출 규칙이 우선이다. 꼭 제출해야 하는 기능이라면 먼저 멘토에게 수정 허용 범위와 둘 위치를 확인하는 것이 안전하다.
+
+#### 멘토 리뷰 — trace 기록 실패가 보이지 않는 문제
+
+**관련 코드**
+
+```python
+def _log_final_result(self, user_message: str, result: RuntimeResult) -> None:
+    try:
+        self.trace_log_store.append(...)
+    except Exception as exc:
+        LOGGER.warning(...)
+```
+
+`LocalTraceLogStore.append()`도 내부 예외를 잡아 경고를 남기고 `False`를 반환하지만, 위 코드는 그 반환값을 확인하지 않는다.
+
+**멘토 리뷰 원문**
+
+> 전 pr에 대한 피드백을 받아 개선하신 거 정말 좋네요 !
+>
+> 그런데 trace 로그 자체의 실패는 다시 조용히 넘어가고 있습니다. 이 경우 로그가 안 쌓이고 있을 때 이를 알아차리기가 어렵습니다.
+>
+> 이를 개선할 수 있는 방법을 생각해보면 좋을 것 같습니다 !
+
+[PR 리뷰 원문](https://github.com/kakaotechcampus-4/chonnam-clone/pull/101#discussion_r3642892760)
+
+**리뷰가 말하고자 한 점**
+
+채팅 기능을 계속 제공하기 위해 로그 실패를 삼키는 “best effort” 정책 자체가 문제라는 뜻은 아니다. 문제는 실패 신호가 호출자와 사용자에게 전달되지 않는다는 점이다.
+
+현재는 `append()`가 예외를 먼저 잡고 `False`를 반환하므로 `_log_final_result()`의 `except`까지 예외가 도달하지 않는다. 그런데 반환된 `False`도 무시한다. 터미널의 warning을 보고 있지 않으면 파일이 더 이상 쌓이지 않아도 앱 화면과 trace만으로는 알아차리기 어렵다.
+
+**어떻게 해결하면 좋은가**
+
+예외 처리 책임을 한 단계에만 두고, 실패 상태를 관찰 가능한 값으로 남긴다.
+
+```python
+written = self.trace_log_store.append(...)
+result.trace["local_trace_log"] = {
+    "ok": written,
+    "path": str(self.trace_log_store.path),
+}
+```
+
+이렇게 하면 로그 실패가 agent 답변까지 실패시키지는 않으면서 UI trace에서 저장 성공 여부를 확인할 수 있다. 운영 환경이라면 warning 외에 오류 카운터나 모니터링 이벤트도 사용할 수 있다.
+
+다른 방법은 `append()`가 예외를 삼키지 않고 `TraceLogWriteError` 같은 구체적 예외를 발생시키고, runtime 한 곳에서 `LOGGER.exception()`으로 stack trace와 실패 상태를 함께 기록하는 것이다. 핵심은 “대화는 계속한다”와 “로그 실패를 숨긴다”를 같은 정책으로 취급하지 않는 것이다.
+
+#### 멘토 리뷰 — `default=str`이 JSON 구조를 잃는 문제
+
+**관련 코드**
+
+```python
+encoded = json.dumps(record, ensure_ascii=False, default=str)
+```
+
+**멘토 리뷰 원문**
+
+> default=str 가 trace 안의 Exception 이나 datetime, 커스텀 객체를 repr 문자열로 직렬화합니다.
+>
+> LangChaing trace에 ToolException 같은 객체가 포함되면 "DivisionByZeroError('...')" 같은 repr이 그대로 들어가서 후속 JSONL 분석 스크립트가 구조화 파싱을 못합니다.
+
+[PR 리뷰 원문](https://github.com/kakaotechcampus-4/chonnam-clone/pull/101#discussion_r3642898319)
+
+**리뷰가 말하고자 한 점**
+
+`default=str`은 JSON이 기본적으로 처리할 수 없는 모든 객체를 일단 문자열로 바꿔 저장한다. 그래서 기록 자체는 잘 성공하는 것처럼 보이지만, 예외의 종류·메시지나 날짜의 의미가 단순 문자열 하나로 합쳐진다. 후속 분석 코드는 `"type"`, `"message"` 같은 필드로 오류를 집계하거나 날짜를 안정적으로 파싱할 수 없다.
+
+엄밀히 말하면 `default=str`은 `repr()`가 아니라 `str()`을 호출한다. 다만 객체의 문자열 표현만 남고 원래 타입과 필드 구조를 잃는다는 것이 리뷰의 핵심이다.
+
+**어떻게 해결하면 좋은가**
+
+지원할 타입을 명시한 JSON 변환 함수를 만들고, 알 수 없는 타입은 조용히 문자열로 바꾸지 않는 편이 안전하다.
+
+```python
+def _json_default(value: Any) -> Any:
+    if isinstance(value, Exception):
+        return {
+            "type": type(value).__name__,
+            "message": str(value),
+        }
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    if isinstance(value, BaseModel):
+        return value.model_dump(mode="json")
+    raise TypeError(f"unsupported trace value: {type(value).__name__}")
+
+
+encoded = json.dumps(record, ensure_ascii=False, default=_json_default)
+```
+
+이 방식에서는 예외가 `{"type": "ToolException", "message": "..."}`처럼 구조를 유지한다. 새 타입이 trace에 들어오면 저장 단계에서 명확히 실패하므로 앞의 관찰 가능성 처리와 함께 문제를 발견할 수 있다. 변환 함수의 각 지원 타입과 미지원 타입 실패도 별도 테스트로 고정해야 한다.
 
 ---
 

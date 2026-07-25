@@ -234,22 +234,23 @@ return [
 
 #### 로그 저장 모듈
 
-`fixed/local_trace_log.py`를 새로 만들고 로컬 파일 append 책임을 분리한다.
+`local_extensions/trace_log.py`를 만들고 과제 핵심 코드 및 `fixed/` 제공 코드와 로컬 파일 append 책임을 분리한다.
 
 - `LocalTraceLogStore`는 생성 시 로그 파일 경로를 받는다.
 - 기본 경로는 `DATA_DIR / "logs" / "agent_traces.jsonl"`로 한다.
 - 부모 디렉터리는 최초 기록 시 `mkdir(parents=True, exist_ok=True)`로 생성한다.
 - 한 요청을 JSON 한 줄로 직렬화하고 UTF-8 append 모드로 기록한다.
-- `json.dumps(..., ensure_ascii=False, default=str)`를 사용해 한글과 예상 밖 직렬화 타입을 안전하게 처리한다.
+- `Exception`, 날짜, Pydantic model 등 지원 타입을 명시적으로 JSON 구조로 변환한다.
+- 지원하지 않는 타입은 조용히 문자열로 바꾸지 않고 `LocalTraceLogError`로 보고한다.
 - 프로세스 내부의 동시 Gradio 요청이 같은 파일에 섞이지 않도록 `threading.Lock`으로 한 줄 append 구간을 보호한다.
-- 로그 저장 예외는 경고로 남기고 호출자에게 전파하지 않는다.
+- 로그 저장 예외는 `AgentRuntime`이 받아 UI trace 상태와 stack trace로 남기되 agent 답변은 계속 반환한다.
 
 #### `AgentRuntime` 연동
 
 `fixed/agent_runtime.py`에 logger를 주입할 수 있게 해 테스트 가능성을 확보한다.
 
 1. `AgentRuntime.__init__()`에서 기본 `LocalTraceLogStore`를 생성하되 테스트에서는 fake logger를 주입할 수 있게 한다.
-2. 내부 `_log_final_result(user_message, result)` helper 하나에서 로그 record를 구성한다.
+2. 내부 `_log_final_result(user_message, result)` helper 하나에서 성공 여부를 `trace.local_trace_log`에 기록한다.
 3. `run_agent()`는 assistant 메시지와 최종 `RuntimeResult`가 완성된 뒤 한 번 기록한다.
 4. `stream_agent()`는 `event.result`가 도착한 최종 분기에서 한 번 기록한다.
 5. stream이 결과 없이 종료되는 fallback 오류 결과도 한 번 기록한다.
@@ -262,7 +263,7 @@ return [
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "logged_at": "2026-07-22T12:34:56+09:00",
   "active_week": 4,
   "conversation_id": "conv_...",
@@ -365,7 +366,7 @@ PowerShell 기준으로 `KANANA_ACTIVE_WEEK=4`를 설정하고 `uv run python ap
 
 ## 7. 주의할 점
 
-- `student_parts_baseline/`은 읽기 전용으로 유지한다. `fixed/`에서는 로컬 로그 모듈 추가와 `agent_runtime.py` 연결만 허용하고, 기존 저장소·trace 변환 로직은 수정하지 않는다.
+- `student_parts_baseline/`은 읽기 전용으로 유지한다. 로컬 로그 모듈은 `local_extensions/`에 두고, `fixed/` 수정은 `agent_runtime.py` 연결 코드로 제한한다.
 - ChromaDB add/query는 실제 embedding 호출 시 `PROXY_TOKEN`이 필요하다. import 가능 여부와 실제 검색 가능 여부를 구분한다.
 - SQLite 저장 요청 검색은 vector RAG가 아니라 LIKE 검색이다. 응답과 prompt에서 ChromaDB 검색처럼 설명하지 않는다.
 - ChromaDB distance는 점수 방향을 임의로 뒤집거나 유사도라고 이름을 바꾸지 않고 원본 값을 유지한다.
@@ -373,5 +374,5 @@ PowerShell 기준으로 `KANANA_ACTIVE_WEEK=4`를 설정하고 `uv run python ap
 - `current_app_date_iso`, `DEFAULT_SESSION_SCOPE`, `current_session_scope`처럼 추가 과제 전용인 미사용 import는 이번 구현에서 정리할 수 있다.
 - 조회 결과가 없다는 것은 정상 결과이며 예외나 임의의 기억 생성으로 바꾸지 않는다.
 - JSONL에는 질문·답변과 tool 결과가 평문으로 남는다. 대화 삭제와 로그 삭제는 별개이며, 로그가 불필요해지면 `data/logs/agent_traces.jsonl`을 직접 삭제한다.
-- 로그 기록 실패는 warning 대상이지만 agent 응답 실패로 취급하지 않는다.
+- 로그 기록 실패는 UI trace와 runtime exception log에 남기지만 agent 응답 실패로 취급하지 않는다.
 - 모든 구현과 검증이 끝난 뒤 `git diff --check`와 최종 diff를 확인하고 한 번만 커밋한다.

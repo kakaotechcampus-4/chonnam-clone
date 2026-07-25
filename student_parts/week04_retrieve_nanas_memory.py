@@ -5,12 +5,12 @@ from typing import Annotated, Any
 
 from langchain.agents import create_agent
 from langchain_core.tools import tool
-from pydantic import BaseModel, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
+from fixed.app_store import AppSQLiteStore
 from fixed.config import CONFIG
 from fixed.conversation_rag_store import ConversationRAGStore
 from fixed.llm import chat_model
-from fixed.app_store import AppSQLiteStore
 from fixed.reference_store import PersonalReferenceStore
 from student_parts.week01_wake_up_nana import join_system_prompt
 from student_parts.week03_build_nanas_logbook import week03_prompt_parts, week03_tools
@@ -207,6 +207,81 @@ def _normalize_tags(tags: list[str] | None) -> list[str]:
     return normalized
 
 
+def _normalize_reference_tags(value: object) -> list[str]:
+    """검색 store의 문자열 또는 list 태그를 공개 계약인 list[str]로 바꿉니다."""
+
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return _normalize_tags(value.split(","))
+    if isinstance(value, list):
+        return _normalize_tags(value)
+    raise TypeError(
+        "reference tags must be a string or list: "
+        f"type={type(value).__name__}, value={_value_preview(value)}"
+    )
+
+
+def _decode_json_object(
+    value: object,
+    *,
+    field_name: str,
+    row_index: int,
+) -> dict[str, Any]:
+    """SQLite JSON 문자열을 dict로 바꾸고 손상된 row에는 문맥 있는 오류를 냅니다."""
+
+    if value is None or value == "":
+        return {}
+    if not isinstance(value, str):
+        raise TypeError(
+            f"saved request row {row_index} {field_name} is not a string: "
+            f"type={type(value).__name__}, value={_value_preview(value)}"
+        )
+    try:
+        decoded = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"saved request row {row_index} has invalid {field_name}: "
+            f"value={_value_preview(value)}"
+        ) from exc
+    if not isinstance(decoded, dict):
+        raise ValueError(
+            f"saved request row {row_index} {field_name} is not an object: "
+            f"value={_value_preview(decoded)}"
+        )
+    return decoded
+
+
+def _decode_string_list(
+    value: object,
+    *,
+    field_name: str,
+    row_index: int,
+) -> list[str]:
+    """SQLite JSON 배열을 공개 계약인 list[str]로 검증·변환합니다."""
+
+    if value is None or value == "":
+        return []
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"saved request row {row_index} has invalid {field_name}: "
+                f"value={_value_preview(value)}"
+            ) from exc
+    else:
+        decoded = value
+    if not isinstance(decoded, list) or not all(
+        isinstance(item, str) for item in decoded
+    ):
+        raise ValueError(
+            f"saved request row {row_index} {field_name} is not a string list: "
+            f"value={_value_preview(decoded)}"
+        )
+    return decoded
+
+
 def safe_limit(
     limit: int | str | None,
     default: int = 5,
@@ -251,6 +326,23 @@ class SearchSavedRequestsInput(BaseModel):
 
     query: RequiredText
     top_k: int = Field(default=3, ge=1, le=50)
+
+
+class SavedRequestHit(BaseModel):
+    """Week 4 SQLite 검색 tool이 공개하는 저장 요청 한 건의 안정적인 계약입니다."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    request_id: RequiredText
+    kind: RequiredText
+    title: str | None = None
+    date: str | None = None
+    start_time: str | None = None
+    end_time: str | None = None
+    members: list[str] = Field(default_factory=list)
+    priority: str | None = None
+    reason: str | None = None
+    original_text: str = ""
 
 
 class SearchConversationMessagesInput(BaseModel):
@@ -347,7 +439,7 @@ def search_personal_reference_hits(
                 "distance": row.get("distance"),
                 "metadata": {
                     "title": row.get("title", ""),
-                    "tags": row.get("tags", ""),
+                    "tags": _normalize_reference_tags(row.get("tags")),
                 },
             }
         )
@@ -369,6 +461,7 @@ def search_saved_request_rows(
             "saved request search returned a non-list value: "
             f"type={type(rows).__name__}, value={_value_preview(rows)}"
         )
+    result_rows: list[dict[str, Any]] = []
     for index, row in enumerate(rows):
         if not isinstance(row, dict):
             raise TypeError(
@@ -381,7 +474,42 @@ def search_saved_request_rows(
                 f"saved request row {index} is missing request_id: "
                 f"value={_value_preview(row)}"
             )
-    return rows
+        result_rows.append(_saved_request_hit_from_row(row, row_index=index))
+    return result_rows
+
+
+def _saved_request_hit_from_row(
+    row: dict[str, Any],
+    *,
+    row_index: int,
+) -> dict[str, Any]:
+    """SQLite 내부 row를 Week 4 tool의 공개 SavedRequestHit 계약으로 바꿉니다."""
+
+    raw_payload = _decode_json_object(
+        row.get("raw_json"),
+        field_name="raw_json",
+        row_index=row_index,
+    )
+    members = _decode_string_list(
+        row.get("members_json"),
+        field_name="members_json",
+        row_index=row_index,
+    )
+    hit = SavedRequestHit.model_validate(
+        {
+            "request_id": row.get("request_id"),
+            "kind": row.get("kind"),
+            "title": row.get("title"),
+            "date": row.get("date"),
+            "start_time": row.get("start_time"),
+            "end_time": row.get("end_time"),
+            "members": members,
+            "priority": row.get("priority"),
+            "reason": row.get("reason"),
+            "original_text": raw_payload.get("original_text", ""),
+        }
+    )
+    return hit.model_dump()
 
 
 def search_conversation_messages_dict(

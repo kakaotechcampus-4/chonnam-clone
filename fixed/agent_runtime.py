@@ -5,17 +5,34 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Any
+from pathlib import Path
+from typing import Any, Protocol
 
 from fixed.app_store import AppSQLiteStore
 from fixed.config import CONFIG, DATA_DIR
-from fixed.local_trace_log import LocalTraceLogStore
 from fixed.session_scope import conversation_session_scope
 from fixed.week_agent_registry import run_active_week_agent, stream_active_week_agent
+from local_extensions.trace_log import LocalTraceLogError, LocalTraceLogStore
 
 
 LOGGER = logging.getLogger(__name__)
 DEFAULT_TRACE_LOG_PATH = DATA_DIR / "logs" / "agent_traces.jsonl"
+
+
+class TraceLogStore(Protocol):
+    """AgentRuntime이 사용하는 로컬 trace 저장기의 최소 계약입니다."""
+
+    path: Path
+
+    def append(
+        self,
+        *,
+        active_week: int,
+        conversation_id: str,
+        user_message: str,
+        assistant_answer: str,
+        trace: dict[str, Any],
+    ) -> None: ...
 
 
 @dataclass
@@ -46,7 +63,7 @@ class AgentRuntime:
     def __init__(
         self,
         active_week: int | None = None,
-        trace_log_store: LocalTraceLogStore | None = None,
+        trace_log_store: TraceLogStore | None = None,
     ) -> None:
         """앱 DB 저장소를 열고 실행할 주차를 설정합니다."""
 
@@ -168,6 +185,11 @@ class AgentRuntime:
     def _log_final_result(self, user_message: str, result: RuntimeResult) -> None:
         """UI에 전달할 최종 실행 결과를 best-effort 로컬 로그로 남깁니다."""
 
+        log_status: dict[str, Any] = {
+            "ok": True,
+            "path": str(self.trace_log_store.path),
+        }
+        result.trace["local_trace_log"] = log_status
         try:
             self.trace_log_store.append(
                 active_week=self.active_week,
@@ -176,10 +198,15 @@ class AgentRuntime:
                 assistant_answer=result.answer,
                 trace=result.trace,
             )
-        except Exception as exc:
-            LOGGER.warning(
-                "최종 agent trace를 로컬 로그에 기록하지 못했습니다: %s", exc
+        except LocalTraceLogError as exc:
+            log_status.update(
+                {
+                    "ok": False,
+                    "error_type": type(exc).__name__,
+                    "message": str(exc),
+                }
             )
+            LOGGER.exception("최종 agent trace를 로컬 로그에 기록하지 못했습니다")
 
     def _agent_messages(
         self, previous_messages: list[dict[str, Any]], user_message: str
