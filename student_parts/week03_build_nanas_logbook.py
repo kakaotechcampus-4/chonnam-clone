@@ -27,6 +27,7 @@ from student_parts.week02_structure_natural_language_requests import (
 )
 
 _WEEK03_AGENT: Any | None = None
+_SQLITE_STORE: AppSQLiteStore | None = None
 
 SQLITE_MEMORY_PROMPT = """
 [조회·검증 규칙]
