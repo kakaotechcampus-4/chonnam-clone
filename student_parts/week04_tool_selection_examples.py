@@ -23,6 +23,14 @@ WEEK04_TOOL_SELECTION_FEW_SHOT = """
 질문: "저장해둔 일정 중에 '워크숍'이라는 단어 들어간 거 있어?"
 -> search_saved_requests (제목/사유에 특정 키워드가 있는지 검색)
 
+질문: "내일 할 일 뭐 있어?"
+-> list_saved_requests(date_from=내일, date_to=내일, kind 비움) (날짜만 지정, "일정"이라 안 했으니 kind 상관없이
+   personal_schedule/group_schedule/reminder를 다 걸어서 봄; personal_list_saved_schedules는 todo/reminder를 못 찾음)
+
+질문: "저장해둔 할 일 목록 다 보여줘"
+-> list_saved_requests(kind="todo") (날짜 지정이 없는 순수 할 일 목록 조회; todo는 date가 거의 없어
+   personal_list_saved_schedules나 날짜 필터로는 안 걸림)
+
 질문: "예전에 '재무팀'이랑 관련해서 저장해둔 일정이나 할 일 있었나?"
 -> search_saved_requests (핵심어 기반 검색, 날짜/종류 필터가 아님)
 
