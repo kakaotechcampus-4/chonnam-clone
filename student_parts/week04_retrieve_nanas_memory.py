@@ -342,7 +342,9 @@ def search_personal_references(query: str, top_k: int = 2) -> str:
 
 @tool(args_schema=SearchSavedRequestsInput)
 def search_saved_requests(query: str, top_k: int = 3) -> str:
-    """SQLite에 저장된 구조화 일정/할 일/알림 row를 검색합니다. query에는 LLM이 고른 일정/할 일/알림 핵심어를 넣습니다.
+    """SQLite에 저장된 구조화 일정/할 일/알림 row를 검색합니다.
+    query에는 핵심어 하나만 넣습니다 — 여러 단어를 붙이면(예: '보고서 할 일') 문자열
+    통짜 매칭이라 검색이 실패합니다. 예: '보고서', '치과', '마케팅'.
     회의록·레시피·계약 조건 같은 문서/메모 내용은 여기에 없습니다 — 그런 내용 검색은
     search_personal_references를 쓰세요."""
 
@@ -460,6 +462,8 @@ def week04_prompt_parts() -> list[str]:
             "tool 선택은 '저장해둔/기록해둔/적어둔' 같은 단어가 아니라 찾는 내용의 종류로 판단한다. "
             "회의록·레시피·계약 조건·설정 방법·개인 메모·선호처럼 문서/자유 텍스트 내용을 찾으면 "
             "search_personal_references를 쓴다 — '저장해둔 거 찾아줘'라고 말해도 내용이 문서/메모면 이쪽이다. "
+            "'~한 내용 찾아줘', '~조건이 뭐였지'처럼 기록된 내용 자체를 묻는 질문도 일정 기록이 아니라 "
+            "search_personal_references 대상이다. "
             "날짜 조건이 있거나 수정·삭제 전 후보 확인이 필요한 저장 일정/할 일/알림 조회는 "
             "personal_list_saved_schedules 또는 list_saved_requests/get_saved_request를 그대로 쓴다. "
             "search_saved_requests는 날짜 필터가 없으므로, 날짜 조건 없이 제목/내용 키워드만으로 "
