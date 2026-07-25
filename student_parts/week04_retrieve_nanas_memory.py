@@ -251,7 +251,7 @@ def search_personal_reference_hits(
                 "distance": ref["distance"],
                 "metadata": {
                     "title": ref["title"],
-                    "tags": ref["tags"],
+                    "tags": ref["tags"].split(",") if ref["tags"] else [],
                 },
             }
         )
@@ -301,6 +301,7 @@ def search_conversation_messages_dict(
 
 def search_conversation_message_rows(
     sqlite_store: AppSQLiteStore,
+    conversation_rag_store : ConversationRAGStore,
     *,
     query: str,
     top_k: int = 5,
@@ -311,7 +312,7 @@ def search_conversation_message_rows(
     # TODO: search_conversation_messages_dict(...) 결과에서 hits만 반환하세요.
     return search_conversation_messages_dict(
         sqlite_store,
-        CONVERSATION_RAG_STORE,
+        conversation_rag_store,
         query=query,
         top_k=top_k,
         conversation_id=conversation_id,
