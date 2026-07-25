@@ -332,7 +332,9 @@ def add_personal_reference(title: str, content: str, tags: list[str] | None = No
 
 @tool(args_schema=SearchPersonalReferencesInput)
 def search_personal_references(query: str, top_k: int = 2) -> str:
-    """개인 참고자료를 ChromaDB와 OpenAI embedding 기반으로 검색합니다."""
+    """저장해둔 자유 텍스트 메모/참고자료(회의록, 레시피, 계약 조건, 설정 방법, 선호 사항 등)를
+    의미 기반으로 검색합니다. 일정/할 일/알림 기록은 search_saved_requests,
+    지난 채팅 내용은 search_conversation_messages 담당입니다."""
 
     hits = search_personal_reference_hits(REFERENCE_STORE, query=query, top_k=safe_limit(top_k, default=2, maximum=20))
     return json_payload({"hits": hits})
@@ -340,7 +342,9 @@ def search_personal_references(query: str, top_k: int = 2) -> str:
 
 @tool(args_schema=SearchSavedRequestsInput)
 def search_saved_requests(query: str, top_k: int = 3) -> str:
-    """SQLite에 저장된 구조화 일정/할 일/알림 row를 검색합니다. query에는 LLM이 고른 일정/할 일/알림 핵심어를 넣습니다."""
+    """SQLite에 저장된 구조화 일정/할 일/알림 row를 검색합니다. query에는 LLM이 고른 일정/할 일/알림 핵심어를 넣습니다.
+    회의록·레시피·계약 조건 같은 문서/메모 내용은 여기에 없습니다 — 그런 내용 검색은
+    search_personal_references를 쓰세요."""
 
     rows = search_saved_request_rows(SQLITE_STORE, query=query, top_k=safe_limit(top_k, default=3, maximum=50))
     return json_payload({"rows": rows})
@@ -453,7 +457,9 @@ def week04_prompt_parts() -> list[str]:
         *patched_week03_parts,
         (
             "질문 성격에 맞는 검색 tool을 먼저 고른다. "
-            "개인 메모, 참고자료, 선호/취향처럼 자연어로 저장된 사실은 search_personal_references를 쓴다. "
+            "tool 선택은 '저장해둔/기록해둔/적어둔' 같은 단어가 아니라 찾는 내용의 종류로 판단한다. "
+            "회의록·레시피·계약 조건·설정 방법·개인 메모·선호처럼 문서/자유 텍스트 내용을 찾으면 "
+            "search_personal_references를 쓴다 — '저장해둔 거 찾아줘'라고 말해도 내용이 문서/메모면 이쪽이다. "
             "날짜 조건이 있거나 수정·삭제 전 후보 확인이 필요한 저장 일정/할 일/알림 조회는 "
             "personal_list_saved_schedules 또는 list_saved_requests/get_saved_request를 그대로 쓴다. "
             "search_saved_requests는 날짜 필터가 없으므로, 날짜 조건 없이 제목/내용 키워드만으로 "
