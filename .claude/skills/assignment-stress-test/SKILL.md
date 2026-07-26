@@ -175,9 +175,11 @@ tool 개수를 N이라 할 때, 아래 5개 카테고리로 100개를 나눕니�
 {"id": "p001", "text": "...", "expected_tool": "search_saved_requests", "category": "ambiguous", "reason": "날짜 조건 없이 키워드만 있어서 이 tool이 맞음", "conversation_group": null, "tool_signature_hash": "sha256:..."}
 ```
 - `expected_tool`은 tool 안 부르는 게 맞으면 `null`.
-- **검색 품질형만** 필드 2개 추가: `expected_hits`(fixture_id 배열; `[]`이면
+- **검색 품질형만** 필드 추가: `expected_hits`(fixture_id 배열; `[]`이면
   "아무 fixture도 반환되면 안 됨"), `forbidden_hits`(반환되면 안 되는 fixture_id
-  배열). 이 필드가 아예 없는 프롬프트는 기존처럼 라우팅만 평가되므로 하위호환
+  배열), `allow_rank`(선택, 기본 1 — 정답이 이 순위 안이면 통과. 유사쌍에서
+  임베딩이 구분 못하는 미세 차이(예: "3월/4월" 한 글자)를 측정으로 확인한 뒤
+  1순위 요구를 완화할 때만 쓰고, 근거를 reason에 남기세요). 이 필드가 아예 없는 프롬프트는 기존처럼 라우팅만 평가되므로 하위호환
   걱정 없습니다. 검색 품질형은 별도 파일 `retrieval_prompts.jsonl`로 관리해도
   되고(기존 100줄 자산을 안 건드리는 장점), prompts.jsonl에 합쳐도 됩니다 —
   harness의 `--prompts`에 어느 파일을 주는지만 다릅니다.

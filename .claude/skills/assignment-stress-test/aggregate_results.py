@@ -156,13 +156,14 @@ def main() -> None:
                 retrieval_recalls.append(recall)
                 ranks = [ranked.index(fid) + 1 for fid in found]
                 retrieval_rrs.append(1.0 / min(ranks) if ranks else 0.0)
+                allow_rank = p.get("allow_rank") or 1  # 이 순위까지는 통과 (유사쌍 등 임베딩 한계 문서화용)
                 if recall < 1.0:
                     missing = [fid for fid in expected_hits if fid not in ranked]
                     desc = "빈 결과" if not ranked else f"누락: {missing}"
                     retrieval_failures.append((pid, p["text"], expected_hits, ranked, desc))
-                elif ranks and min(ranks) > 1:
+                elif ranks and min(ranks) > allow_rank:
                     retrieval_failures.append(
-                        (pid, p["text"], expected_hits, ranked, f"정답이 {min(ranks)}순위 (관련도 낮은 hit가 상위)")
+                        (pid, p["text"], expected_hits, ranked, f"정답이 {min(ranks)}순위 (허용 {allow_rank}순위 초과)")
                     )
 
             for fid in p.get("forbidden_hits") or []:
