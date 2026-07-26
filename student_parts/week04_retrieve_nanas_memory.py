@@ -236,7 +236,16 @@ def search_personal_reference_hits(
 ) -> list[dict[str, Any]]:
     """ChromaDB 검색 결과를 tool이 바로 반환하기 쉬운 hit 구조로 정리합니다."""
 
-    return reference_store.search_personal_references(query=query, limit=top_k)
+    raw = reference_store.search_personal_references(query=query, limit=top_k)
+    return [
+        {
+            "id": h["id"],
+            "content": h["content"],
+            "distance": h["distance"],
+            "metadata": {"title": h["title"], "tags": h["tags"]},
+        }
+        for h in raw
+    ]
 
 
 def search_saved_request_rows(
@@ -365,7 +374,8 @@ def search_nana_memory(
     if not reference_hits:
         reference_lines.append("- 관련 참고자료가 없습니다.")
     for hit in reference_hits:
-        reference_lines.append(f"- {hit.get('title')}: {hit.get('content')}")
+        metadata = hit.get("metadata") or {}
+        reference_lines.append(f"- {metadata.get('title', '')}: {hit.get('content', '')}")
 
     schedule_lines = ["[SQLite 저장 일정 검색 결과]"]
     if not schedules:
