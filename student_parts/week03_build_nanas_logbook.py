@@ -31,7 +31,7 @@ _WEEK03_AGENT: Any | None = None
 SQLITE_MEMORY_PROMPT = (
     "Week 3부터 일정, 할 일, 알림은 현재 대화의 임시 메모리만 보지 않고 앱 SQLite DB에 남은 기록도 함께 확인한다. "
     "이전에 저장한 항목은 새 대화에서도 조회할 수 있다. 조회 요청이 들어오면 personal_list_saved_schedules, "
-    "list_saved_requests, get_saved_request를 먼저 사용한다."
+    "list_saved_requests, get_saved_request를 먼저 사용한다. 전체 일정 조회라면 kind를 비워 개인 일정과 그룹 일정을 함께 본다."
 )
 
 # TODO: 자연어 구조화 → SQLite 저장과 조회/수정/삭제 tool 호출 순서를 안내하는 규칙을 작성하세요.
@@ -498,9 +498,8 @@ def personal_list_saved_schedules(
 
     # TODO: 기본 kind를 personal_schedule로 정하고 날짜/종류/limit 필터로 저장 일정을 조회하세요.
     # TODO: filters와 schedules를 포함한 JSON 문자열을 반환하세요.
-    schedule_kind = kind or "personal_schedule"
-    schedules = _store().list_schedules(limit=limit, kind=schedule_kind, date_from=date_from, date_to=date_to)
-    filters = {"limit": limit, "kind": schedule_kind, "date_from": date_from, "date_to": date_to}
+    schedules = _store().list_schedules(limit=limit, kind=kind, date_from=date_from, date_to=date_to)
+    filters = {"limit": limit, "kind": kind, "date_from": date_from, "date_to": date_to}
     return json_payload(tool_result("personal_list_saved_schedules", filters=filters, schedules=schedules))
 
 
