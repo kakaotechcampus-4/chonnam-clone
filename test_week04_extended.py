@@ -35,8 +35,14 @@ os.environ.setdefault("KANANA_ACTIVE_WEEK", "4")
 import json
 from typing import Any
 
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
 import student_parts.week04_retrieve_nanas_memory as w4
-from fixed.session_scope import DEFAULT_SESSION_SCOPE, conversation_session_scope
+from fixed.session_scope import (
+    DEFAULT_SESSION_SCOPE,
+    conversation_session_scope,
+    current_session_scope,
+)
 
 _passed = 0
 _failed: list[str] = []
@@ -101,6 +107,8 @@ class FakeSQLiteStore:
 
     def search_saved_requests(self, query: str, kind: str | None = None, limit: int = 5) -> list[dict[str, Any]]:
         self.calls.append((query, limit))
+        if query == "없는키워드":  # 게이트 saved 폴백 경로 테스트용(LIKE 미스 재현)
+            return []
         return [{"request_id": "req1", "kind": "group_schedule", "title": "디자인 리뷰", "date": "2026-07-27"}][:limit]
 
 
@@ -127,6 +135,16 @@ class FakeConversationRAGStore:
 
     def backend_info(self) -> dict[str, Any]:
         return {"vector_store": "chromadb", "collection_name": "fake_conv"}
+
+
+class _FakeGateModel:
+    """retrieval_gate 분류기를 대신해 미리 정한 _GateDecision을 돌려주는 stub."""
+
+    def __init__(self, decision: Any) -> None:
+        self._decision = decision
+
+    def invoke(self, messages: Any) -> Any:
+        return self._decision
 
 
 def run() -> int:
@@ -190,10 +208,107 @@ def run() -> int:
     check("F. conversation_id 명시 시 exclude 안 함", conv2.search_kwargs["exclude_conversation_id"] is None and conv2.search_kwargs["conversation_id"] == "c1", str(conv2.search_kwargs))
 
     conv3 = FakeConversationRAGStore()
-    # 세션 범위 밖(DEFAULT) → 제외할 현재 대화가 없음
-    check("F. 사전조건: 기본 세션 범위", w4  is not None)
+    # 세션 범위 밖(DEFAULT, 컨텍스트 매니저 없이 호출) → 제외할 현재 대화가 없어야 한다.
+    check("F. DEFAULT 세션 사전조건", current_session_scope() == DEFAULT_SESSION_SCOPE, current_session_scope())
     w4.search_conversation_messages_dict(sql, conv3, query="회식", top_k=5, conversation_id=None)
     check("F. DEFAULT 세션이면 exclude 없음", conv3.search_kwargs["exclude_conversation_id"] is None, str(conv3.search_kwargs))
+
+    # G. 검색 게이트(retrieval_gate) — 분류기를 stub으로 바꿔 결정적으로 검증한다.
+    #    tool 전역(ref/sql/conv)은 위에서 fake로 교체돼 있어 강제 검색도 네트워크 없이 돈다.
+    w4.CONVERSATION_RAG_STORE = FakeConversationRAGStore()
+
+    def set_decision(needs_retrieval: bool = True, sources: list[str] | None = None, query: str = "병원") -> None:
+        decision = w4._GateDecision(needs_retrieval=needs_retrieval, sources=sources or [], query=query)
+        w4._gate_model = lambda: _FakeGateModel(decision)
+
+    def gate(messages: list[Any]) -> dict[str, Any] | None:
+        return w4.retrieval_gate.before_model({"messages": messages}, None)
+
+    human = [HumanMessage(content="병원 알림 있어?")]
+
+    set_decision(sources=["saved"])
+    check("G. 마지막이 Human 아니면 게이트 안 함", gate([AIMessage(content="hi")]) is None)
+    check("G. 빈 텍스트 Human → None", gate([HumanMessage(content="   ")]) is None)
+
+    set_decision(needs_retrieval=False, sources=["saved"])
+    check("G. needs_retrieval=False → None", gate(human) is None)
+    set_decision(needs_retrieval=True, sources=[])
+    check("G. sources=[] → None", gate(human) is None)
+    set_decision(sources=["saved"], query="   ")
+    check("G. 빈 query → 강제 안 함(None)", gate(human) is None)
+
+    # saved 단일 → search_saved_requests 강제 tool 라운드 주입
+    set_decision(sources=["saved"], query="병원")
+    out = gate(human) or {}
+    msgs = out.get("messages", [])
+    ai = msgs[0] if msgs else None
+    check("G. saved: AIMessage + tool_call 1개", isinstance(ai, AIMessage) and len(ai.tool_calls) == 1, str(msgs))
+    check("G. saved: tool 이름 search_saved_requests", bool(ai) and ai.tool_calls[0]["name"] == "search_saved_requests")
+    check("G. saved: ToolMessage 결과 rows 포함", len(msgs) == 2 and isinstance(msgs[1], ToolMessage) and "rows" in json.loads(msgs[1].content))
+    check("G. saved: tool_call_id 짝 일치", len(msgs) == 2 and msgs[1].tool_call_id == ai.tool_calls[0]["id"])
+
+    # 다중 소스 + 중복 제거 + 순서 보존
+    set_decision(sources=["reference", "saved", "reference"], query="집중")
+    out = gate(human) or {}
+    msgs = out.get("messages", [])
+    ai = msgs[0] if msgs else None
+    names = [tc["name"] for tc in ai.tool_calls] if ai else []
+    check("G. 다중 소스: reference,saved 2개(중복 제거)", names == ["search_personal_references", "search_saved_requests"], str(names))
+    check(
+        "G. 다중 소스: ToolMessage 2개, id 짝 일치",
+        len(msgs) == 3 and all(msgs[i + 1].tool_call_id == ai.tool_calls[i]["id"] for i in range(2)),
+        str(len(msgs)),
+    )
+
+    # conversation 소스
+    set_decision(sources=["conversation"], query="회식")
+    out = gate(human) or {}
+    msgs = out.get("messages", [])
+    check("G. conversation: search_conversation_messages 강제", bool(msgs) and msgs[0].tool_calls[0]["name"] == "search_conversation_messages", str(msgs))
+
+    # saved 키워드 미스(LIKE 미스) → list_saved_requests 폴백으로 최신 목록 주입
+    _orig_list = w4.list_saved_requests
+
+    class _FakeListTool:
+        name = "list_saved_requests"
+
+        def invoke(self, args: Any) -> str:
+            return json.dumps({"rows": [{"request_id": "r1", "title": "주간 스탠드업"}]}, ensure_ascii=False)
+
+    w4.list_saved_requests = _FakeListTool()
+    set_decision(sources=["saved"], query="없는키워드")
+    out = gate(human) or {}
+    msgs = out.get("messages", [])
+    check("G. saved 미스 → list_saved_requests 폴백", bool(msgs) and msgs[0].tool_calls[0]["name"] == "list_saved_requests", str(msgs))
+    check("G. 폴백 결과 rows 주입", len(msgs) == 2 and bool(json.loads(msgs[1].content).get("rows")))
+
+    # 진짜로 아무것도 없으면(list도 빔) 폴백하지 않고 빈 search 결과 유지
+    class _EmptyListTool:
+        name = "list_saved_requests"
+
+        def invoke(self, args: Any) -> str:
+            return json.dumps({"rows": []}, ensure_ascii=False)
+
+    w4.list_saved_requests = _EmptyListTool()
+    set_decision(sources=["saved"], query="없는키워드")
+    out = gate(human) or {}
+    msgs = out.get("messages", [])
+    check("G. saved 진짜 없음(list도 빔) → search 결과 유지", bool(msgs) and msgs[0].tool_calls[0]["name"] == "search_saved_requests", str(msgs))
+    w4.list_saved_requests = _orig_list
+
+    # 강제 검색이 전부 실패하면 빈 주입 대신 None
+    _orig_map = w4._gate_tool_by_source
+
+    class _BoomTool:
+        name = "search_saved_requests"
+
+        def invoke(self, args: Any) -> str:
+            raise RuntimeError("boom")
+
+    w4._gate_tool_by_source = lambda: {"saved": (_BoomTool(), {"top_k": 5})}
+    set_decision(sources=["saved"], query="병원")
+    check("G. 모든 강제검색 실패 → None(빈 주입 안 함)", gate(human) is None)
+    w4._gate_tool_by_source = _orig_map
 
     print(f"\n결과: {_passed}개 통과" + (f", 실패 {len(_failed)}개: {_failed}" if _failed else ", 실패 0개"))
     return 1 if _failed else 0

@@ -17,7 +17,11 @@ from fixed.reference_store import PersonalReferenceStore
 from fixed.session_scope import DEFAULT_SESSION_SCOPE, current_session_scope
 from fixed.store_base import new_id
 from student_parts.week01_wake_up_nana import join_system_prompt
-from student_parts.week03_build_nanas_logbook import week03_prompt_parts, week03_tools
+from student_parts.week03_build_nanas_logbook import (
+    list_saved_requests,
+    week03_prompt_parts,
+    week03_tools,
+)
 
 
 REFERENCE_STORE = PersonalReferenceStore(CONFIG.chroma_dir)
@@ -566,6 +570,15 @@ def _gate_tool_by_source() -> dict[str, tuple[Any, dict[str, Any]]]:
     }
 
 
+def _rows_nonempty(result: str) -> bool:
+    """tool 결과 JSON에 rows가 하나라도 있으면 True."""
+
+    try:
+        return bool(json.loads(result).get("rows"))
+    except Exception:
+        return False
+
+
 @before_model
 def retrieval_gate(state: dict[str, Any], runtime: Any) -> dict[str, Any] | None:
     """조회형 질문이면 답변 전에 최신 검색 결과를 강제 주입해 stale 답변을 막습니다."""
@@ -594,6 +607,12 @@ def retrieval_gate(state: dict[str, Any], runtime: Any) -> dict[str, Any] | None
     if not decision.needs_retrieval or not decision.sources:
         return None
 
+    # 분류기가 핵심어를 못 뽑아 query가 비면 강제하지 않는다. 빈 query로 검색하면
+    # 가드가 []를 돌려주고, 그 빈 결과가 '저장된 정보 없음' 오답을 유도할 수 있다.
+    # 이 경우 문맥을 가진 agent가 스스로 검색하도록 넘긴다.
+    if not decision.query.strip():
+        return None
+
     tool_map = _gate_tool_by_source()
     tool_calls: list[dict[str, Any]] = []
     tool_messages: list[ToolMessage] = []
@@ -608,6 +627,16 @@ def retrieval_gate(state: dict[str, Any], runtime: Any) -> dict[str, Any] | None
             result = tool_obj.invoke(args)
         except Exception:
             continue
+        # saved는 LIKE 부분매칭이라 키워드가 조금만 어긋나도 빈 결과가 난다. 빈 결과를
+        # 그대로 주입하면 '저장된 정보 없음' 거짓 부정이 되므로, 키워드 무관 list로
+        # 폴백해 최신 저장 목록을 확보한다(진짜로 아무것도 없으면 빈 결과를 그대로 둔다).
+        if source == "saved" and not _rows_nonempty(result):
+            try:
+                fallback = list_saved_requests.invoke({})
+            except Exception:
+                fallback = None
+            if fallback is not None and _rows_nonempty(fallback):
+                tool_obj, args, result = list_saved_requests, {}, fallback
         call_id = new_id("gate")
         tool_calls.append({"name": tool_obj.name, "args": args, "id": call_id})
         tool_messages.append(ToolMessage(content=result, tool_call_id=call_id, name=tool_obj.name))
