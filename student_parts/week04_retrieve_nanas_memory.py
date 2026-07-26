@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Literal
 
 from langchain.agents import create_agent
+from langchain.agents.middleware import before_model
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
@@ -13,6 +15,7 @@ from fixed.llm import chat_model
 from fixed.app_store import AppSQLiteStore
 from fixed.reference_store import PersonalReferenceStore
 from fixed.session_scope import DEFAULT_SESSION_SCOPE, current_session_scope
+from fixed.store_base import new_id
 from student_parts.week01_wake_up_nana import join_system_prompt
 from student_parts.week03_build_nanas_logbook import week03_prompt_parts, week03_tools
 
@@ -492,7 +495,130 @@ def week04_prompt_parts() -> list[str]:
             "특히 '있어?/없어?/뭐였지?'처럼 사실 확인을 요구하면 반드시 해당 검색 도구를 먼저 호출해 확인한 뒤 답한다. "
             "검색도 하지 않고 '없다'고 단정하지 않는다."
         ),
+        (
+            "저장값은 대화 도중에도 바뀔 수 있다. 방금 주입되거나 호출된 최신 검색 결과가 지금까지의 대화 내용이나 "
+            "네 이전 답변과 다르면, 이전 기억이 아니라 최신 검색 결과를 사실로 삼아 답한다. "
+            "반대로 저장값을 묻는데 검색 결과가 비어 있으면, 앞 대화의 값으로 단정하지 말고 "
+            "'저장된 정보를 찾지 못했다'거나 다시 확인이 필요하다고 답한다."
+        ),
     ]
+
+
+# ---------------------------------------------------------------------------
+# 검색 게이트 (stale 방지)
+#
+# 문제: 조회형 질문("저장한 회의 몇 시야?")의 답이 이미 대화 컨텍스트에 있으면
+#       agent가 재검색을 건너뛰고 낡은 기억으로 답할 수 있다(stale 오답).
+# 해결: 매 사용자 발화 직후, 경량 분류기로 '저장소 조회가 필요한 질문'인지 판정하고,
+#       필요하면 답변 전에 해당 search tool을 강제로 실행해 최신 결과를 tool 라운드로
+#       주입한다. 그러면 모델은 기억이 아니라 방금 주입된 최신 결과로 답한다.
+#       비조회형(인사·현재 대화 되묻기·생성/수정 명령)은 sources=[]라 과호출이 없다.
+
+
+class _GateDecision(BaseModel):
+    """검색 게이트 분류 결과입니다."""
+
+    needs_retrieval: bool
+    sources: list[Literal["reference", "saved", "conversation"]] = Field(default_factory=list)
+    query: str = ""
+
+
+_GATE_MODEL: Any | None = None
+
+_GATE_SYSTEM_PROMPT = (
+    "너는 라우팅 분류기다. 사용자의 '마지막 발화 하나'만 보고, 답하기 전에 저장소를 "
+    "다시 검색해야 하는지 판정한다.\n"
+    "needs_retrieval=true 로 하고 sources 에 출처를 넣는 경우:\n"
+    "- reference: 사용자의 선호·습관·규칙·개인 메모 등 개인 참고자료에 저장했을 값을 "
+    "묻거나 그것을 반영해 달라고 할 때(집중 시간대, 점심 규칙, 회의 길이 선호 등).\n"
+    "- saved: 과거에 저장한 일정/할 일/알림의 유무·시간·내용을 묻거나 그 기록을 "
+    "정리/비교/확인해 달라고 할 때(저장한 회의 몇 시야, 병원 알림 있어 등).\n"
+    "- conversation: 지금 이 대화가 아니라 과거의 '다른 대화'에서 오간 말을 물을 때.\n"
+    "여러 출처가 필요하면 sources 에 여럿을 넣는다.\n"
+    "needs_retrieval=false, sources=[] 로 두는 경우:\n"
+    "- 방금 '이 대화'에서 오간 내용을 되묻는 경우(현재 대화 기억으로 충분).\n"
+    "- 인사/감사/잡담/일반 상식.\n"
+    "- 새 일정·할 일·알림을 생성/수정/삭제하라는 명령(저장 조회가 아님).\n"
+    "핵심 원칙: 저장된 값(유무·시간·내용)을 묻는 질문이면, 답이 앞 대화에 이미 나온 것 "
+    "같아도 신뢰하지 말고 반드시 재검색하도록 needs_retrieval=true 로 한다.\n"
+    "query: 검색에 쓸 핵심 명사 '한 단어'만 넣어라(예: 스탠드업, 병원, 보고서, 점심, 집중). "
+    "saved 검색은 부분 문자열(LIKE) 매칭이라 여러 단어를 붙이면 저장 제목과 안 맞아 놓친다. "
+    "저장소 검색이 불필요하면 빈 문자열."
+)
+
+
+def _gate_model() -> Any:
+    """게이트 분류 전용 structured-output 모델을 지연 생성/재사용합니다."""
+
+    global _GATE_MODEL
+    if _GATE_MODEL is None:
+        _GATE_MODEL = chat_model().with_structured_output(_GateDecision)
+    return _GATE_MODEL
+
+
+def _gate_tool_by_source() -> dict[str, tuple[Any, dict[str, Any]]]:
+    """출처별로 강제 실행할 search tool과 기본 인자를 매핑합니다."""
+
+    return {
+        "reference": (search_personal_references, {"top_k": 3}),
+        "saved": (search_saved_requests, {"top_k": 5}),
+        "conversation": (search_conversation_messages, {"top_k": 5}),
+    }
+
+
+@before_model
+def retrieval_gate(state: dict[str, Any], runtime: Any) -> dict[str, Any] | None:
+    """조회형 질문이면 답변 전에 최신 검색 결과를 강제 주입해 stale 답변을 막습니다."""
+
+    messages = state.get("messages") or []
+    # 턴의 첫 model 호출(사용자 발화 직후)만 게이트한다.
+    # tool 실행 후 재진입 시 마지막 메시지는 ToolMessage라 여기서 걸러진다(중복 방지).
+    if not messages or not isinstance(messages[-1], HumanMessage):
+        return None
+
+    last = messages[-1]
+    text = last.content if isinstance(last.content, str) else str(last.content)
+    if not text.strip():
+        return None
+
+    try:
+        decision = _gate_model().invoke(
+            [
+                {"role": "system", "content": _GATE_SYSTEM_PROMPT},
+                {"role": "user", "content": text},
+            ]
+        )
+    except Exception:
+        return None  # 게이트 실패는 열어 둔다(기존 agent 동작 유지).
+
+    if not decision.needs_retrieval or not decision.sources:
+        return None
+
+    tool_map = _gate_tool_by_source()
+    tool_calls: list[dict[str, Any]] = []
+    tool_messages: list[ToolMessage] = []
+    seen: set[str] = set()
+    for source in decision.sources:
+        if source in seen or source not in tool_map:
+            continue
+        seen.add(source)
+        tool_obj, extra = tool_map[source]
+        args = {"query": decision.query, **extra}
+        try:
+            result = tool_obj.invoke(args)
+        except Exception:
+            continue
+        call_id = new_id("gate")
+        tool_calls.append({"name": tool_obj.name, "args": args, "id": call_id})
+        tool_messages.append(ToolMessage(content=result, tool_call_id=call_id, name=tool_obj.name))
+
+    if not tool_calls:
+        return None
+
+    # 강제 검색 라운드(assistant tool_call + 그 결과)를 히스토리에 붙인다.
+    # 다음 model 호출은 이 최신 결과를 근거로 답하게 된다.
+    forced = AIMessage(content="", tool_calls=tool_calls)
+    return {"messages": [forced, *tool_messages]}
 
 
 def build_week04_agent() -> object:
@@ -506,6 +632,7 @@ def build_week04_agent() -> object:
             model=chat_model(),
             tools=week04_tools(),
             system_prompt=week04_system_prompt(),
+            middleware=[retrieval_gate],
         )
     return _WEEK04_AGENT
 
