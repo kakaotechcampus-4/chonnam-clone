@@ -241,14 +241,26 @@ def add_personal_reference_dict(
     }
 
 
+# 관련도 컷: 이 distance보다 먼 hit는 관련 없다고 보고 버린다.
+# 격리 fixture 측정 기준 정답 hit ≤ 1.04, 무관 hit ≥ 1.34 — 갭 중간값 1.2.
+# 임베딩 모델이 바뀌면 distance 스케일이 달라지므로 이 값도 재측정해야 한다.
+RELEVANCE_MAX_DISTANCE = 1.2
+
+
 def search_personal_reference_hits(
     reference_store: PersonalReferenceStore,
     *,
     query: str,
     top_k: int = 2,
+    max_distance: float | None = None,
 ) -> list[dict[str, Any]]:
-    """ChromaDB 검색 결과를 tool이 바로 반환하기 쉬운 hit 구조로 정리합니다."""
+    """ChromaDB 검색 결과를 tool이 바로 반환하기 쉬운 hit 구조로 정리합니다.
 
+    max_distance(기본 RELEVANCE_MAX_DISTANCE)보다 먼 hit는 버립니다.
+    전부 걸러지면 빈 리스트를 반환해 agent가 "관련 자료 없음"이라 답하게 합니다.
+    """
+
+    cutoff = RELEVANCE_MAX_DISTANCE if max_distance is None else max_distance
     raw_hits = reference_store.search_personal_references(query, limit=top_k)
     return [
         {
@@ -259,6 +271,7 @@ def search_personal_reference_hits(
             "metadata": {"title": hit["title"], "tags": hit["tags"]},
         }
         for hit in raw_hits
+        if hit["distance"] is None or hit["distance"] <= cutoff
     ]
 
 
@@ -464,6 +477,7 @@ def week04_prompt_parts() -> list[str]:
             "search_personal_references를 쓴다 — '저장해둔 거 찾아줘'라고 말해도 내용이 문서/메모면 이쪽이다. "
             "'~한 내용 찾아줘', '~조건이 뭐였지'처럼 기록된 내용 자체를 묻는 질문도 일정 기록이 아니라 "
             "search_personal_references 대상이다. "
+            "단, '채팅/대화에서 얘기했던' 것을 물으면 내용 질문이어도 search_conversation_messages가 우선이다. "
             "날짜 조건이 있거나 수정·삭제 전 후보 확인이 필요한 저장 일정/할 일/알림 조회는 "
             "personal_list_saved_schedules 또는 list_saved_requests/get_saved_request를 그대로 쓴다. "
             "search_saved_requests는 날짜 필터가 없으므로, 날짜 조건 없이 제목/내용 키워드만으로 "
