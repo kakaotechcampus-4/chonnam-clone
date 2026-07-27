@@ -39,8 +39,15 @@ WEEK03_TOOL_CALL_PROMPT = """
 1. extract_schedule_request(query=사용자 원문)를 호출해 구조화한다.
 2. 그 결과의 structured_request 필드(kind/title/date/start_time/end_time/members/priority/reason/original_text)를
 save_structured_request 인자로 그대로 전달해 저장한다.
-저장된 내 일정을 조회할 때는 personal_list_saved_schedules를 사용한다.
-구조화 요청 원본 기록을 조회할 때는 list_saved_requests(목록) 또는 get_saved_request(단건)을 사용한다.
+
+저장된 것을 조회할 때는 질문에 날짜가 특정됐는지로 먼저 고른다:
+- "내일/이번 주 뭐 있어?"처럼 날짜가 특정된 질문은 list_saved_requests(date_from/date_to만 지정, kind는 비움)를 쓴다.
+  personal_schedule/group_schedule/reminder처럼 날짜가 있는 기록이 kind 상관없이 한 번에 걸린다.
+- 날짜 지정 없이 순수 할 일 목록만 볼 때는 list_saved_requests(kind="todo")를 쓴다.
+  todo는 date가 거의 없어 날짜 필터로는 안 걸리니 kind로만 좁힌다.
+- personal_list_saved_schedules는 "일정"이라고 명시된 질문처럼 personal_schedule/group_schedule만 보고 싶을 때 쓴다.
+  todo/reminder는 이 tool로 조회되지 않는다.
+구조화 요청 원본 기록 단건 조회는 get_saved_request를 사용한다.
 """
 
 
@@ -394,7 +401,10 @@ def list_saved_requests(
     date_from: str | None = None,
     date_to: str | None = None,
 ) -> str:
-    """SQLite에 저장된 구조화 요청 목록을 조회합니다."""
+    """SQLite에 저장된 구조화 요청 목록을 조회합니다.
+    kind를 비우고 date_from/date_to만 지정하면 personal_schedule/group_schedule/reminder처럼 날짜가 있는 기록이
+    kind 상관없이 한 번에 걸립니다("내일 뭐 있어?" 같은 날짜 지정 질문에 적합).
+    날짜 지정 없이 todo만 보고 싶을 때는 kind="todo"로 좁혀서 호출합니다(todo는 date가 거의 없어 날짜 필터로는 안 걸립니다)."""
 
     rows = _store().list_saved_requests(kind=kind, date_from=date_from, date_to=date_to)
     return json_payload(tool_result("list_saved_requests", rows=rows))
@@ -415,7 +425,9 @@ def personal_list_saved_schedules(
     date_from: str | None = None,
     date_to: str | None = None,
 ) -> str:
-    """앱 DB에 저장된 일정 목록을 날짜/종류 필터로 반환합니다. Nana가 조회/수정/삭제 후보를 볼 때 사용합니다."""
+    """앱 DB에 저장된 일정(personal_schedule/group_schedule)만 날짜/종류 필터로 반환합니다.
+    todo/reminder는 여기서 조회되지 않으니, 날짜 지정 조회는 list_saved_requests를, todo 목록 조회는
+    list_saved_requests(kind="todo")를 사용합니다. Nana가 일정 조회/수정/삭제 후보를 볼 때 사용합니다."""
 
     effective_kind = kind or "personal_schedule"
     schedules = _store().list_schedules(limit=limit, kind=effective_kind, date_from=date_from, date_to=date_to)

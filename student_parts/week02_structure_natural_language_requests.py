@@ -164,9 +164,9 @@ class StructuredRequest(BaseModel):
 
     kind: RequestKind = Field(
         description="요청 종류. personal_schedule·group_schedule·todo·reminder·unknown 중 하나."
-        " 여러 kind에 걸쳐 보이면 personal_schedule/group_schedule > todo > reminder > unknown 순으로 우선 판단하되,"
-        " \"알려줘\"·\"기억해놔\"·\"잊지마\"·\"까먹지 않게 해줘\"처럼 명시적으로 상기를 요청하는 표현이 있으면"
-        " 날짜가 있어도 reminder를 최우선으로 판단."
+        " 먼저 날짜 유무로 나눈다: 날짜가 없으면 표현과 상관없이 todo다."
+        " 날짜가 있으면 \"알려줘\"·\"기억해놔\"·\"잊지마\"·\"까먹지 않게 해줘\"처럼 명시적으로 상기를 요청하는 표현이 있는지로"
+        " reminder와 personal_schedule/group_schedule을 가른다(표현이 있으면 reminder, 없으면 personal_schedule/group_schedule)."
         " 분류 불가 → unknown."
         """
         - personal_schedule : 사용자 본인이 참석·처리해야 하는, 날짜/시간이 정해진 개인 일정.
@@ -178,11 +178,13 @@ class StructuredRequest(BaseModel):
         예) "다음 주 목요일 철수랑 일정 잡아줘"(members=["철수"]), "이번 주 일요일 S축구단 풋살 있어"(members=["S축구단"])
         
         - todo  : 날짜/시간이 정해지지 않고, 사용자가 스스로 알아서 처리하면 되는 개인 행동.
-        예) "우유 좀 사야겠다", "설거지 해야지"
-        주의: 날짜가 언급되면 todo가 아니라 personal_schedule/group_schedule로 분류해.
+        "기억해줘"·"잊지마" 같은 상기 표현이 붙어도 날짜가 없으면 todo다(reminder는 date가 필수라 날짜 없이는 성립하지 않는다).
+        예) "우유 좀 사야겠다", "설거지 해야지", "우유 좀 사야겠다, 기억해줘", "보고서 초안 써야 하는 거 잊지 마"
+        주의: 날짜가 언급되면 todo가 아니라 personal_schedule/group_schedule 또는 reminder로 분류해(날짜가 있을 때만 상기 표현 유무로 둘을 가른다).
         (예: "목요일 네일 예약하기"는 날짜가 있으므로 personal_schedule)
-        - reminder : "알려줘"·"기억해놔"·"잊지마"·"까먹지 않게 해줘"처럼 사용자가 잊지 않도록 상기시켜달라고
-        명시적으로 요청하는 표현이 있으면, 날짜가 있어도 personal_schedule/group_schedule보다 reminder를 우선한다.
+        - reminder : 날짜가 있고, "알려줘"·"기억해놔"·"잊지마"·"까먹지 않게 해줘"처럼 사용자가 잊지 않도록 상기시켜달라고
+        명시적으로 요청하는 표현도 있으면, personal_schedule/group_schedule보다 reminder를 우선한다.
+        날짜가 없으면 같은 표현이 있어도 reminder가 아니라 todo로 분류해.
         예) "내일 기차 예약하는 거 알려줘", "낼 모레 새벽 2시 취소표 나오는 거 기억해놔", "모레까지 보고서 작성하는 거 잊지마"
         - unknown : 위 4개에 속하지 않는 것. 과거 사실에 대한 진술, 잡담, 애매한 표현 등.
         예) "오늘 저녁 약속 드럽게 재미없었어", "철수 걔를 봐 말아"
