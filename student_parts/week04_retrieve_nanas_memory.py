@@ -75,7 +75,7 @@ class SearchConversationMessagesInput(BaseModel):
 
     query: str = Field(description="검색할 짧은 핵심 명사나 구. ChromaDB embedding 검색에 사용됩니다.")
     top_k: int = Field(default=5, ge=1, le=50, description="반환할 최대 결과 수(1~50).")
-    conversation_id: str | None = Field(default=None, description="현재 대화 ID. 지정하면 이 대화는 검색에서 제외됩니다.")
+    conversation_id: str | None = Field(default=None, description="대화 ID. 지정하면 해당 대화만 검색하고, 지정하지 않으면 현재 대화는 제외됩니다")
 
 
 class SearchNanaMemoryInput(BaseModel):
@@ -170,7 +170,8 @@ def search_conversation_messages_dict(
     hits = conversation_rag_store.search(
         query=query,
         top_k=top_k,
-        exclude_conversation_id=conversation_id,
+        exclude_conversation_id=None if conversation_id else current_session_scope(),
+        conversation_id=conversation_id,
     )
 
     context = conversation_rag_store.context_from_hits(hits)
