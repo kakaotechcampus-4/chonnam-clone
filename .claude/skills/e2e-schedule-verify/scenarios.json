@@ -54,7 +54,7 @@
     "week": 3,
     "turns": [
       {
-        "message": "회의 좀 잡아줘",
+        "message": "치과 예약 좀 잡아줘",
         "expect_no_tool_called": ["save_structured_request", "personal_create_schedule"],
         "expect_answer_contains_any": ["언제", "몇 시", "?"]
       },
