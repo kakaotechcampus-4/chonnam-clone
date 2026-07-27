@@ -267,7 +267,7 @@ def search_conversation_messages(
     """앱 SQLite 대화 목록을 대화 단위 ChromaDB RAG로 검색합니다.
 
     이전 채팅 발화 내용을 찾을 때 사용합니다. 일정/할 일 기록은 search_saved_requests를 사용하세요.
-    검색 시점에 SQLite → ChromaDB lazy sync를 수행하며, conversation_id를 넘기면 현재 대화는 제외됩니다.
+    검색 시점에 SQLite → ChromaDB lazy sync를 수행하며, conversation_id를 지정하면 해당 대화만 검색하고 지정하지 않으면 현재 대화는 제외됩니다.
     query에는 LLM이 고른 짧은 핵심 명사나 구를 넣습니다.
     hits/rows/context/rag_backend/sync를 담은 JSON 문자열을 반환합니다.
     """
