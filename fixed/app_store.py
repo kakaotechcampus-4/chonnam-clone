@@ -11,6 +11,7 @@ from __future__ import annotations
 """
 
 import json
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,18 @@ from fixed.store_base import (
     new_id,
     now_iso,
 )
+
+
+# 같은 요청이 structured output 파싱 실패 후 재시도되거나 사용자가 같은 문장을
+# 다시 보냈을 때 짧은 시간 안에 완전히 같은 내용으로 두 번 저장되는 것을 막기 위한 창(분).
+DUPLICATE_SAVE_WINDOW_MINUTES = 5
+
+
+def _duplicate_check_cutoff_iso() -> str:
+    """created_at과 같은 포맷의 문자열로 최근 중복 판정 기준 시각을 반환합니다."""
+
+    cutoff = datetime.now().astimezone() - timedelta(minutes=DUPLICATE_SAVE_WINDOW_MINUTES)
+    return cutoff.isoformat(timespec="microseconds")
 
 
 class AppSQLiteStore(SQLiteFileStore):
@@ -303,6 +316,7 @@ class AppSQLiteStore(SQLiteFileStore):
         shared_sync: dict[str, Any] | None = None
         schedule_for_shared: dict[str, Any] | None = None
         source_schedule_id = str(payload.get("source_schedule_id") or "").strip()
+        members_json = json.dumps(members, ensure_ascii=False)
 
         with self.connect() as conn:
             if kind in {"personal_schedule", "group_schedule"} and source_schedule_id:
@@ -325,6 +339,39 @@ class AppSQLiteStore(SQLiteFileStore):
                         "shared_sync": None,
                         "already_exists": True,
                     }
+
+            recent_duplicate = conn.execute(
+                """
+                SELECT sr.request_id AS request_id, s.schedule_id AS schedule_id
+                FROM structured_requests sr
+                LEFT JOIN schedules s ON s.request_id = sr.request_id
+                WHERE sr.kind = ?
+                    AND sr.title = ?
+                    AND sr.date IS ?
+                    AND sr.start_time IS ?
+                    AND sr.members_json = ?
+                    AND sr.created_at >= ?
+                ORDER BY sr.created_at DESC
+                LIMIT 1
+                """,
+                (kind, title, date, start_time, members_json, _duplicate_check_cutoff_iso()),
+            ).fetchone()
+            if recent_duplicate is not None:
+                saved_rows = [
+                    {"table": "structured_requests", "id": recent_duplicate["request_id"], "existing": True},
+                ]
+                if recent_duplicate["schedule_id"] is not None:
+                    saved_rows.append(
+                        {"table": "schedules", "id": recent_duplicate["schedule_id"], "existing": True}
+                    )
+                return {
+                    "request_id": recent_duplicate["request_id"],
+                    "kind": kind,
+                    "saved_rows": saved_rows,
+                    "shared_sync": None,
+                    "already_exists": True,
+                }
+
             conn.execute(
                 """
                 INSERT INTO structured_requests
@@ -338,7 +385,7 @@ class AppSQLiteStore(SQLiteFileStore):
                     date,
                     start_time,
                     end_time,
-                    json.dumps(members, ensure_ascii=False),
+                    members_json,
                     priority,
                     reason,
                     json.dumps(payload, ensure_ascii=False),
