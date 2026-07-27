@@ -1,0 +1,84 @@
+[
+  {
+    "id": "save-when-fields-already-known",
+    "description": "문장에 제목/날짜/시간/참석자가 이미 있으면 되묻지 않고 그 값 그대로 저장까지 끝내야 한다.",
+    "week": 3,
+    "turns": [
+      {
+        "message": "내일 3시에 철수랑 회의 잡아줘",
+        "expect_tool_called": ["extract_schedule_request"],
+        "expect_any_tool_called": ["save_structured_request", "personal_create_schedule"],
+        "expect_answer_not_contains": ["제목이 뭐", "제목을 알려줘", "제목이 무엇"]
+      }
+    ],
+    "db_check": {
+      "kind": "personal_schedule",
+      "title_contains": "회의",
+      "date_offset_days": 1,
+      "start_time": "15:00"
+    }
+  },
+  {
+    "id": "retrieval-must-call-tool-not-memory-week3",
+    "description": "방금 저장한 일정을 물어보면 대화 기억만으로 답하지 말고 실제 조회 tool을 호출해야 한다.",
+    "week": 3,
+    "turns": [
+      {
+        "message": "내일 3시에 철수랑 회의 잡아줘",
+        "expect_any_tool_called": ["save_structured_request", "personal_create_schedule"]
+      },
+      {
+        "message": "내 회의 언제야?",
+        "expect_tool_called": ["personal_list_saved_schedules"]
+      }
+    ]
+  },
+  {
+    "id": "retrieval-must-call-tool-not-memory-week4",
+    "description": "Week4 agent에서도 저장 직후 조회 질문은 검색 tool을 실제로 호출해야 한다.",
+    "week": 4,
+    "turns": [
+      {
+        "message": "내일 3시에 철수랑 회의 잡아줘",
+        "expect_any_tool_called": ["save_structured_request", "personal_create_schedule"]
+      },
+      {
+        "message": "내 회의 언제야?",
+        "expect_any_tool_called": ["personal_list_saved_schedules", "search_saved_requests"]
+      }
+    ]
+  },
+  {
+    "id": "clarify-then-save-missing-fields",
+    "description": "정말 필요한 값이 빠졌을 때는 되묻고, 답변을 받으면 그 턴에서 저장까지 완료해야 한다.",
+    "week": 3,
+    "turns": [
+      {
+        "message": "회의 좀 잡아줘",
+        "expect_no_tool_called": ["save_structured_request", "personal_create_schedule"],
+        "expect_answer_contains_any": ["언제", "몇 시", "?"]
+      },
+      {
+        "message": "내일 3시에 진행해줘",
+        "expect_any_tool_called": ["save_structured_request", "personal_create_schedule"]
+      }
+    ]
+  },
+  {
+    "id": "no-tool-call-for-unrelated-chat",
+    "description": "일정과 무관한 잡담에는 저장/조회/수정/삭제 tool을 호출하지 않아야 한다.",
+    "week": 3,
+    "turns": [
+      {
+        "message": "오늘 기분이 좀 별로다ㅠㅠ",
+        "expect_no_tool_called": [
+          "save_structured_request",
+          "personal_create_schedule",
+          "personal_list_saved_schedules",
+          "personal_delete_saved_schedules",
+          "personal_update_saved_schedule"
+        ]
+      }
+    ]
+  }
+]
