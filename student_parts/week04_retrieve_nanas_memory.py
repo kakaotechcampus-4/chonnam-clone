@@ -1,21 +1,27 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Literal
 
 from langchain.agents import create_agent
+from langchain.agents.middleware import before_model
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
 from fixed.config import CONFIG
 from fixed.conversation_rag_store import ConversationRAGStore
 from fixed.llm import chat_model
-from fixed.runtime_clock import current_app_date_iso
 from fixed.app_store import AppSQLiteStore
 from fixed.reference_store import PersonalReferenceStore
 from fixed.session_scope import DEFAULT_SESSION_SCOPE, current_session_scope
+from fixed.store_base import new_id
 from student_parts.week01_wake_up_nana import join_system_prompt
-from student_parts.week03_build_nanas_logbook import week03_prompt_parts, week03_tools
+from student_parts.week03_build_nanas_logbook import (
+    list_saved_requests,
+    week03_prompt_parts,
+    week03_tools,
+)
 
 
 REFERENCE_STORE = PersonalReferenceStore(CONFIG.chroma_dir)
@@ -225,8 +231,16 @@ def add_personal_reference_dict(
 ) -> dict[str, Any]:
     """개인 참고자료를 vector store에 추가하고 backend 정보를 반환합니다."""
 
-    # TODO: PersonalReferenceStore.add_personal_reference(...)로 개인 참고자료를 저장하세요.
-    ...
+    saved = reference_store.add_personal_reference(title, content, tags or [])
+    return {
+        "reference_backend": saved.get("backend"),
+        "reference": {
+            "reference_id": saved.get("reference_id"),
+            "title": saved.get("title"),
+            "content": saved.get("content"),
+            "tags": saved.get("tags") or [],
+        },
+    }
 
 
 def search_personal_reference_hits(
@@ -237,8 +251,32 @@ def search_personal_reference_hits(
 ) -> list[dict[str, Any]]:
     """ChromaDB 검색 결과를 tool이 바로 반환하기 쉬운 hit 구조로 정리합니다."""
 
-    # TODO: 개인 참고자료 검색 결과를 id/content/distance/metadata 구조로 정리하세요.
-    ...
+    # 빈 query는 임베딩 호출을 낭비하므로 검색 없이 빈 결과를 반환합니다.
+    if not str(query or "").strip():
+        return []
+
+    raw_hits = reference_store.search_personal_references(query, limit=top_k)
+    hits: list[dict[str, Any]] = []
+    for hit in raw_hits:
+        # 저장소는 tags를 콤마 문자열로 보관하므로, add_personal_reference와 같은
+        # list 형태로 되돌려 tool 간 tags 타입을 일치시킵니다.
+        raw_tags = hit.get("tags", "")
+        if isinstance(raw_tags, str):
+            tags = [tag.strip() for tag in raw_tags.split(",") if tag.strip()]
+        else:
+            tags = list(raw_tags or [])
+        hits.append(
+            {
+                "id": hit.get("id"),
+                "content": hit.get("content", ""),
+                "distance": hit.get("distance"),
+                "metadata": {
+                    "title": hit.get("title", ""),
+                    "tags": tags,
+                },
+            }
+        )
+    return hits
 
 
 def search_saved_request_rows(
@@ -249,8 +287,12 @@ def search_saved_request_rows(
 ) -> list[dict[str, Any]]:
     """SQLite 저장 요청을 검색하고 실제 검색 결과만 반환합니다."""
 
-    # TODO: AppSQLiteStore.search_saved_requests(...)로 저장 요청을 검색하세요.
-    ...
+    # 빈 query는 LIKE '%%'로 전체 row를 긁어오므로 검색 자체를 건너뜁니다.
+    if not str(query or "").strip():
+        return []
+
+    # 가이드 TODO대로 AppSQLiteStore.search_saved_requests 결과를 그대로 반환합니다.
+    return sqlite_store.search_saved_requests(query, limit=top_k)
 
 
 def search_conversation_messages_dict(
@@ -263,8 +305,29 @@ def search_conversation_messages_dict(
 ) -> dict[str, Any]:
     """SQLite 대화 목록을 lazy sync한 뒤 ChromaDB conversation RAG 결과를 반환합니다."""
 
-    # TODO: SQLite 대화 기록을 ConversationRAGStore에 lazy sync한 뒤 현재 대화를 제외하고 검색하세요.
-    ...
+    sync = conversation_rag_store.sync_from_sqlite(sqlite_store)
+
+    # conversation_id를 명시하지 않으면 현재 대화 범위를 검색에서 제외해
+    # "방금 한 말"이 과거 검색 결과처럼 섞이지 않게 합니다.
+    exclude_conversation_id: str | None = None
+    if conversation_id is None:
+        scope = current_session_scope()
+        if scope != DEFAULT_SESSION_SCOPE:
+            exclude_conversation_id = scope
+
+    hits = conversation_rag_store.search(
+        query=query,
+        top_k=top_k,
+        conversation_id=conversation_id,
+        exclude_conversation_id=exclude_conversation_id,
+    )
+    return {
+        "hits": hits,
+        "rows": hits,
+        "context": conversation_rag_store.context_from_hits(hits),
+        "rag_backend": conversation_rag_store.backend_info(),
+        "sync": sync,
+    }
 
 
 def search_conversation_message_rows(
@@ -276,32 +339,45 @@ def search_conversation_message_rows(
 ) -> list[dict[str, Any]]:
     """앱 SQLite에 저장된 일반 채팅 대화 청크를 RAG 검색합니다."""
 
-    # TODO: search_conversation_messages_dict(...) 결과에서 hits만 반환하세요.
-    ...
+    result = search_conversation_messages_dict(
+        sqlite_store,
+        CONVERSATION_RAG_STORE,
+        query=query,
+        top_k=top_k,
+        conversation_id=conversation_id,
+    )
+    return result.get("hits", [])
 
 
 @tool(args_schema=AddPersonalReferenceInput)
 def add_personal_reference(title: str, content: str, tags: list[str] | None = None) -> str:
     """개인 참고자료를 ChromaDB에 추가합니다."""
 
-    # TODO: 개인 참고자료를 저장하고 JSON 문자열로 반환하세요.
-    ...
+    payload = add_personal_reference_dict(
+        REFERENCE_STORE,
+        title=title,
+        content=content,
+        tags=tags or [],
+    )
+    return json_payload(payload)
 
 
 @tool(args_schema=SearchPersonalReferencesInput)
 def search_personal_references(query: str, top_k: int = 2) -> str:
     """개인 참고자료를 ChromaDB와 OpenAI embedding 기반으로 검색합니다."""
 
-    # TODO: query/top_k로 개인 참고자료 vector store를 검색하고 top-level hits를 반환하세요.
-    ...
+    limit = safe_limit(top_k, default=2, maximum=20)
+    hits = search_personal_reference_hits(REFERENCE_STORE, query=query, top_k=limit)
+    return json_payload({"hits": hits})
 
 
 @tool(args_schema=SearchSavedRequestsInput)
 def search_saved_requests(query: str, top_k: int = 3) -> str:
     """SQLite에 저장된 구조화 일정/할 일/알림 row를 검색합니다. query에는 LLM이 고른 일정/할 일/알림 핵심어를 넣습니다."""
 
-    # TODO: AppSQLiteStore.search_saved_requests(...)로 저장 요청을 검색하고 top-level rows를 반환하세요.
-    ...
+    limit = safe_limit(top_k, default=3, maximum=50)
+    rows = search_saved_request_rows(SQLITE_STORE, query=query, top_k=limit)
+    return json_payload({"rows": rows})
 
 
 @tool(args_schema=SearchConversationMessagesInput)
@@ -312,8 +388,15 @@ def search_conversation_messages(
 ) -> str:
     """앱 SQLite 대화 목록을 대화 단위 ChromaDB RAG로 검색합니다. query에는 LLM이 고른 짧은 핵심 명사나 구를 넣습니다."""
 
-    # TODO: 앱 SQLite 대화 목록을 대화 단위 ChromaDB RAG로 검색하고 JSON 문자열로 반환하세요.
-    ...
+    limit = safe_limit(top_k, default=5, maximum=50)
+    payload = search_conversation_messages_dict(
+        SQLITE_STORE,
+        CONVERSATION_RAG_STORE,
+        query=query,
+        top_k=limit,
+        conversation_id=conversation_id,
+    )
+    return json_payload(payload)
 
 
 @tool(args_schema=SearchNanaMemoryInput)
@@ -326,8 +409,40 @@ def search_nana_memory(
 ) -> str:
     """개인 참고자료와 SQLite 저장 일정을 한 번에 검색하고 일정 chunk를 반환합니다."""
 
-    # TODO: compatibility 통합 검색이 필요하면 개인 참고자료와 SQLite 일정 chunk를 함께 구성하세요.
-    ...
+    top_k = safe_limit(limit, default=5, maximum=20)
+    reference_hits = search_personal_reference_hits(REFERENCE_STORE, query=query, top_k=top_k)
+    saved_rows = search_saved_request_rows(SQLITE_STORE, query=query, top_k=top_k)
+
+    lines: list[str] = ["[Nana memory 통합 검색 결과]"]
+    if reference_hits:
+        lines.append("[개인 참고자료]")
+        for index, hit in enumerate(reference_hits, start=1):
+            metadata = hit.get("metadata") or {}
+            title = metadata.get("title") or "제목 없음"
+            lines.append(f"[ref {index}] {title}: {str(hit.get('content') or '').strip()}")
+    if saved_rows:
+        lines.append("[SQLite 저장 일정/요청]")
+        for index, row in enumerate(saved_rows, start=1):
+            title = row.get("title") or "제목 없음"
+            date = row.get("date") or "날짜 미정"
+            attendees = _decode_attendees(row.get("members_json"))
+            attendee_text = f" | 참석자 {', '.join(attendees)}" if attendees else ""
+            lines.append(f"[req {index}] {title} | {date}{attendee_text}")
+    if not reference_hits and not saved_rows:
+        lines.append("- 검색된 참고자료나 저장 일정이 없습니다.")
+
+    # date_from/date_to/attendee는 호환 스키마 유지를 위해 받지만, 이 compat 통합 검색은
+    # 참고자료 + 저장 요청을 묶어 보여줄 뿐 별도 필터링을 하지 않으므로 payload에 넣지 않는다.
+    return json_payload(
+        {
+            "query": query,
+            "hits": reference_hits,
+            "rows": saved_rows,
+            "reference_backend": REFERENCE_STORE.backend_info(),
+            "context": "\n".join(lines),
+        }
+    )
+
 
 def week04_tools() -> list[Any]:
     """3주차까지의 도구에 4주차 RAG 도구를 누적한 목록입니다."""
@@ -352,8 +467,187 @@ def week04_prompt_parts() -> list[str]:
 
     return [
         *week03_prompt_parts(),
-        # TODO: Week 4 Nana memory agent system prompt를 자유롭게 추가하세요.
+        (
+            "이번 회차 Nana는 '기억을 검색하는' agent다. 앞 회차의 'RAG 검색은 이번 회차 범위가 아니다'는 "
+            "제약은 이번 회차에는 적용하지 않는다. 사용자가 과거에 적어 둔 참고자료·저장 기록·이전 대화를 "
+            "물으면, 하나의 만능 검색이 아니라 데이터 출처에 맞는 검색 도구를 골라 호출한다."
+        ),
+        (
+            "출처별 도구 선택 기준:\n"
+            "- 사용자의 선호·메모·개인 참고자료(예: '내가 선호하는 회의 시간', '점심 시간 규칙')를 물으면 "
+            "search_personal_references를 쓴다. 결과는 top-level hits에 담긴다.\n"
+            "- SQLite에 저장된 구조화 일정/할 일/알림 기록(예: '지난주에 저장한 회의 일정')을 물으면 "
+            "search_saved_requests를 쓴다. 결과는 top-level rows에 담긴다.\n"
+            "- 앱에서 나눈 '일반 채팅 발화' 자체(예: '전에 이 채팅에서 무슨 얘기 했지?')를 물으면 "
+            "search_conversation_messages를 쓴다. 질문 성격상 여러 출처가 필요하면 도구를 여러 개 호출해도 된다."
+        ),
+        (
+            "검색 도구의 query에는 사용자 문장을 그대로 넣지 말고 핵심 명사나 짧은 구만 넣는다. "
+            "search_personal_references·search_conversation_messages는 의미 기반 벡터 검색이고, "
+            "search_saved_requests는 저장된 제목/원문을 부분 문자열(LIKE)로 찾는다. "
+            "여러 단어를 붙이면 저장된 제목과 정확히 안 맞아 놓칠 수 있으니, search_saved_requests에는 "
+            "가능하면 가장 핵심적인 한 단어(예: '병원', '보고서', '디자인')로 검색하고 필요하면 키워드를 바꿔 다시 검색한다."
+        ),
+        (
+            "search_conversation_messages는 기본적으로 '지금 이 대화'를 검색에서 제외하므로, "
+            "방금 사용자가 한 말을 과거 기록처럼 인용하지 않는다. 또한 assistant(나) 발화만으로 사실을 확정하지 말고, "
+            "근거가 부족하면 검색 결과가 없다고 솔직히 답한다."
+        ),
+        (
+            "저장된 참고자료·저장 기록·이전 대화에 대한 질문에는 '이미 안다'고 가정하거나 지금까지의 대화 기억에만 "
+            "의존하지 않는다. 참고자료·저장 기록·과거 대화는 대화 맥락이 아니라 저장소에만 있을 수 있으므로, "
+            "특히 '있어?/없어?/뭐였지?'처럼 사실 확인을 요구하면 반드시 해당 검색 도구를 먼저 호출해 확인한 뒤 답한다. "
+            "검색도 하지 않고 '없다'고 단정하지 않는다."
+        ),
+        (
+            "저장값은 대화 도중에도 바뀔 수 있다. 방금 주입되거나 호출된 최신 검색 결과가 지금까지의 대화 내용이나 "
+            "네 이전 답변과 다르면, 이전 기억이 아니라 최신 검색 결과를 사실로 삼아 답한다. "
+            "반대로 저장값을 묻는데 검색 결과가 비어 있으면, 앞 대화의 값으로 단정하지 말고 "
+            "'저장된 정보를 찾지 못했다'거나 다시 확인이 필요하다고 답한다."
+        ),
     ]
+
+
+# ---------------------------------------------------------------------------
+# 검색 게이트 (stale 방지)
+#
+# 문제: 조회형 질문("저장한 회의 몇 시야?")의 답이 이미 대화 컨텍스트에 있으면
+#       agent가 재검색을 건너뛰고 낡은 기억으로 답할 수 있다(stale 오답).
+# 해결: 매 사용자 발화 직후, 경량 분류기로 '저장소 조회가 필요한 질문'인지 판정하고,
+#       필요하면 답변 전에 해당 search tool을 강제로 실행해 최신 결과를 tool 라운드로
+#       주입한다. 그러면 모델은 기억이 아니라 방금 주입된 최신 결과로 답한다.
+#       비조회형(인사·현재 대화 되묻기·생성/수정 명령)은 sources=[]라 과호출이 없다.
+
+
+class _GateDecision(BaseModel):
+    """검색 게이트 분류 결과입니다."""
+
+    needs_retrieval: bool
+    sources: list[Literal["reference", "saved", "conversation"]] = Field(default_factory=list)
+    query: str = ""
+
+
+_GATE_MODEL: Any | None = None
+
+_GATE_SYSTEM_PROMPT = (
+    "너는 라우팅 분류기다. 사용자의 '마지막 발화 하나'만 보고, 답하기 전에 저장소를 "
+    "다시 검색해야 하는지 판정한다.\n"
+    "needs_retrieval=true 로 하고 sources 에 출처를 넣는 경우:\n"
+    "- reference: 사용자의 선호·습관·규칙·개인 메모 등 개인 참고자료에 저장했을 값을 "
+    "묻거나 그것을 반영해 달라고 할 때(집중 시간대, 점심 규칙, 회의 길이 선호 등).\n"
+    "- saved: 과거에 저장한 일정/할 일/알림의 유무·시간·내용을 묻거나 그 기록을 "
+    "정리/비교/확인해 달라고 할 때(저장한 회의 몇 시야, 병원 알림 있어 등).\n"
+    "- conversation: 지금 이 대화가 아니라 과거의 '다른 대화'에서 오간 말을 물을 때.\n"
+    "여러 출처가 필요하면 sources 에 여럿을 넣는다.\n"
+    "needs_retrieval=false, sources=[] 로 두는 경우:\n"
+    "- 방금 '이 대화'에서 오간 내용을 되묻는 경우(현재 대화 기억으로 충분).\n"
+    "- 인사/감사/잡담/일반 상식.\n"
+    "- 새 일정·할 일·알림을 생성/수정/삭제하라는 명령(저장 조회가 아님).\n"
+    "핵심 원칙: 저장된 값(유무·시간·내용)을 묻는 질문이면, 답이 앞 대화에 이미 나온 것 "
+    "같아도 신뢰하지 말고 반드시 재검색하도록 needs_retrieval=true 로 한다.\n"
+    "query: 검색에 쓸 핵심 명사 '한 단어'만 넣어라(예: 스탠드업, 병원, 보고서, 점심, 집중). "
+    "saved 검색은 부분 문자열(LIKE) 매칭이라 여러 단어를 붙이면 저장 제목과 안 맞아 놓친다. "
+    "저장소 검색이 불필요하면 빈 문자열."
+)
+
+
+def _gate_model() -> Any:
+    """게이트 분류 전용 structured-output 모델을 지연 생성/재사용합니다."""
+
+    global _GATE_MODEL
+    if _GATE_MODEL is None:
+        _GATE_MODEL = chat_model().with_structured_output(_GateDecision)
+    return _GATE_MODEL
+
+
+def _gate_tool_by_source() -> dict[str, tuple[Any, dict[str, Any]]]:
+    """출처별로 강제 실행할 search tool과 기본 인자를 매핑합니다."""
+
+    return {
+        "reference": (search_personal_references, {"top_k": 3}),
+        "saved": (search_saved_requests, {"top_k": 5}),
+        "conversation": (search_conversation_messages, {"top_k": 5}),
+    }
+
+
+def _rows_nonempty(result: str) -> bool:
+    """tool 결과 JSON에 rows가 하나라도 있으면 True."""
+
+    try:
+        return bool(json.loads(result).get("rows"))
+    except Exception:
+        return False
+
+
+@before_model
+def retrieval_gate(state: dict[str, Any], runtime: Any) -> dict[str, Any] | None:
+    """조회형 질문이면 답변 전에 최신 검색 결과를 강제 주입해 stale 답변을 막습니다."""
+
+    messages = state.get("messages") or []
+    # 턴의 첫 model 호출(사용자 발화 직후)만 게이트한다.
+    # tool 실행 후 재진입 시 마지막 메시지는 ToolMessage라 여기서 걸러진다(중복 방지).
+    if not messages or not isinstance(messages[-1], HumanMessage):
+        return None
+
+    last = messages[-1]
+    text = last.content if isinstance(last.content, str) else str(last.content)
+    if not text.strip():
+        return None
+
+    try:
+        decision = _gate_model().invoke(
+            [
+                {"role": "system", "content": _GATE_SYSTEM_PROMPT},
+                {"role": "user", "content": text},
+            ]
+        )
+    except Exception:
+        return None  # 게이트 실패는 열어 둔다(기존 agent 동작 유지).
+
+    if not decision.needs_retrieval or not decision.sources:
+        return None
+
+    # 분류기가 핵심어를 못 뽑아 query가 비면 강제하지 않는다. 빈 query로 검색하면
+    # 가드가 []를 돌려주고, 그 빈 결과가 '저장된 정보 없음' 오답을 유도할 수 있다.
+    # 이 경우 문맥을 가진 agent가 스스로 검색하도록 넘긴다.
+    if not decision.query.strip():
+        return None
+
+    tool_map = _gate_tool_by_source()
+    tool_calls: list[dict[str, Any]] = []
+    tool_messages: list[ToolMessage] = []
+    seen: set[str] = set()
+    for source in decision.sources:
+        if source in seen or source not in tool_map:
+            continue
+        seen.add(source)
+        tool_obj, extra = tool_map[source]
+        args = {"query": decision.query, **extra}
+        try:
+            result = tool_obj.invoke(args)
+        except Exception:
+            continue
+        # saved는 LIKE 부분매칭이라 키워드가 조금만 어긋나도 빈 결과가 난다. 빈 결과를
+        # 그대로 주입하면 '저장된 정보 없음' 거짓 부정이 되므로, 키워드 무관 list로
+        # 폴백해 최신 저장 목록을 확보한다(진짜로 아무것도 없으면 빈 결과를 그대로 둔다).
+        if source == "saved" and not _rows_nonempty(result):
+            try:
+                fallback = list_saved_requests.invoke({})
+            except Exception:
+                fallback = None
+            if fallback is not None and _rows_nonempty(fallback):
+                tool_obj, args, result = list_saved_requests, {}, fallback
+        call_id = new_id("gate")
+        tool_calls.append({"name": tool_obj.name, "args": args, "id": call_id})
+        tool_messages.append(ToolMessage(content=result, tool_call_id=call_id, name=tool_obj.name))
+
+    if not tool_calls:
+        return None
+
+    # 강제 검색 라운드(assistant tool_call + 그 결과)를 히스토리에 붙인다.
+    # 다음 model 호출은 이 최신 결과를 근거로 답하게 된다.
+    forced = AIMessage(content="", tool_calls=tool_calls)
+    return {"messages": [forced, *tool_messages]}
 
 
 def build_week04_agent() -> object:
@@ -367,6 +661,7 @@ def build_week04_agent() -> object:
             model=chat_model(),
             tools=week04_tools(),
             system_prompt=week04_system_prompt(),
+            middleware=[retrieval_gate],
         )
     return _WEEK04_AGENT
 
