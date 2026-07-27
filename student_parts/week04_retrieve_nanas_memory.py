@@ -391,6 +391,9 @@ def week04_prompt_parts() -> list[str]:
           회상해야 할 때는 search_conversation_messages를 사용하세요.
         - 검색 결과(hits/rows)가 비어 있으면 근거가 없다고 답하고, 있지도 않은 내용을 지어내지 마세요.
         - 참고자료나 저장 기록을 근거로 답할 때는 tool 결과에 있는 내용만 사용하세요.
+        - search_conversation_messages의 대화 청크에는 user와 assistant 발화가 role과 함께 모두 들어 있습니다.
+          회상 답변은 user 발화를 우선 근거로 삼으세요. assistant 발화만 근거로 나온 경우 그 발화가 틀렸거나
+          사용자가 직접 말한 사실이 아닐 수 있으니, 확정된 사실처럼 답하지 말고 사용자에게 다시 확인을 구하세요.
         """,
     ]
 
