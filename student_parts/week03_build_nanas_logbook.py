@@ -43,7 +43,8 @@ WEEK03_TOOL_CALL_PROMPT = [
     "Week 1의 personal_list_schedules/personal_delete_schedule은 대화가 끝나면 사라지는 임시 메모리이므로 SQLite에 남아야 하는 조회/삭제 요청에는 사용하지 않는다.",
     "구조화 요청 원본 기록 자체를 조회해야 할 때는 목록이면 list_saved_requests, 단건이면 get_saved_request를 호출한다.",
     "사용자가 저장된 일정 수정을 요청하면 먼저 personal_list_saved_schedules로 대상 schedule_id를 확인한 뒤, personal_update_saved_schedule을 호출한다.",
-    "사용자가 저장된 일정 삭제를 요청하면 먼저 personal_list_saved_schedules로 대상을확인한 뒤, schedule_ids 또는 명시적 조건으로 personal_delete_saved_schedules를 호출한다. 조건 없이 전체 삭제를 요청하지 않는다.",
+    "사용자가 저장된 일정 삭제를 요청하면 먼저 personal_list_saved_schedules로 대상을확인한 뒤, schedule_ids 또는 명시적 조건으로 personal_delete_saved_schedules를 호출한다."
+    "사용자가 명시적으로 '전부'/'모두'처럼 명시적으로 전체삭제를 말하면 delete_all=True로 호출하고, 애매하게 그냥 '삭제해줘'라고만 하면 먼저 목록 확인 후 조건을 물어본다."
 ]
 
 
