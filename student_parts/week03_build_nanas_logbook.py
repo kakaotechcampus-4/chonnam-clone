@@ -503,7 +503,8 @@ def personal_list_saved_schedules(
     filters = {"limit": limit, "kind": kind, "date_from": date_from, "date_to": date_to}
 
     if kind is None:
-        schedules = store.list_schedules(limit=limit, kind="personal_schedule", date_from=date_from, date_to=date_to)
+        # schedules 테이블엔 personal_schedule/group_schedule만 저장되므로, kind 필터를 생략하면 둘 다 조회된다.
+        schedules = store.list_schedules(limit=limit, kind=None, date_from=date_from, date_to=date_to)
         todos = store.list_saved_requests(kind="todo", date_from=date_from, date_to=date_to, limit=limit)
         return json_payload(
             tool_result("personal_list_saved_schedules", filters=filters, schedules=schedules, todos=todos)
