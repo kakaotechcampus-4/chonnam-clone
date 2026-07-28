@@ -229,7 +229,7 @@ def add_personal_reference_dict(
     tags = tags if tags else []
     result = reference_store.add_personal_reference(title,content,tags)
     reference_backend = result.pop("backend")
-    return {"reference":result, "referece_backend":reference_backend}
+    return {"reference":result, "reference_backend":reference_backend}
 
 
 def search_personal_reference_hits(
