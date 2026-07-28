@@ -1,0 +1,16 @@
+{
+  "source_file": "student_parts/week03_build_nanas_logbook.py",
+  "generated_at": "2026-07-22T21:45:00+09:00",
+  "tool_signatures": {
+    "personal_create_schedule": "sha256:8bc9856b2b8ff2f2",
+    "personal_list_schedules": "sha256:95c4ff4adaff5683",
+    "personal_delete_schedule": "sha256:426d8e4c16a0f0d6",
+    "extract_schedule_request": "sha256:12d161e9c967d34d",
+    "save_structured_request": "sha256:3304fbbd67a2375f",
+    "list_saved_requests": "sha256:19e1cc15de61c40d",
+    "get_saved_request": "sha256:cc341d382aa4c7b7",
+    "personal_list_saved_schedules": "sha256:c6d65fa869e88a7f",
+    "personal_update_saved_schedule": "sha256:b4574962b8a9dda9",
+    "personal_delete_saved_schedules": "sha256:2371d40f3941ce7d"
+  }
+}
