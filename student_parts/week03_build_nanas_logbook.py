@@ -27,6 +27,7 @@ from student_parts.week02_structure_natural_language_requests import (
 )
 
 _WEEK03_AGENT: Any | None = None
+_SQLITE_STORE: AppSQLiteStore | None = None
 
 SQLITE_MEMORY_PROMPT = """
 [조회·검증 규칙]
@@ -212,7 +213,10 @@ WEEK03_TOOL_CALL_PROMPT = """
 
 
 def _store() -> AppSQLiteStore:
-    return AppSQLiteStore(CONFIG.app_db_path)
+    global _SQLITE_STORE
+    if _SQLITE_STORE is None:
+        _SQLITE_STORE = AppSQLiteStore(CONFIG.app_db_path)
+    return _SQLITE_STORE
 
 
 def _tool_name(item: Any) -> str:
