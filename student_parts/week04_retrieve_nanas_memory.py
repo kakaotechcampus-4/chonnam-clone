@@ -427,7 +427,6 @@ def week04_system_prompt() -> str:
 
     return join_system_prompt(week04_prompt_parts())
 
-
 def week04_prompt_parts() -> list[str]:
     """1~4주차 system prompt 조각을 누적합니다."""
 
@@ -441,6 +440,8 @@ def week04_prompt_parts() -> list[str]:
         "새 대화에서도 유지되는 선호/기록/일정을 찾는 질문에는 사용하지 않는다. "
         "회의 시간이나 일정 가능 여부를 묻는 질문에는 먼저 search_personal_references로 관련 선호/습관 참고자료가 있는지 확인하고, "
         "필요하면 personal_list_saved_schedules로 날짜 범위의 저장된 일정도 함께 확인한 뒤, 그 결과를 근거로 답한다. "
+        "'예전에 내가 뭐라고 그랬지', '전에 이야기했던 거 기억나?'처럼 과거 대화에서 실제로 나눈 말을 "
+        "찾아야 하는 질문에는 search_conversation_messages를 사용한다. 저장된 일정/할 일 같은 구조화 기록이나 참고자료를 찾을 때는 사용하지 않는다."
         "근거 없이 임의로 답하지 않는다.",
     ]
 

@@ -20,12 +20,12 @@ Nana가 "내가 적어 둔 참고자료", "SQLite에 저장된 일정/할 일 �
 ## TODO 목록 (추가 과제)
 
 메인과제 3개 tool(`add_personal_reference`, `search_personal_references`, `search_saved_requests`)은
-이미 구현되어 있다. 남은 TODO는 모두 추가 과제(대화 RAG) 항목이다.
+이미 구현되어 있다. 추가 과제(대화 RAG) 항목도 모두 구현이 끝났다.
 
-- [ ] (줄 266) `search_conversation_messages_dict` — SQLite 대화 기록을 `ConversationRAGStore.sync_from_sqlite(...)`로 lazy sync한 뒤 ChromaDB 검색 결과를 반환 — 상태: 미시작
-- [ ] (줄 280) `search_conversation_message_rows` — `search_conversation_messages_dict(...)` 결과에서 hits만 꺼내는 내부 helper — 상태: 미시작
-- [ ] (줄 320) `search_conversation_messages` tool — 위 helper를 호출해 `{"hits":..., "rows":..., "context":..., "rag_backend":..., "sync":...}` 형태 JSON을 반환 — 상태: 미시작
-- [ ] (줄 332) `search_nana_memory` tool — 개인 참고자료 hit와 SQLite 일정 chunk를 한 번에 묶는 호환용 통합 검색 tool 본문 — 상태: 미시작
+- [x] (줄 266) `search_conversation_messages_dict` — SQLite 대화 기록을 `ConversationRAGStore.sync_from_sqlite(...)`로 lazy sync한 뒤 ChromaDB 검색 결과를 반환 — 상태: 완료
+- [x] (줄 300) `search_conversation_message_rows` — `search_conversation_messages_dict(...)` 결과에서 hits만 꺼내는 내부 helper — 상태: 완료
+- [x] (줄 346) `search_conversation_messages` tool — 위 helper를 호출해 `{"hits":..., "rows":..., "context":..., "rag_backend":..., "sync":...}` 형태 JSON을 반환 — 상태: 완료
+- [x] (줄 365) `search_nana_memory` tool — 개인 참고자료 hit와 SQLite 일정 chunk를 한 번에 묶는 호환용 통합 검색 tool 본문 — 상태: 완료
 
 ## 이미 구현되어 있는 함수
 
