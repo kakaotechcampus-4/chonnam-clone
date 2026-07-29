@@ -379,7 +379,19 @@ def create_shared_schedule(
     """외부 MCP 공유 일정 저장소에 일정을 등록하거나 갱신합니다."""
 
     # TODO: call_mcp_tool_sync("create_shared_schedule", args)로 공유 일정 row를 생성/갱신하세요.
-    ...
+    return call_mcp_tool_sync(
+        "create_shared_schedule",
+        {
+            "member_name": member_name,
+            "title": title,
+            "date": date,
+            "start_time": start_time,
+            "end_time": end_time,
+            "notes": notes,
+            "source_conversation_id": source_conversation_id,
+            "schedule_id": schedule_id,
+        },
+    )
 
 
 @tool(args_schema=DeleteSharedScheduleInput)
@@ -390,7 +402,10 @@ def delete_shared_schedule(
     """외부 MCP 공유 일정 저장소에서 일정을 삭제합니다."""
 
     # TODO: call_mcp_tool_sync("delete_shared_schedule", args)로 공유 일정을 삭제하세요.
-    ...
+    return call_mcp_tool_sync(
+        "delete_shared_schedule",
+        {"schedule_id": schedule_id, "source_conversation_id": source_conversation_id},
+    )
 
 
 @tool(args_schema=ListSharedSchedulesInput)
@@ -459,7 +474,7 @@ def week05_prompt_parts() -> list[str]:
 
     return [
         *week04_prompt_parts(),
-        "search_conversation_messages(4주차)는 이 앱에 저장된 나와 나나의 대화 발화를 찾고, search_previous_conversations(5주차)는 외부 SQLite/MCP 서버에 저장된 Kana의 이전 대화 기록(외부 팀원과 나눈 대화 등)을 찾는다. 서로 다른 저장소이므로 혼동하지 않는다.",
+        "search_conversation_messages(week4)는 이 앱에 저장된 나와 나나의 대화 발화를 찾고, search_previous_conversations(5주차)는 외부 SQLite/MCP 서버에 저장된 Kana의 이전 대화 기록(외부 팀원과 나눈 대화 등)을 찾는다. 서로 다른 저장소이므로 혼동하지 않는다.",
         "'외부 팀원과 나눈 대화', '그때 회의에서 무슨 얘기 나눴는지'처럼 앱 바깥의 이전 대화를 찾으라고 하면 search_previous_conversations를 호출한다.",
         "search_previous_conversations로 찾은 대화의 전체 내용이 필요하면 그 결과의 conversation_id로 load_conversation_messages를 호출한다.",
         "특정 외부 멤버가 언제 바쁜지 또는 나와 외부 멤버들의 일정을 함께 조율해야 하면 collect_member_schedules를 호출해 내 일정과 외부 멤버 busy-time을 한 번에 확인한다.",
