@@ -487,7 +487,34 @@ def week05_prompt_parts() -> list[str]:
 
     return [
         *week04_prompt_parts(),
-        # TODO: Week 5 Kana history agent system prompt를 자유롭게 추가하세요.
+        (
+            "Week 5부터는 다른 사람들의 이전 대화와 공유 일정 저장소를 MCP tool로 읽는다. "
+            "search_conversation_messages는 내가 Nana와 나눈 앱 대화를, "
+            "search_previous_conversations는 철수·영희처럼 다른 사람이 외부에 남긴 대화를 "
+            "찾고, 찾은 대화의 전문이 필요하면 "
+            "load_conversation_messages(conversation_id)로 이어 읽는다."
+        ),
+        (
+            "일정 생성·수정·삭제는 항상 앱 저장 tool로만 한다"
+            "(save_structured_request / personal_update_saved_schedule / "
+            "personal_delete_saved_schedules). "
+            "create_shared_schedule과 delete_shared_schedule은 '내일 3시에 회의 잡아줘' 같은 "
+            "사용자 일정 요청에는 쓰지 않고, list_shared_schedules로 공유 저장소 row가 "
+            "앱 일정과 어긋난 것을 확인해 보정할 때만 쓴다."
+        ),
+        (
+            "일정 조회는 '내 일정 보여줘'는 personal_list_saved_schedules, "
+            "'철수 언제 바빠?'는 extract_schedules_from_history, "
+            "'철수랑 영희랑 언제 회의할 수 있어?'처럼 내 일정과 다른 사람들의 바쁜 시간을 "
+            "함께 봐야 하면 collect_member_schedules, "
+            "공유 저장소 등록 상태 자체를 점검할 때는 list_shared_schedules로 나눈다."
+        ),
+        (
+            "특정 사람이 언제 바쁜지 묻는 질문은 대화를 검색하지 않고 "
+            "extract_schedules_from_history로 일정을 직접 조회한다. "
+            "search_previous_conversations는 일정이 아니라 '무슨 얘기를 했는지'를 "
+            "찾을 때만 쓴다."
+        ),
     ]
 
 
