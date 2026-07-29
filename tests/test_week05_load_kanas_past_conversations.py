@@ -212,5 +212,84 @@ class HistoryMCPWrapperTests(unittest.TestCase):
                 )
 
 
+class SharedScheduleMCPWrapperTests(unittest.TestCase):
+    def test_create_forwards_all_fields_and_preserves_mcp_payload(self) -> None:
+        expected_payload = {
+            "ok": True,
+            "tool_name": "create_shared_schedule",
+            "shared_schedule": {
+                "schedule_id": "shared-1",
+                "source_conversation_id": "conversation-7",
+            },
+        }
+        expected = json.dumps(expected_payload, ensure_ascii=False)
+        arguments = {
+            "member_name": "민아",
+            "title": "주간 회의",
+            "date": "2026-07-30",
+            "start_time": "13:00",
+            "end_time": "14:00",
+            "notes": "프로젝트 일정",
+            "source_conversation_id": "conversation-7",
+            "schedule_id": "shared-1",
+        }
+
+        with patch.object(week05, "call_mcp_tool_sync", return_value=expected) as call:
+            result = week05.create_shared_schedule.invoke(arguments)
+
+        self.assertEqual(result, expected)
+        self.assertEqual(json.loads(result), expected_payload)
+        call.assert_called_once_with("create_shared_schedule", arguments)
+
+    def test_delete_forwards_identifiers_without_inventing_a_guard(self) -> None:
+        expected = json.dumps(
+            {
+                "ok": True,
+                "tool_name": "delete_shared_schedule",
+                "deleted_count": 0,
+                "deleted": [],
+            }
+        )
+
+        with patch.object(week05, "call_mcp_tool_sync", return_value=expected) as call:
+            result = week05.delete_shared_schedule.invoke(
+                {"schedule_id": None, "source_conversation_id": None}
+            )
+
+        self.assertEqual(result, expected)
+        call.assert_called_once_with(
+            "delete_shared_schedule",
+            {"schedule_id": None, "source_conversation_id": None},
+        )
+
+    def test_list_forwards_filters_and_preserves_schedule_metadata(self) -> None:
+        expected_payload = {
+            "ok": True,
+            "tool_name": "list_shared_schedules",
+            "rows": [
+                {
+                    "schedule_id": "shared-2",
+                    "source_conversation_id": "conversation-8",
+                    "member_name": "지수",
+                }
+            ],
+            "schedule_summary": "공유 일정 1건",
+        }
+        expected = json.dumps(expected_payload, ensure_ascii=False)
+        arguments = {
+            "member_names": ["지수"],
+            "date_from": "2026-07-29",
+            "date_to": "2026-08-05",
+            "source_conversation_id": "conversation-8",
+            "limit": 25,
+        }
+
+        with patch.object(week05, "call_mcp_tool_sync", return_value=expected) as call:
+            result = week05.list_shared_schedules.invoke(arguments)
+
+        self.assertEqual(json.loads(result), expected_payload)
+        call.assert_called_once_with("list_shared_schedules", arguments)
+
+
 if __name__ == "__main__":
     unittest.main()
