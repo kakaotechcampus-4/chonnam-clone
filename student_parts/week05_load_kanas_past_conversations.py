@@ -11,6 +11,7 @@ from fixed.app_store import AppSQLiteStore
 from fixed.config import CONFIG
 from fixed.external_mcp import call_external_tool_payload
 from fixed.external_people_store import (
+    PERSONAL_SHARED_MEMBER_NAME,
     external_schedule_summary,
     normalize_external_member_names,
     normalize_external_schedule_date_bounds,
@@ -333,15 +334,6 @@ def _collect_member_schedules(
         if normalized_to and request.date > normalized_to:
             continue
         attendee_text = ", ".join(str(member) for member in request.members)
-    for row in personal_schedules:
-        request = _structured_request_from_schedule_row(row)
-        if not request.date:
-            continue
-        if normalized_from and request.date < normalized_from:
-            continue
-        if normalized_to and request.date > normalized_to:
-            continue
-        attendee_text = ", ".join(str(member) for member in request.members)
         my_rows.append(
             {
                 "member_name": PERSONAL_SHARED_MEMBER_NAME,
@@ -462,7 +454,12 @@ def collect_member_schedules(member_names: list[str], date_from: str, date_to: s
     """내 일정과 다른 사람들의 일정을 MCP SQLite 기록에서 모읍니다."""
 
     # TODO: 내 일정과 외부 멤버 busy-time rows를 모아 JSON 문자열로 반환하세요.
-    ...
+    return json_payload(_collect_member_schedules(
+        member_names=member_names,
+        date_from=date_from,
+        date_to=date_to,
+        personal_schedules=_personal_schedules_for_current_scope()
+    ))
 
 
 def week05_tools() -> list[Any]:
@@ -490,20 +487,16 @@ def week05_prompt_parts() -> list[str]:
     return [
         *week04_prompt_parts(),
         # TODO: Week 5 Kana history agent system prompt를 자유롭게 추가하세요.
-        "너는 카나메이트 이전 대화 검색 agent다. "
-        "사용자가 팀원들의 과거 일정이나 가능 시간을 물으면, "
-        "반드시 search_previous_conversations를 먼저 호출한다. "
-        "반환된 conversation_id 목록을 모아 "
-        "extract_schedules_from_history를 두 번째로 호출한 뒤, "
-        "외부 QLite 이전 대화에서 멤버별 일정을 추출한다. "
-        "load_conversation_messages는 원문 확인이 필요할 때만 선택적으로 호출하며, "
-        "conversation_id로 외부 SQLite/MCP helper에서 이전 대화 메시지를 조회한다."
-        "list_shared_schedules를 호출하여 외부 MCP 공유 일정 저장소를 확인할 때는 '나'를 포함한 등록 row를 조회하고, "
-        "필터 없이 호출하면 외부 실습용 기본 공유 일정 row가 우선 반환될 수 있다. "
-        "3주차 이후 저장된 내 일정은 앱 SQLite에서 읽고, "
-        "_personal_schedules_for_current_scope()를 호출하여 현재 대화의 임시 일정만 추가로 합친다. "
-        "collect_member_schedules를 호출하여, "
-        "두 출처를 member_name/title/date/start_time/end_time/notes가 있는 rows 배열로 합친다. "
+        "팀원의 과거 일정이나 가능한 시간을 묻는 질문은 아래 외부 대화/공유 일정 도구로 처리한다. "
+        "팀원 일정과 내 일정을 함께 봐야 하면 collect_member_schedules 하나만 호출한다. "
+        "이 도구가 내 일정과 외부 멤버 일정을 같은 rows 구조로 합쳐서 돌려준다. "
+        "외부 멤버 일정만 필요하면 extract_schedules_from_history를 호출한다. "
+        "두 도구 모두 member_names와 date_from/date_to(YYYY-MM-DD)를 반드시 채워서 호출한다. "
+        "공유 일정 저장소에 등록된 row를 확인해야 하면 list_shared_schedules를 호출한다. "
+        "어떤 대화에서 나온 약속인지 근거가 필요할 때만 search_previous_conversations로 검색하고, "
+        "찾은 conversation_id의 원문을 확인해야 하면 load_conversation_messages를 호출한다. "
+        "도구 결과의 rows와 schedule_summary만 근거로 답하고, rows가 비어 있으면 "
+        "일정을 찾지 못했다고 말한다. 없는 일정을 지어내지 않는다."
     ]
 
 
