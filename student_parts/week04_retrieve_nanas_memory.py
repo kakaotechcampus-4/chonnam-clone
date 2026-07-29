@@ -40,7 +40,7 @@ WEEK04_MEMORY_PROMPT = """
   을 호출해 근거를 모은 뒤 답한다.
 
 - search_personal_references의 결과는 hits, search_saved_requests의 결과는 rows에 들어있다.
-  세 tool(search_personal_references, search_saved_requests, personal_list_saved_schedules) 다 결과가 비어 있으면 
+  세 tool(search_personal_references, search_saved_requests, personal_list_saved_schedules) 다 결과가 비어 있으면
   근거 없이 추측하지 말고 모른다고 답하거나 되묻는다.
 """
 
@@ -248,7 +248,7 @@ def add_personal_reference_dict(
     # TODO: PersonalReferenceStore.add_personal_reference(...)로 개인 참고자료를 저장하세요.
     saved=reference_store.add_personal_reference(title=title, content=content, tags=tags)
     return {
-        "reference_backend": saved["backend"], 
+        "reference_backend": saved["backend"],
         "reference_id": saved["reference_id"],
         "reference":
         {
@@ -282,7 +282,6 @@ def search_personal_reference_hits(
     ]
 
 
-
 def search_saved_request_rows(
     sqlite_store: AppSQLiteStore,
     *,
@@ -293,7 +292,6 @@ def search_saved_request_rows(
 
     # TODO: AppSQLiteStore.search_saved_requests(...)로 저장 요청을 검색하세요.
     return sqlite_store.search_saved_requests(query, limit=top_k)
-
 
 
 def search_conversation_messages_dict(
