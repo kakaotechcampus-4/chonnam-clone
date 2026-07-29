@@ -1,0 +1,31 @@
+{
+ "source_file": "student_parts/week05_load_kanas_past_conversations.py",
+ "generated_at": "2026-07-29T19:40:00+09:00",
+ "tool_signatures": {
+  "personal_create_schedule": "sha256:e9d0a07132a122f8",
+  "personal_list_schedules": "sha256:d320d1bf3965f6ca",
+  "personal_delete_schedule": "sha256:52b0ae9845091090",
+  "extract_schedule_request": "sha256:37392a1ef02ce97f",
+  "save_structured_request": "sha256:50703cdf138f4ae7",
+  "list_saved_requests": "sha256:c5252b6df0bf9f38",
+  "get_saved_request": "sha256:5ad11692fbab8a61",
+  "personal_list_saved_schedules": "sha256:e1b273bb31fab9d3",
+  "personal_update_saved_schedule": "sha256:08a687426ad13d9b",
+  "personal_delete_saved_schedules": "sha256:8745d6f6eb257efb",
+  "add_personal_reference": "sha256:18afde17891e6842",
+  "search_personal_references": "sha256:6b4620cf3fe82480",
+  "search_saved_requests": "sha256:3092f3e81a3605b9",
+  "search_conversation_messages": "sha256:6884e1476b90f2bd",
+  "search_previous_conversations": "sha256:8ffdacf017f00021",
+  "load_conversation_messages": "sha256:423bbc1e5506b6ad",
+  "extract_schedules_from_history": "sha256:4172ac33f5386b08",
+  "create_shared_schedule": "sha256:843b520150e1de2d",
+  "delete_shared_schedule": "sha256:7713b94d71caba51",
+  "list_shared_schedules": "sha256:41f6a9287d896769",
+  "collect_member_schedules": "sha256:874f5cede962a9f8"
+ },
+ "prompt_files": [
+  "prompts.jsonl"
+ ],
+ "note": "week05는 build_week_agent()가 week04_tools() 21개 중 14개(week01-04 누적)에 새 7개(search_previous_conversations, load_conversation_messages, extract_schedules_from_history, create_shared_schedule, delete_shared_schedule, list_shared_schedules, collect_member_schedules)를 더한 21개 tool 전체를 노출. week04 캐시(stress_test_prompts/week04_retrieve_nanas_memory/)와는 별도 stem이라 재사용하지 않고 21개 tool 기준으로 100개 전량 신규 생성. 검색 품질형(retrieval_prompts.jsonl/fixtures.jsonl)은 이번 실행에서 생략 - search_personal_references/search_saved_requests/search_conversation_messages는 week04 캐시에서 이미 검증됐고, 신규 검색 tool인 search_previous_conversations는 LIKE 기반 외부 SQLite 검색이라 임베딩 recall 이슈가 없어 routing 카테고리만으로 충분하다고 판단. 필요시 이후 실행에서 추가 가능."
+}
