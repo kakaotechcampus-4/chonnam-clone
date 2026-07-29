@@ -1,0 +1,80 @@
+[
+  {
+    "id": "general-external-schedule-lookup",
+    "description": "외부 멤버의 busy-time 조회는 search_previous_conversations를 먼저, extract_schedules_from_history를 그다음 호출해야 한다.",
+    "week": 5,
+    "turns": [
+      {
+        "message": "철수와 영희의 2026년 7월 7일부터 17일까지 바쁜 일정을 알려줘.",
+        "expect_tool_called": ["search_previous_conversations", "extract_schedules_from_history"],
+        "expect_tool_order": ["search_previous_conversations", "extract_schedules_from_history"],
+        "expect_answer_contains_any": ["철수", "영희"]
+      }
+    ]
+  },
+  {
+    "id": "schedule-lookup-with-source-evidence",
+    "description": "원문 근거를 요청하면 search -> extract -> load 순서를 지키고, load 결과의 sender/content/created_at이 보존돼야 한다.",
+    "week": 5,
+    "turns": [
+      {
+        "message": "철수의 2026년 7월 9일 일정과 그 일정이 언급된 원문 대화도 같이 보여줘.",
+        "expect_tool_called": [
+          "search_previous_conversations",
+          "extract_schedules_from_history",
+          "load_conversation_messages"
+        ],
+        "expect_tool_order": [
+          "search_previous_conversations",
+          "extract_schedules_from_history",
+          "load_conversation_messages"
+        ],
+        "expect_tool_result_row_keys": [
+          {
+            "tool_name": "load_conversation_messages",
+            "keys": ["sender", "content", "created_at"]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "no-match-external-search",
+    "description": "검색 결과가 없는 멤버를 물으면 임의로 conversation_id를 만들어 load하거나 일정을 지어내지 않아야 한다.",
+    "week": 5,
+    "turns": [
+      {
+        "message": "민수의 2026년 7월 7일부터 17일까지 바쁜 일정 있으면 알려줘.",
+        "expect_tool_called": ["search_previous_conversations"],
+        "expect_no_tool_called": ["load_conversation_messages"],
+        "expect_tool_result_rows_empty": ["search_previous_conversations"],
+        "expect_answer_contains_any": ["없", "확인되지", "찾을 수 없", "존재하지"]
+      }
+    ]
+  },
+  {
+    "id": "integrate-personal-and-external-schedules",
+    "description": "내 일정과 외부 멤버 busy-time을 함께 확인하는 요청은 collect_member_schedules 하나로 처리하고, 같은 조회를 extract_schedules_from_history로 중복 호출하지 않아야 한다.",
+    "week": 5,
+    "turns": [
+      {
+        "message": "2026년 7월 8일 15시부터 16시까지 헬스장 가는 개인 일정 잡아줘.",
+        "expect_any_tool_called": ["personal_create_schedule"]
+      },
+      {
+        "message": "나랑 철수 일정을 2026년 7월 7일부터 17일까지 같이 모아서 언제 겹치는지 확인하게 정리해줘.",
+        "expect_tool_called": ["collect_member_schedules"],
+        "expect_no_tool_called": [
+          "extract_schedules_from_history",
+          "search_previous_conversations",
+          "personal_create_schedule"
+        ],
+        "expect_collect_member_schedules_rows": {
+          "must_include_members": ["나", "철수"],
+          "required_row_fields": ["member_name", "title", "date", "start_time", "end_time", "notes"],
+          "external_rows_require_source_conversation_id": true
+        }
+      }
+    ]
+  }
+]
