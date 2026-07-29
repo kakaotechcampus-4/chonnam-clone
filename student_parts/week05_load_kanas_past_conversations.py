@@ -457,8 +457,10 @@ def week05_prompt_parts() -> list[str]:
         "이전 주차 규칙 중 '채팅/대화에서 얘기했던 것을 물으면 search_conversation_messages가 우선이다'는 "
         "앱 안에서 나눈 대화를 가리킬 때만 적용된다. 철수/영희처럼 외부 멤버 이름이 함께 언급된 대화/채팅 질문은 "
         "이 규칙의 예외로, search_conversation_messages 대신 search_previous_conversations를 쓴다. "
-        "외부 멤버의 이전 대화나 바쁜 시간이 필요하면 search_previous_conversations로 대화를 먼저 찾고, "
-        "필요하면 load_conversation_messages로 전체 메시지를 확인한 뒤 extract_schedules_from_history로 일정을 추출한다. "
+        "외부 멤버와 나눈 대화 원문/내용 자체가 궁금하면 search_previous_conversations로 찾고, "
+        "필요하면 load_conversation_messages로 전체 메시지를 확인한다. "
+        "외부 멤버의 바쁜 시간/일정만 필요하면 search_previous_conversations 없이 "
+        "extract_schedules_from_history를 바로 호출한다. "
         "개인 저장 일정 조회/RAG는 이전 주차 도구를 그대로 쓰고, 외부 멤버 일정과 공유 일정 저장소 조회/등록/삭제는 "
         "이 주차의 MCP wrapper 도구(list_shared_schedules, collect_member_schedules, create_shared_schedule, "
         "delete_shared_schedule)를 사용한다.",
