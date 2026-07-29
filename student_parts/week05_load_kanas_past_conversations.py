@@ -190,7 +190,31 @@ def _personal_schedules_for_current_scope() -> list[dict[str, Any]]:
     """SQLite 저장 일정과 현재 대화의 임시 일정만 group 조율 후보로 사용합니다."""
 
     # TODO: SQLite 저장 일정과 현재 대화의 임시 일정을 합쳐 반환하세요.
-    ...
+    saved_schedules = AppSQLiteStore(CONFIG.app_db_path).list_schedules(limit=200)
+    seen_ids = {
+        str(schedule.get("schedule_id") or "").strip()
+        for schedule in saved_schedules
+        if str(schedule.get("schedule_id") or "").strip()
+    }
+    session_scope = current_session_scope()
+    temporary_schedules: list[dict[str, Any]] = []
+
+    for schedule in PERSONAL_SCHEDULES:
+        if _schedule_scope(schedule) != session_scope:
+            continue
+
+        schedule_ids = {
+            str(schedule.get(key) or "").strip()
+            for key in ("schedule_id", "id")
+            if str(schedule.get(key) or "").strip()
+        }
+        if schedule_ids & seen_ids:
+            continue
+
+        temporary_schedules.append(dict(schedule))
+        seen_ids.update(schedule_ids)
+
+    return [*saved_schedules, *temporary_schedules]
 
 
 def json_payload(payload: dict[str, Any]) -> str:
