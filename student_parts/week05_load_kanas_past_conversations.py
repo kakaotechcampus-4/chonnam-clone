@@ -205,7 +205,7 @@ def _personal_schedules_for_current_scope() -> list[dict[str, Any]]:
         
     scheduleIds = [row.get("schedule_id") for row in schedulesSql]
     for row in PERSONAL_SCHEDULES:
-        if _schedule_scope(row) not in scheduleIds:
+        if row.get("id") not in scheduleIds and _schedule_scope(row)==_schedule_scope():
             tmp = {}
             tmp['member_name'] = owner
             tmp['title'] = row.get("title")
@@ -214,7 +214,7 @@ def _personal_schedules_for_current_scope() -> list[dict[str, Any]]:
             tmp['end_time'] = row.get("end_time")
             tmp['notes'] = ""
             rows.append(tmp)
-    
+    return rows
 
 
 def json_payload(payload: dict[str, Any]) -> str:
@@ -444,6 +444,51 @@ def week05_prompt_parts() -> list[str]:
     return [
         *week04_prompt_parts(),
         # TODO: Week 5 Kana history agent system prompt를 자유롭게 추가하세요.
+        """
+        [Week 5 우선 지시: 이전 주차와 달라진 점]
+
+        Week 1 ~ Week 4의 지시가 프롬프트에 함께 포함될 수 있지만, 아래 Week 5 변경 사항을 가장 우선해서 따른다.
+
+        # 이전 주차와 달라진 점:
+
+        - Week 5에서는 외부 mcp 서버에 있는 tool을 사용하여 동작한다.
+
+        # 이전 주차 지시를 읽을 때 중점:
+        - AppSQLiteStore는 개인/그룹 일정을 저장할 때 공유 일정 저장소에 자동 동기화할 수 있다.
+        - list_shared_schedules는 공유 저장소 row를 직접 확인할 때 사용한다다,
+        - create/delete_shared_schedule는 row를 직접 등록/삭제해 보정할 때 사용한다.
+        """,
+        
+        """
+        # 외부 SQLite/MCP 서버에 접근할 때 아래 tool을 사용한다.
+        
+        [search_previous_conversations]
+        - 외부 SQLite/MCP 서버에 저장된 과거 대화를 검색한다.
+        
+        [load_conversation_messages]
+        - 검색으로 찾은 특정 외부 대화의 전체 메시지를 불러온다.
+        
+        [extract_schedules_from_history]
+        - 외부 멤버의 이전 대화에서 일정 또는 바쁜 시간 row를 추출한다.
+        
+        ---
+        # 공유 일정에 관해 다룰 때 아래 tool을 사용한다.
+        
+        [create_shared_schedule]
+        - 공유 일정 저장소에서 새 row를 등록한다.
+        
+        [delete_shared_schedule]
+        - 공유 일정 저장소에서 특정 row를 삭제한다.
+        
+        [list_shared_schedules]
+        - 공유 일정 저장소에서 조건에 맞는 row를 조회한다.
+        
+        ---
+        # 공유 일정에 관해 다룰 때 아래 tool을 사용한다.
+        
+        [collect_member_schedules]
+        - 내 일정과 외부 멤버의 busy-time을 한 번에 모은다.
+        """
     ]
 
 
