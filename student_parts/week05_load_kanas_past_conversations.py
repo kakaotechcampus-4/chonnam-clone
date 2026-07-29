@@ -228,8 +228,13 @@ def json_payload(payload: dict[str, Any]) -> str:
 class SearchPreviousConversationsInput(BaseModel):
     """외부 이전 대화 검색 입력입니다."""
 
-    query: str
-    member_names: list[str] | None = None
+    query: str = Field(
+        description="사람 이름을 제외하고 대화 주제만 남긴 짧은 검색 핵심어 또는 구"
+    )
+    member_names: list[str] | None = Field(
+        default=None,
+        description="사용자가 검색 대상으로 언급한 외부 팀원 이름 목록",
+    )
     limit: int = Field(default=5, ge=1, le=50)
 
 
@@ -242,9 +247,11 @@ class LoadConversationMessagesInput(BaseModel):
 class ExtractSchedulesFromHistoryInput(BaseModel):
     """외부 멤버 일정 추출 입력입니다."""
 
-    member_names: list[str]
-    date_from: str
-    date_to: str
+    member_names: list[str] = Field(
+        description="과거 대화에서 busy-time을 조회할 외부 팀원 이름 목록. '나'는 포함하지 않음"
+    )
+    date_from: str = Field(description="조회 시작일 ISO 날짜(YYYY-MM-DD)")
+    date_to: str = Field(description="조회 종료일 ISO 날짜(YYYY-MM-DD)")
 
 
 class CreateSharedScheduleInput(BaseModel):
@@ -280,9 +287,11 @@ class ListSharedSchedulesInput(BaseModel):
 class CollectMemberSchedulesInput(BaseModel):
     """내 일정과 외부 멤버 busy-time 수집 입력입니다."""
 
-    member_names: list[str]
-    date_from: str
-    date_to: str
+    member_names: list[str] = Field(
+        description="내 일정과 함께 모을 외부 팀원 이름 목록. '나'는 포함하지 않음"
+    )
+    date_from: str = Field(description="조회 시작일 ISO 날짜(YYYY-MM-DD)")
+    date_to: str = Field(description="조회 종료일 ISO 날짜(YYYY-MM-DD)")
 
 
 def _structured_request_from_schedule_row(row: dict[str, Any]) -> StructuredRequest:
@@ -369,7 +378,7 @@ def search_previous_conversations(
     member_names: list[str] | None = None,
     limit: int = 5,
 ) -> str:
-    """외부 SQLite 데이터베이스에 저장된 이전 대화를 검색합니다. query에는 LLM이 고른 짧은 핵심 명사나 구를 넣습니다."""
+    """외부 SQLite의 이전 대화를 검색합니다. query에는 사람 이름을 뺀 짧은 주제만 넣고 이름은 member_names로 분리합니다."""
 
     return call_mcp_tool_sync(
         "search_previous_conversations",
@@ -396,7 +405,7 @@ def load_conversation_messages(conversation_id: str) -> str:
 def extract_schedules_from_history(
     member_names: list[str], date_from: str, date_to: str
 ) -> str:
-    """외부 SQLite 이전 대화에서 멤버별 일정을 추출합니다."""
+    """내 일정을 제외하고 외부 팀원만 요청한 경우 이전 대화에서 멤버별 busy-time을 추출합니다."""
 
     return call_mcp_tool_sync(
         "extract_schedules_from_history",
@@ -462,7 +471,7 @@ def list_shared_schedules(
 def collect_member_schedules(
     member_names: list[str], date_from: str, date_to: str
 ) -> str:
-    """내 일정과 다른 사람들의 일정을 MCP SQLite 기록에서 모읍니다."""
+    """사용자가 '나'와 외부 팀원을 함께 요청할 때 개인 일정과 외부 busy-time을 한 번에 모읍니다."""
 
     payload = _collect_member_schedules(
         member_names=member_names,
@@ -507,13 +516,18 @@ def week05_prompt_parts() -> list[str]:
         ),
         (
             "외부 팀원의 관련 과거 대화가 필요하면 search_previous_conversations에 사용자의 문장 전체가 아니라 "
-            "검색에 필요한 짧은 핵심 명사나 구를 query로 넘긴다. 검색 결과에서 conversation_id를 고른 뒤 "
+            "검색에 필요한 짧은 핵심 명사나 구를 query로 넘긴다. 사람 이름은 query에서 제외하고 member_names로 "
+            "분리하며, 특정 인물이 언급되면 member_names를 생략하지 않는다. 예를 들어 '철수의 API 연동 대화'는 "
+            "query='API 연동', member_names=['철수']로 호출한다. 검색 결과에서 conversation_id를 고른 뒤 "
             "대화 내용이 더 필요할 때만 load_conversation_messages로 메시지를 시간순으로 불러온다."
         ),
         (
-            "특정 팀원들의 과거 busy-time만 필요하면 extract_schedules_from_history를 사용한다. "
-            "나와 외부 팀원들의 일정을 함께 비교해야 하면 collect_member_schedules를 사용하고, "
-            "이때 member_names에는 '나'를 제외한 외부 팀원 이름만 넣는다. "
+            "사용자가 외부 팀원들의 busy-time만 요청하거나 내 일정을 제외하라고 하면 "
+            "extract_schedules_from_history만 사용하고 collect_member_schedules를 호출하지 않는다. "
+            "사용자가 '나'와 외부 팀원들의 일정을 함께 요청한 경우에만 collect_member_schedules를 사용한다. "
+            "이때 member_names에는 '나'를 제외한 외부 팀원 이름만 넣는다. collect_member_schedules는 앱 SQLite의 "
+            "개인 일정을 내부에서 직접 읽으므로 personal_list_saved_schedules를 함께 호출하지 않는다. "
+            "한 일정 조회 요청에서 extract_schedules_from_history와 collect_member_schedules를 중복 호출하지 않는다. "
             "공유 일정 저장소에 이미 등록된 row를 확인할 때는 list_shared_schedules를 사용한다."
         ),
         (
