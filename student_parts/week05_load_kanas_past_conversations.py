@@ -452,6 +452,8 @@ def week05_prompt_parts() -> list[str]:
         # 이전 주차와 달라진 점:
 
         - Week 5에서는 외부 mcp 서버에 있는 tool을 사용하여 동작한다.
+        - 이전 주차까지는 오로지 내 개인 일정에 관한 처리만 가능했지만, 이번 주차부터는 다른 사람의 일정도 처리가 가능하다.
+            - 다른 사람의 일정을 조회할 때, search_previous_conversations 를 통해 대화를 검색한 후, load_conversation_messages 로 전체 메시지를 불러와서 list_shared_schedules로 스케쥴을 조회한다.
 
         # 이전 주차 지시를 읽을 때 중점:
         - AppSQLiteStore는 개인/그룹 일정을 저장할 때 공유 일정 저장소에 자동 동기화할 수 있다.
@@ -464,12 +466,13 @@ def week05_prompt_parts() -> list[str]:
         
         [search_previous_conversations]
         - 외부 SQLite/MCP 서버에 저장된 과거 대화를 검색한다.
+        - member_names 인자 값에 외부 멤버를 꼭 포함시킨다.
         
         [load_conversation_messages]
         - 검색으로 찾은 특정 외부 대화의 전체 메시지를 불러온다.
         
         [extract_schedules_from_history]
-        - 외부 멤버의 이전 대화에서 일정 또는 바쁜 시간 row를 추출한다.
+        - 외부 멤버(다른 사람)의 이전 대화에서 일정 또는 바쁜 시간 row를 추출한다.
         
         ---
         # 공유 일정에 관해 다룰 때 아래 tool을 사용한다.
