@@ -454,7 +454,11 @@ def week05_prompt_parts() -> list[str]:
 
     return [
         *week04_prompt_parts(),
-        # TODO: Week 5 Kana history agent system prompt를 자유롭게 추가하세요.
+        "외부 멤버의 이전 대화나 바쁜 시간이 필요하면 search_previous_conversations로 대화를 먼저 찾고, "
+        "필요하면 load_conversation_messages로 전체 메시지를 확인한 뒤 extract_schedules_from_history로 일정을 추출한다. "
+        "개인 저장 일정 조회/RAG는 이전 주차 도구를 그대로 쓰고, 외부 멤버 일정과 공유 일정 저장소 조회/등록/삭제는 "
+        "이 주차의 MCP wrapper 도구(list_shared_schedules, collect_member_schedules, create_shared_schedule, "
+        "delete_shared_schedule)를 사용한다.",
     ]
 
 
