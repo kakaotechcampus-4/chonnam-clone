@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 from typing import Any
 from unittest.mock import patch
@@ -105,6 +106,110 @@ class PersonalScheduleCollectionTests(unittest.TestCase):
         self.assertEqual(request.kind, "personal_schedule")
         self.assertEqual(request.members, ["Mina"])
         self.assertEqual(request.original_text, "planning")
+
+
+class HistoryMCPWrapperTests(unittest.TestCase):
+    def test_search_forwards_exact_arguments_and_returns_mcp_text(self) -> None:
+        expected = '{"ok":true,"tool_name":"search_previous_conversations","rows":[]}'
+
+        with patch.object(week05, "call_mcp_tool_sync", return_value=expected) as call:
+            result = week05.search_previous_conversations.invoke(
+                {
+                    "query": "project alpha",
+                    "member_names": ["Mina", "Jisoo"],
+                    "limit": 7,
+                }
+            )
+
+        self.assertEqual(result, expected)
+        call.assert_called_once_with(
+            "search_previous_conversations",
+            {
+                "query": "project alpha",
+                "member_names": ["Mina", "Jisoo"],
+                "limit": 7,
+            },
+        )
+
+    def test_search_preserves_none_member_filter(self) -> None:
+        with patch.object(week05, "call_mcp_tool_sync", return_value="{}") as call:
+            week05.search_previous_conversations.invoke(
+                {"query": "meeting", "member_names": None, "limit": 5}
+            )
+
+        call.assert_called_once_with(
+            "search_previous_conversations",
+            {"query": "meeting", "member_names": None, "limit": 5},
+        )
+
+    def test_load_preserves_message_order_and_unescaped_korean(self) -> None:
+        payload = {
+            "ok": True,
+            "tool_name": "load_conversation_messages",
+            "rows": [
+                {
+                    "sender": "민아",
+                    "role": "user",
+                    "content": "오전에는 회의가 있어",
+                    "created_at": "2026-07-28T09:00:00+09:00",
+                },
+                {
+                    "sender": "Kana",
+                    "role": "assistant",
+                    "content": "오후 일정으로 확인할게",
+                    "created_at": "2026-07-28T09:01:00+09:00",
+                },
+            ],
+        }
+
+        with patch.object(
+            week05,
+            "call_external_tool_payload",
+            return_value=payload,
+        ) as call:
+            raw_result = week05.load_conversation_messages.invoke(
+                {"conversation_id": "conversation-1"}
+            )
+
+        call.assert_called_once_with(
+            "load_conversation_messages",
+            {"conversation_id": "conversation-1"},
+        )
+        self.assertNotIn("\\u", raw_result)
+        self.assertEqual(json.loads(raw_result), payload)
+
+    def test_extract_forwards_exact_arguments_and_returns_mcp_text(self) -> None:
+        expected = '{"ok":true,"tool_name":"extract_schedules_from_history","rows":[]}'
+
+        with patch.object(week05, "call_mcp_tool_sync", return_value=expected) as call:
+            result = week05.extract_schedules_from_history.invoke(
+                {
+                    "member_names": ["Mina"],
+                    "date_from": "2026-07-29",
+                    "date_to": "2026-08-02",
+                }
+            )
+
+        self.assertEqual(result, expected)
+        call.assert_called_once_with(
+            "extract_schedules_from_history",
+            {
+                "member_names": ["Mina"],
+                "date_from": "2026-07-29",
+                "date_to": "2026-08-02",
+            },
+        )
+
+    def test_mcp_errors_propagate_to_the_agent_runtime(self) -> None:
+        with patch.object(
+            week05,
+            "call_mcp_tool_sync",
+            side_effect=RuntimeError("MCP unavailable"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "MCP unavailable"):
+                week05.search_previous_conversations.invoke(
+                    {"query": "meeting", "member_names": None, "limit": 5}
+                )
 
 
 if __name__ == "__main__":
