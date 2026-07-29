@@ -190,7 +190,23 @@ def _personal_schedules_for_current_scope() -> list[dict[str, Any]]:
     """SQLite 저장 일정과 현재 대화의 임시 일정만 group 조율 후보로 사용합니다."""
 
     # TODO: SQLite 저장 일정과 현재 대화의 임시 일정을 합쳐 반환하세요.
-    ...
+    saved_schedules = AppSQLiteStore(CONFIG.app_db_path).list_schedules(
+        limit=200,
+        kind="personal_schedule",
+    )
+    saved_ids = {
+        str(schedule.get("schedule_id") or schedule.get("id"))
+        for schedule in saved_schedules
+        if schedule.get("schedule_id") or schedule.get("id")
+    }
+    session_id = current_session_scope()
+    temporary_schedules = [
+        schedule
+        for schedule in PERSONAL_SCHEDULES
+        if _schedule_scope(schedule) == session_id
+        and str(schedule.get("schedule_id") or schedule.get("id")) not in saved_ids
+    ]
+    return [*saved_schedules, *temporary_schedules]
 
 
 def json_payload(payload: dict[str, Any]) -> str:
@@ -200,10 +216,22 @@ def json_payload(payload: dict[str, Any]) -> str:
 
 
 class SearchPreviousConversationsInput(BaseModel):
-    """외부 이전 대화 검색 입력입니다."""
+    """외부 멤버의 이전 대화 검색 입력입니다."""
 
-    query: str
-    member_names: list[str] | None = None
+    query: str = Field(
+        description=(
+            "SQLite 부분 문자열 검색에 사용할 짧은 핵심 명사나 구. "
+            "'일정', '대화', '메시지', '찾아줘' 같은 요청 표현은 제외합니다."
+        )
+    )
+    member_names: list[str] | None = Field(
+        default=None,
+        description=(
+            "검색할 외부 멤버 이름 목록. 사용자가 특정 외부 멤버를 명시하면 "
+            "반드시 그 이름을 모두 넣습니다. None이면 전체 멤버를 검색하고, "
+            "빈 목록이면 빈 검색 결과를 반환합니다."
+        ),
+    )
     limit: int = Field(default=5, ge=1, le=50)
 
 
@@ -283,7 +311,57 @@ def _collect_member_schedules(
     """내 일정과 외부 멤버 일정을 같은 row 구조로 합칩니다."""
 
     # TODO: 내 SQLite/임시 일정과 외부 MCP 일정 rows를 같은 구조로 합치세요.
-    ...
+    normalized_members = normalize_external_member_names(member_names)
+    normalized_date_from, normalized_date_to = normalize_external_schedule_date_bounds(
+        normalized_members,
+        date_from,
+        date_to,
+    )
+    external_payload = json.loads(
+        call_mcp_tool_sync(
+            "extract_schedules_from_history",
+            {
+                "member_names": normalized_members,
+                "date_from": normalized_date_from,
+                "date_to": normalized_date_to,
+            },
+        )
+    )
+
+    rows: list[dict[str, Any]] = []
+    for schedule in personal_schedules:
+        structured = _structured_request_from_schedule_row(schedule)
+        if not structured.date or not (normalized_date_from <= structured.date <= normalized_date_to):
+            continue
+        rows.append(
+            {
+                "member_name": "나",
+                "title": structured.title or "제목 없음",
+                "date": structured.date,
+                "start_time": structured.start_time or "미정",
+                "end_time": structured.end_time or "미정",
+                "notes": schedule.get("notes") or "내 개인 일정",
+            }
+        )
+
+    for schedule in external_payload.get("rows", []):
+        rows.append(
+            {
+                "member_name": schedule.get("member_name"),
+                "title": schedule.get("title"),
+                "date": schedule.get("date"),
+                "start_time": schedule.get("start_time"),
+                "end_time": schedule.get("end_time"),
+                "notes": schedule.get("notes"),
+            }
+        )
+
+    return {
+        "ok": external_payload.get("ok", True),
+        "tool_name": "collect_member_schedules",
+        "rows": rows,
+        "schedule_summary": external_schedule_summary(rows),
+    }
 
 
 @tool(args_schema=SearchPreviousConversationsInput)
@@ -292,10 +370,23 @@ def search_previous_conversations(
     member_names: list[str] | None = None,
     limit: int = 5,
 ) -> str:
-    """외부 SQLite 데이터베이스에 저장된 이전 대화를 검색합니다. query에는 LLM이 고른 짧은 핵심 명사나 구를 넣습니다."""
+    """외부 멤버가 공유한 과거 대화를 검색합니다.
+
+    사용자가 특정 외부 멤버를 명시하면 반드시 member_names에 해당 이름을 넣습니다.
+    member_names가 None이면 모든 외부 멤버가 검색 대상이고, 빈 목록이면 빈 결과를 반환합니다.
+    query에는 원문에 포함될 가능성이 높은 짧은 핵심 명사나 구만 넣습니다.
+    현재 앱에서 사용자와 Kanana가 나눈 일반 대화 검색에는 사용하지 않습니다.
+    """
 
     # TODO: call_mcp_tool_sync("search_previous_conversations", args)를 호출하고 결과 문자열을 반환하세요.
-    ...
+    return call_mcp_tool_sync(
+        "search_previous_conversations",
+        {
+            "query": query,
+            "member_names": member_names,
+            "limit": limit,
+        },
+    )
 
 
 @tool(args_schema=LoadConversationMessagesInput)
@@ -303,7 +394,11 @@ def load_conversation_messages(conversation_id: str) -> str:
     """외부 SQLite 데이터베이스에서 특정 이전 대화의 모든 메시지를 불러옵니다."""
 
     # TODO: call_external_tool_payload("load_conversation_messages", {"conversation_id": ...}) 결과를 JSON으로 반환하세요.
-    ...
+    payload = call_external_tool_payload(
+        "load_conversation_messages",
+        {"conversation_id": conversation_id},
+    )
+    return json_payload(payload)
 
 
 @tool(args_schema=ExtractSchedulesFromHistoryInput)
@@ -311,7 +406,14 @@ def extract_schedules_from_history(member_names: list[str], date_from: str, date
     """외부 SQLite 이전 대화에서 멤버별 일정을 추출합니다."""
 
     # TODO: call_mcp_tool_sync("extract_schedules_from_history", args)를 호출해 외부 멤버 busy-time rows를 반환하세요.
-    ...
+    return call_mcp_tool_sync(
+        "extract_schedules_from_history",
+        {
+            "member_names": member_names,
+            "date_from": date_from,
+            "date_to": date_to,
+        },
+    )
 
 
 @tool(args_schema=CreateSharedScheduleInput)
@@ -353,7 +455,16 @@ def list_shared_schedules(
     """외부 MCP 공유 일정 저장소에 등록된 일정을 조회합니다. 필터가 없으면 기본 공유 일정을 반환합니다."""
 
     # TODO: call_mcp_tool_sync("list_shared_schedules", args)로 공유 일정 저장소 rows를 조회하세요.
-    ...
+    return call_mcp_tool_sync(
+        "list_shared_schedules",
+        {
+            "member_names": member_names,
+            "date_from": date_from,
+            "date_to": date_to,
+            "source_conversation_id": source_conversation_id,
+            "limit": limit,
+        },
+    )
 
 
 @tool(args_schema=CollectMemberSchedulesInput)
@@ -361,7 +472,13 @@ def collect_member_schedules(member_names: list[str], date_from: str, date_to: s
     """내 일정과 다른 사람들의 일정을 MCP SQLite 기록에서 모읍니다."""
 
     # TODO: 내 일정과 외부 멤버 busy-time rows를 모아 JSON 문자열로 반환하세요.
-    ...
+    payload = _collect_member_schedules(
+        member_names=member_names,
+        date_from=date_from,
+        date_to=date_to,
+        personal_schedules=_personal_schedules_for_current_scope(),
+    )
+    return json_payload(payload)
 
 
 def week05_tools() -> list[Any]:
@@ -372,8 +489,6 @@ def week05_tools() -> list[Any]:
         search_previous_conversations,
         load_conversation_messages,
         extract_schedules_from_history,
-        create_shared_schedule,
-        delete_shared_schedule,
         list_shared_schedules,
         collect_member_schedules,
     ]
@@ -391,6 +506,42 @@ def week05_prompt_parts() -> list[str]:
     return [
         *week04_prompt_parts(),
         # TODO: Week 5 Kana history agent system prompt를 자유롭게 추가하세요.
+        (
+            "외부 멤버가 공유한 과거 대화를 검색할 때 사용자가 특정 멤버 이름을 명시했다면 "
+            "반드시 search_previous_conversations의 member_names에 해당 이름을 넣는다. "
+            "member_names를 생략하면 모든 외부 멤버가 검색되므로 특정 멤버 요청에서는 생략하지 않는다. "
+            "query에는 '일정', '대화', '메시지', '찾아줘' 같은 요청 표현을 제외하고 "
+            "원문에 포함될 가능성이 높은 짧은 핵심 명사나 구만 넣는다."
+        ),
+        (
+            "search_previous_conversations 결과를 사용할 때 각 row의 member_name이 "
+            "사용자가 요청한 외부 멤버와 일치하는지 확인한다. "
+            "일치하지 않는 row는 답변 근거나 load_conversation_messages의 입력으로 사용하지 않는다. "
+            "다른 멤버의 내용을 요청한 멤버의 말이나 일정으로 설명하지 않는다."
+        ),
+        (
+            "요청한 멤버와 일치하는 검색 결과가 있으면 해당 row의 conversation_id를 사용해 "
+            "load_conversation_messages를 반드시 호출하고, 전체 메시지를 시간순으로 확인한 뒤 답한다. "
+            "load_conversation_messages 결과에는 대화 소유자를 나타내는 member_name이 없으므로 "
+            "검색 단계에서 member_name이 일치한다고 확인한 conversation_id만 로드해야 한다. "
+            "검색 결과의 미리보기 content만으로 최종 답변하지 않는다."
+        ),
+        (
+            "search_previous_conversations 결과가 비어 있으면 같은 도구에 더 짧은 핵심어를 넣어 "
+            "한 번 다시 검색할 수 있다. 그래도 비어 있으면 해당 외부 멤버의 관련 대화를 찾지 못했다고 답한다. "
+            "search_conversation_messages 등 다른 출처의 검색 도구로 전환하지 않는다. "
+            "외부 멤버의 특정 날짜 범위 busy-time이 필요하면 extract_schedules_from_history를 사용한다."
+        ),
+        (
+            "내 일정과 외부 멤버 일정을 같은 날짜 범위에서 함께 확인할 때는 collect_member_schedules를 사용한다. "
+            "외부 공유 일정 저장소에 실제로 등록된 row를 확인할 때만 list_shared_schedules를 사용한다. "
+            "도구 결과의 rows와 schedule_summary를 근거로 답하고, 조회되지 않은 일정은 추측하지 않는다."
+        ),
+        (
+            f"현재 앱 기준 날짜는 {current_app_date_iso()}이다. "
+            "Week 5 범위에서는 내 일정과 외부 멤버의 바쁜 시간을 수집하고 설명한다. "
+            "여러 사람의 최종 회의 시간이나 공통 가능 시간을 선택하는 것은 Week 6 범위이므로 수행하지 않는다."
+        ),
     ]
 
 
