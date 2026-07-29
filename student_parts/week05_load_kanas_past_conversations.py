@@ -307,7 +307,88 @@ def _collect_member_schedules(
     """내 일정과 외부 멤버 일정을 같은 row 구조로 합칩니다."""
 
     # TODO: 내 SQLite/임시 일정과 외부 MCP 일정 rows를 같은 구조로 합치세요.
-    ...
+    normalized_member_names = normalize_external_member_names(member_names)
+    normalized_date_from, normalized_date_to = normalize_external_schedule_date_bounds(
+        normalized_member_names,
+        date_from,
+        date_to,
+    )
+
+    personal_rows: list[dict[str, Any]] = []
+    for schedule in personal_schedules:
+        request = _structured_request_from_schedule_row(schedule)
+        schedule_date = request.date or ""
+        if normalized_date_from and (
+            not schedule_date or schedule_date < normalized_date_from
+        ):
+            continue
+        if normalized_date_to and (
+            not schedule_date or schedule_date > normalized_date_to
+        ):
+            continue
+        personal_rows.append(
+            {
+                "member_name": "나",
+                "title": request.title,
+                "date": request.date,
+                "start_time": request.start_time,
+                "end_time": request.end_time,
+                "notes": "내 일정",
+            }
+        )
+
+    external_payload_text = call_mcp_tool_sync(
+        "extract_schedules_from_history",
+        {
+            "member_names": normalized_member_names,
+            "date_from": normalized_date_from,
+            "date_to": normalized_date_to,
+        },
+    )
+    try:
+        external_payload = json.loads(external_payload_text)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise RuntimeError(
+            "extract_schedules_from_history returned invalid JSON"
+        ) from exc
+    if not isinstance(external_payload, dict):
+        raise RuntimeError(
+            "extract_schedules_from_history returned a non-object payload"
+        )
+
+    external_source_rows = external_payload.get("rows")
+    if not isinstance(external_source_rows, list):
+        raise RuntimeError(
+            "extract_schedules_from_history returned a non-list rows field"
+        )
+
+    external_rows: list[dict[str, Any]] = []
+    for row in external_source_rows:
+        if not isinstance(row, dict):
+            raise RuntimeError(
+                "extract_schedules_from_history returned a non-object row"
+            )
+        external_rows.append(
+            {
+                "member_name": row.get("member_name"),
+                "title": row.get("title"),
+                "date": row.get("date"),
+                "start_time": row.get("start_time"),
+                "end_time": row.get("end_time"),
+                "notes": row.get("notes"),
+            }
+        )
+
+    rows = [*personal_rows, *external_rows]
+    return {
+        "ok": True,
+        "tool_name": "collect_member_schedules",
+        "member_names": normalized_member_names,
+        "date_from": normalized_date_from,
+        "date_to": normalized_date_to,
+        "rows": rows,
+        "schedule_summary": external_schedule_summary(rows),
+    }
 
 
 @tool(args_schema=SearchPreviousConversationsInput)
@@ -430,7 +511,13 @@ def collect_member_schedules(member_names: list[str], date_from: str, date_to: s
     """내 일정과 다른 사람들의 일정을 MCP SQLite 기록에서 모읍니다."""
 
     # TODO: 내 일정과 외부 멤버 busy-time rows를 모아 JSON 문자열로 반환하세요.
-    ...
+    payload = _collect_member_schedules(
+        member_names=member_names,
+        date_from=date_from,
+        date_to=date_to,
+        personal_schedules=_personal_schedules_for_current_scope(),
+    )
+    return json_payload(payload)
 
 
 def week05_tools() -> list[Any]:

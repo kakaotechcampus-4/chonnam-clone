@@ -291,5 +291,192 @@ class SharedScheduleMCPWrapperTests(unittest.TestCase):
         call.assert_called_once_with("list_shared_schedules", arguments)
 
 
+class MemberScheduleAggregationTests(unittest.TestCase):
+    def test_collect_normalizes_filters_and_combines_common_row_shapes(self) -> None:
+        personal_schedules = [
+            {
+                "schedule_id": "sch-in-range",
+                "title": "내부 회의",
+                "date": "2026-07-30",
+                "start_time": "09:00",
+                "end_time": "10:00",
+                "attendees": ["민아"],
+            },
+            {
+                "schedule_id": "sch-before",
+                "title": "범위 전 일정",
+                "date": "2026-07-28",
+                "start_time": "09:00",
+                "end_time": "10:00",
+            },
+            {
+                "schedule_id": "sch-after",
+                "title": "범위 후 일정",
+                "date": "2026-08-03",
+                "start_time": "09:00",
+                "end_time": "10:00",
+            },
+            {
+                "schedule_id": "sch-no-date",
+                "title": "날짜 미정 일정",
+                "date": None,
+                "start_time": None,
+                "end_time": None,
+            },
+        ]
+        external_payload = {
+            "ok": True,
+            "tool_name": "extract_schedules_from_history",
+            "rows": [
+                {
+                    "member_name": "민아",
+                    "title": "고객 미팅",
+                    "date": "2026-07-31",
+                    "start_time": "14:00",
+                    "end_time": "15:00",
+                    "notes": "외부 대화에서 추출",
+                    "source_conversation_id": "external-conversation-1",
+                }
+            ],
+        }
+
+        with patch.object(
+            week05,
+            "call_mcp_tool_sync",
+            return_value=json.dumps(external_payload, ensure_ascii=False),
+        ) as call:
+            result = week05._collect_member_schedules(
+                member_names=["  민아  ", "  "],
+                date_from="2026-07-29T00:00:00+09:00",
+                date_to="2026-08-02T23:59:59+09:00",
+                personal_schedules=personal_schedules,
+            )
+
+        call.assert_called_once_with(
+            "extract_schedules_from_history",
+            {
+                "member_names": ["민아"],
+                "date_from": "2026-07-29",
+                "date_to": "2026-08-02",
+            },
+        )
+        expected_rows = [
+            {
+                "member_name": "나",
+                "title": "내부 회의",
+                "date": "2026-07-30",
+                "start_time": "09:00",
+                "end_time": "10:00",
+                "notes": "내 일정",
+            },
+            {
+                "member_name": "민아",
+                "title": "고객 미팅",
+                "date": "2026-07-31",
+                "start_time": "14:00",
+                "end_time": "15:00",
+                "notes": "외부 대화에서 추출",
+            },
+        ]
+        self.assertEqual(result["rows"], expected_rows)
+        self.assertEqual(result["member_names"], ["민아"])
+        self.assertEqual(result["date_from"], "2026-07-29")
+        self.assertEqual(result["date_to"], "2026-08-02")
+        self.assertEqual(
+            result["schedule_summary"],
+            week05.external_schedule_summary(expected_rows),
+        )
+        self.assertTrue(all(len(row) == 6 for row in result["rows"]))
+
+    def test_date_range_is_inclusive(self) -> None:
+        personal_schedules = [
+            {
+                "title": "첫날",
+                "date": "2026-07-29",
+                "start_time": "09:00",
+                "end_time": "10:00",
+            },
+            {
+                "title": "마지막 날",
+                "date": "2026-08-02",
+                "start_time": "18:00",
+                "end_time": "19:00",
+            },
+        ]
+
+        with patch.object(
+            week05,
+            "call_mcp_tool_sync",
+            return_value='{"ok": true, "rows": []}',
+        ):
+            result = week05._collect_member_schedules(
+                member_names=[],
+                date_from="2026-07-29",
+                date_to="2026-08-02",
+                personal_schedules=personal_schedules,
+            )
+
+        self.assertEqual([row["title"] for row in result["rows"]], ["첫날", "마지막 날"])
+
+    def test_malformed_external_payloads_are_not_treated_as_empty_results(self) -> None:
+        malformed_payloads = [
+            ("not JSON", "invalid JSON"),
+            ("[]", "non-object payload"),
+            ('{"rows": {}}', "non-list rows field"),
+            ('{"rows": [1]}', "non-object row"),
+        ]
+
+        for payload, expected_error in malformed_payloads:
+            with self.subTest(payload=payload):
+                with patch.object(
+                    week05,
+                    "call_mcp_tool_sync",
+                    return_value=payload,
+                ):
+                    with self.assertRaisesRegex(RuntimeError, expected_error):
+                        week05._collect_member_schedules(
+                            member_names=["Mina"],
+                            date_from="2026-07-29",
+                            date_to="2026-08-02",
+                            personal_schedules=[],
+                        )
+
+    def test_public_tool_uses_current_personal_schedules_and_unescaped_json(self) -> None:
+        personal_schedules = [
+            {
+                "title": "내 일정",
+                "date": "2026-07-30",
+                "start_time": "10:00",
+                "end_time": "11:00",
+            }
+        ]
+
+        with (
+            patch.object(
+                week05,
+                "_personal_schedules_for_current_scope",
+                return_value=personal_schedules,
+            ) as personal_call,
+            patch.object(
+                week05,
+                "call_mcp_tool_sync",
+                return_value='{"ok": true, "rows": []}',
+            ),
+        ):
+            raw_result = week05.collect_member_schedules.invoke(
+                {
+                    "member_names": ["민아"],
+                    "date_from": "2026-07-29",
+                    "date_to": "2026-08-02",
+                }
+            )
+
+        personal_call.assert_called_once_with()
+        self.assertNotIn("\\u", raw_result)
+        result = json.loads(raw_result)
+        self.assertEqual(result["tool_name"], "collect_member_schedules")
+        self.assertEqual(result["rows"][0]["member_name"], "나")
+
+
 if __name__ == "__main__":
     unittest.main()
