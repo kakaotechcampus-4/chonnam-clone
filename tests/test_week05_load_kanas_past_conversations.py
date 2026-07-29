@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import unittest
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import PropertyMock, patch
 
 from fixed.config import CONFIG
 from fixed.session_scope import conversation_session_scope
@@ -476,6 +476,86 @@ class MemberScheduleAggregationTests(unittest.TestCase):
         result = json.loads(raw_result)
         self.assertEqual(result["tool_name"], "collect_member_schedules")
         self.assertEqual(result["rows"][0]["member_name"], "나")
+
+
+class Week05AgentTests(unittest.TestCase):
+    def test_tool_list_accumulates_unique_week05_tools(self) -> None:
+        tool_names = [tool.name for tool in week05.week05_tools()]
+        week05_tool_names = {
+            "search_previous_conversations",
+            "load_conversation_messages",
+            "extract_schedules_from_history",
+            "create_shared_schedule",
+            "delete_shared_schedule",
+            "list_shared_schedules",
+            "collect_member_schedules",
+        }
+
+        self.assertTrue(week05_tool_names.issubset(tool_names))
+        self.assertIn("search_conversation_messages", tool_names)
+        self.assertIn("personal_list_saved_schedules", tool_names)
+        self.assertEqual(len(tool_names), len(set(tool_names)))
+
+    def test_prompt_defines_source_routing_and_week06_boundary(self) -> None:
+        prompt = week05.week05_system_prompt()
+
+        self.assertIn("누구의 기록인지로 구분", prompt)
+        self.assertIn("사용자가 자신이 Nana 앱에서 전에 한 말", prompt)
+        self.assertIn("search_conversation_messages", prompt)
+        self.assertIn("철수, 영희처럼 이름이 지정된 다른 구성원", prompt)
+        self.assertIn("search_previous_conversations", prompt)
+        self.assertIn("search_conversation_messages를 사용하지 않는다", prompt)
+        self.assertIn("문맥이 부족할 때만", prompt)
+        self.assertIn("extract_schedules_from_history를 직접 호출", prompt)
+        self.assertIn("collect_member_schedules만 호출", prompt)
+        self.assertIn("중복 호출하지 않는다", prompt)
+        self.assertIn("일반 일정 저장", prompt)
+        self.assertIn("자동 동기화", prompt)
+        self.assertIn("명시적으로 요청한 경우에만", prompt)
+        self.assertIn("최종 공통 가능 시간 선택", prompt)
+        self.assertIn("Week 6의 책임", prompt)
+        self.assertIn(week05.current_app_date_iso(), prompt)
+
+    def test_agent_is_built_once_without_mutating_global_config(self) -> None:
+        previous_agent = week05._WEEK05_AGENT
+        fake_model = object()
+        fake_agent = object()
+        week05._WEEK05_AGENT = None
+        try:
+            with (
+                patch.object(
+                    type(week05.CONFIG),
+                    "has_openai_key",
+                    new_callable=PropertyMock,
+                    return_value=True,
+                ),
+                patch.object(
+                    week05,
+                    "chat_model",
+                    return_value=fake_model,
+                ) as model_mock,
+                patch.object(
+                    week05,
+                    "create_agent",
+                    return_value=fake_agent,
+                ) as create_mock,
+            ):
+                first = week05.build_week05_agent()
+                second = week05.build_week05_agent()
+        finally:
+            week05._WEEK05_AGENT = previous_agent
+
+        self.assertIs(first, fake_agent)
+        self.assertIs(second, fake_agent)
+        model_mock.assert_called_once_with()
+        create_mock.assert_called_once()
+        arguments = create_mock.call_args.kwargs
+        self.assertIs(arguments["model"], fake_model)
+        self.assertIn(
+            "collect_member_schedules",
+            [tool.name for tool in arguments["tools"]],
+        )
+        self.assertIn("Week 6의 책임", arguments["system_prompt"])
 
 
 if __name__ == "__main__":
