@@ -1,6 +1,6 @@
 ---
 name: e2e-week05-mcp-verify
-description: Runs real-LLM E2E regression scenarios against the Week 5 MCP wrapper agent (student_parts/week05_load_kanas_past_conversations.py) to check that it follows docs/week05-implementation-plan.md's intended tool-call ORDER (search_previous_conversations -> extract_schedules_from_history -> optional load_conversation_messages), doesn't fabricate schedules/conversation_ids when search returns nothing, and that collect_member_schedules merges "나" + external member rows in the standard 6-field shape without redundantly re-calling extract_schedules_from_history. Use after editing student_parts/prompts/week05.py or the tool bodies in week05_load_kanas_past_conversations.py, before considering the change done. Korean triggers: "week5 회귀 테스트", "MCP tool 호출 순서 확인", "5주차 프롬프트 수정 검증". English triggers: "run the week5 e2e scenarios", "verify the week5 MCP tool order".
+description: Runs real-LLM E2E regression scenarios against the Week 5 MCP wrapper agent (student_parts/week05_load_kanas_past_conversations.py) to check that it follows docs/week05-implementation-plan.md's intended tool-call ORDER (search_previous_conversations -> extract_schedules_from_history -> optional load_conversation_messages), doesn't fabricate schedules/conversation_ids when extraction returns nothing, and that collect_member_schedules merges "나" + external member rows in the standard 6-field shape without redundantly re-calling extract_schedules_from_history. Use after editing student_parts/prompts/week05.py or the tool bodies in week05_load_kanas_past_conversations.py, before considering the change done. Korean triggers: "week5 회귀 테스트", "MCP tool 호출 순서 확인", "5주차 프롬프트 수정 검증". English triggers: "run the week5 e2e scenarios", "verify the week5 MCP tool order".
 ---
 
 # Week 5 MCP wrapper agent E2E 회귀 테스트
@@ -12,7 +12,7 @@ tool을 어떤 순서로 호출했는가**다. Week 5는 Agent와 외부 SQLite 
 system prompt(`student_parts/prompts/week05.py`)가 만드는 판단 실수는 유닛 테스트로 잡을 수
 없다 — `search_previous_conversations`를 건너뛰고 바로 `load_conversation_messages`를
 부르거나, `collect_member_schedules`를 쓰면 되는데 `extract_schedules_from_history`를 중복
-호출하거나, 검색 결과가 없는데도 임의의 `conversation_id`를 지어내는 것 모두 코드 버그가
+호출하거나, extract 결과가 없는데도 임의의 `conversation_id`를 지어내는 것 모두 코드 버그가
 아니라 prompt가 만든 행동이다. 이 스킬은 `.claude/skills/e2e-week05-mcp-verify/`에서 실제
 LLM 호출로 이 순서를 재생해서 확인한다.
 
@@ -84,12 +84,25 @@ uv run python .claude/skills/e2e-week05-mcp-verify/run_scenarios.py --only integ
       "expect_no_tool_called": ["이 turn에서 호출되면 안 되는 tool 이름들"],
       "expect_tool_order": ["이 순서대로(첫 등장 기준 index 증가) 호출돼야 함"],
       "expect_tool_prefix": ["처음 N개 호출이 정확히 이 목록과 같아야 함"],
+      "expect_tool_calls_exact": ["불필요한 호출 없이 전체 호출 목록이 정확히 이 목록이어야 함"],
+      "expect_tool_call_arguments": [
+        {
+          "tool_name": "인자를 검사할 tool",
+          "occurrence": 0,
+          "arguments": {"member_names": ["철수"], "date_from": "2026-07-07"}
+        }
+      ],
       "expect_answer_contains_any": ["답변에 이 중 하나는 있어야 함"],
+      "expect_answer_contains_all": ["답변에 이 문구들이 모두 있어야 함"],
       "expect_answer_not_contains": ["답변에 있으면 안 되는 문구들"],
       "expect_tool_result_rows_empty": ["이 tool의 마지막 결과 rows가 비어 있어야 함"],
       "expect_tool_result_row_keys": [
         {"tool_name": "load_conversation_messages", "keys": ["sender", "content", "created_at"]}
       ],
+      "expect_tool_result_members": [
+        {"tool_name": "extract_schedules_from_history", "members": ["철수", "영희"]}
+      ],
+      "expect_load_uses_extract_source_id": true,
       "expect_collect_member_schedules_rows": {
         "must_include_members": ["나", "철수"],
         "required_row_fields": ["member_name", "title", "date", "start_time", "end_time", "notes"],

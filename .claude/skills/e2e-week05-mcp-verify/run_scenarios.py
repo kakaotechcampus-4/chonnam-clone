@@ -9,7 +9,7 @@ docs/week05-implementation-plan.md가 요구하는 tool 호출 "순서"와 "row 
    순서를 실제로 지키는지,
 2) collect_member_schedules가 내부에서 이미 외부 일정을 조회하므로 agent가 같은 작업을
    extract_schedules_from_history로 중복 호출하지 않는지,
-3) 검색 결과가 없을 때 임의의 conversation_id로 load하거나 일정을 지어내지 않는지,
+3) 일정 추출 결과가 없을 때 임의의 conversation_id로 load하거나 일정을 지어내지 않는지,
 4) collect_member_schedules의 rows에 "나"와 외부 멤버가 표준 6개 필드로 함께 들어있고
    외부 row의 source_conversation_id가 보존되는지
 이다. 이 판단은 system prompt가 만드는 행동이라 유닛 테스트로는 재현할 수 없고, 실제 LLM
@@ -41,24 +41,37 @@ REPO_ROOT = SCRIPT_DIR.parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-# 아래 patch는 student_parts/fixed 모듈이 import되기 전에 실행돼야 한다.
-# week05 모듈은 import 시점에 AppSQLiteStore(CONFIG.app_db_path) 같은 모듈 전역 store를
-# 만들고, MCP subprocess는 KANANA_EXTERNAL_DB_PATH 환경 변수로 외부 SQLite 경로를 읽으므로
-# 실제 개발용 data/ DB 대신 이 스크립트 전용 임시 DB를 쓰게 먼저 바꿔치기한다.
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="kanana_week05_e2e_"))
-os.environ.setdefault("KANANA_EXTERNAL_DB_PATH", str(_TMP_DIR / "external.sqlite3"))
-
-from fixed.config import CONFIG  # noqa: E402
-
-object.__setattr__(CONFIG, "app_db_path", _TMP_DIR / "app.sqlite3")
-object.__setattr__(CONFIG, "chroma_dir", _TMP_DIR / "chroma")
-object.__setattr__(CONFIG, "external_db_path", Path(os.environ["KANANA_EXTERNAL_DB_PATH"]))
-
-from fixed.session_scope import conversation_session_scope  # noqa: E402
-from fixed.week_agent_registry import run_active_week_agent  # noqa: E402
-
 WEEK = 5
 STANDARD_ROW_FIELDS = ["member_name", "title", "date", "start_time", "end_time", "notes"]
+_TMP_DIR: Path | None = None
+_CONFIG: Any | None = None
+_conversation_session_scope: Any | None = None
+_run_active_week_agent: Any | None = None
+
+
+def _configure_isolated_runtime() -> Path:
+    """실제 agent 모듈을 import하기 전에 이 실행 전용 DB 경로를 강제로 설정합니다."""
+
+    global _TMP_DIR, _CONFIG, _conversation_session_scope, _run_active_week_agent
+    if _TMP_DIR is not None:
+        return _TMP_DIR
+
+    _TMP_DIR = Path(tempfile.mkdtemp(prefix="kanana_week05_e2e_"))
+    os.environ["KANANA_EXTERNAL_DB_PATH"] = str(_TMP_DIR / "external.sqlite3")
+
+    from fixed.config import CONFIG
+
+    object.__setattr__(CONFIG, "app_db_path", _TMP_DIR / "app.sqlite3")
+    object.__setattr__(CONFIG, "chroma_dir", _TMP_DIR / "chroma")
+    object.__setattr__(CONFIG, "external_db_path", _TMP_DIR / "external.sqlite3")
+
+    from fixed.session_scope import conversation_session_scope
+    from fixed.week_agent_registry import run_active_week_agent
+
+    _CONFIG = CONFIG
+    _conversation_session_scope = conversation_session_scope
+    _run_active_week_agent = run_active_week_agent
+    return _TMP_DIR
 
 
 def _events(trace: dict[str, Any]) -> list[dict[str, Any]]:
@@ -67,6 +80,16 @@ def _events(trace: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _tool_call_names(events: list[dict[str, Any]]) -> list[str]:
     return [event.get("tool_name") for event in events if event.get("event") == "tool_call" and event.get("tool_name")]
+
+
+def _tool_calls_for(events: list[dict[str, Any]], tool_name: str) -> list[dict[str, Any]]:
+    """호출 순서대로 특정 tool의 tool_call 이벤트를 반환합니다."""
+
+    return [
+        event
+        for event in events
+        if event.get("event") == "tool_call" and event.get("tool_name") == tool_name
+    ]
 
 
 def _tool_results_for(events: list[dict[str, Any]], tool_name: str) -> list[Any]:
@@ -85,9 +108,11 @@ def _last_tool_result_for(events: list[dict[str, Any]], tool_name: str) -> Any |
 
 
 def _run_turn(conversation_id: str, history: list[dict[str, str]], message: str) -> dict[str, Any]:
+    if _conversation_session_scope is None or _run_active_week_agent is None:
+        raise RuntimeError("E2E runtime이 구성되지 않았습니다.")
     history.append({"role": "user", "content": message})
-    with conversation_session_scope(conversation_id):
-        result = run_active_week_agent(WEEK, history)
+    with _conversation_session_scope(conversation_id):
+        result = _run_active_week_agent(WEEK, history)
     history.append({"role": "assistant", "content": result.answer})
     events = _events(result.trace)
     return {
@@ -112,6 +137,50 @@ def _check_tool_order(names_required: list[str], tool_names: list[str]) -> list[
     return []
 
 
+def _check_tool_calls_exact(expected: list[str], actual: list[str]) -> list[str]:
+    """불필요한 앞·뒤·중간 호출까지 포함해 tool 호출 목록 전체가 같은지 확인합니다."""
+
+    if actual != expected:
+        return [f"tool 호출 전체가 기대와 다름: 기대 {expected}, 실제 {actual or '없음'}"]
+    return []
+
+
+def _check_tool_call_arguments(
+    specs: list[dict[str, Any]],
+    events: list[dict[str, Any]],
+) -> list[str]:
+    """tool 호출 인자가 시나리오에 명시된 부분 기대값과 일치하는지 확인합니다."""
+
+    failures: list[str] = []
+    for spec in specs:
+        tool_name = spec["tool_name"]
+        occurrence = int(spec.get("occurrence", 0))
+        calls = _tool_calls_for(events, tool_name)
+        if occurrence >= len(calls):
+            failures.append(
+                f"'{tool_name}'의 {occurrence + 1}번째 호출 인자를 확인할 수 없음 "
+                f"(실제 호출 횟수: {len(calls)})"
+            )
+            continue
+        actual_arguments = calls[occurrence].get("arguments")
+        if not isinstance(actual_arguments, dict):
+            failures.append(f"'{tool_name}' 호출 arguments가 dict가 아님: {actual_arguments!r}")
+            continue
+        for key, expected_value in spec.get("arguments", {}).items():
+            actual_value = actual_arguments.get(key)
+            values_match = actual_value == expected_value
+            if key == "member_names" and isinstance(expected_value, list) and isinstance(actual_value, list):
+                values_match = sorted(str(value) for value in actual_value) == sorted(
+                    str(value) for value in expected_value
+                )
+            if not values_match:
+                failures.append(
+                    f"'{tool_name}' 인자 '{key}'가 기대와 다름: "
+                    f"기대 {expected_value!r}, 실제 {actual_value!r}"
+                )
+    return failures
+
+
 def _check_tool_result_rows_empty(names: list[str], events: list[dict[str, Any]]) -> list[str]:
     failures: list[str] = []
     for name in names:
@@ -120,6 +189,9 @@ def _check_tool_result_rows_empty(names: list[str], events: list[dict[str, Any]]
             failures.append(f"'{name}' tool_result를 JSON으로 확인할 수 없음: {content!r}")
             continue
         rows = content.get("rows")
+        if not isinstance(rows, list):
+            failures.append(f"'{name}' tool_result의 rows가 list가 아님: {rows!r}")
+            continue
         if rows:
             failures.append(f"'{name}' 결과 rows가 비어 있어야 하는데 {len(rows)}개가 반환됨: {rows}")
     return failures
@@ -140,6 +212,66 @@ def _check_tool_result_row_keys(spec: dict[str, Any], events: list[dict[str, Any
         if missing:
             failures.append(f"'{tool_name}' row에 {missing} 필드가 없음: {row}")
     return failures
+
+
+def _check_tool_result_members(
+    specs: list[dict[str, Any]],
+    events: list[dict[str, Any]],
+) -> list[str]:
+    """tool 결과 rows가 요청한 모든 외부 멤버를 포함하는지 확인합니다."""
+
+    failures: list[str] = []
+    for spec in specs:
+        tool_name = spec["tool_name"]
+        content = _last_tool_result_for(events, tool_name)
+        if not isinstance(content, dict):
+            failures.append(f"'{tool_name}' tool_result를 JSON으로 확인할 수 없음: {content!r}")
+            continue
+        rows = content.get("rows")
+        if not isinstance(rows, list):
+            failures.append(f"'{tool_name}' tool_result의 rows가 list가 아님: {rows!r}")
+            continue
+        actual_members = {row.get("member_name") for row in rows if isinstance(row, dict)}
+        missing = [member for member in spec.get("members", []) if member not in actual_members]
+        if missing:
+            failures.append(
+                f"'{tool_name}' 결과에 요청 멤버 {missing}가 없음 "
+                f"(실제 멤버: {sorted(member for member in actual_members if member)})"
+            )
+    return failures
+
+
+def _check_load_uses_extract_source_id(events: list[dict[str, Any]]) -> list[str]:
+    """load 인자가 extract 결과에서 실제로 반환된 source_conversation_id인지 확인합니다."""
+
+    extract_content = _last_tool_result_for(events, "extract_schedules_from_history")
+    if not isinstance(extract_content, dict):
+        return [f"extract tool_result를 JSON으로 확인할 수 없음: {extract_content!r}"]
+    extract_rows = extract_content.get("rows")
+    if not isinstance(extract_rows, list) or not extract_rows:
+        return [f"extract 결과 rows가 없어 load의 source 연결을 확인할 수 없음: {extract_rows!r}"]
+    source_ids = {
+        row.get("source_conversation_id")
+        for row in extract_rows
+        if isinstance(row, dict) and row.get("source_conversation_id")
+    }
+
+    load_calls = _tool_calls_for(events, "load_conversation_messages")
+    if not load_calls:
+        return ["load_conversation_messages 호출이 없어 source 연결을 확인할 수 없음"]
+    load_arguments = load_calls[-1].get("arguments")
+    load_conversation_id = (
+        load_arguments.get("conversation_id")
+        if isinstance(load_arguments, dict)
+        else None
+    )
+    if load_conversation_id not in source_ids:
+        return [
+            "load_conversation_messages의 conversation_id가 extract 결과의 "
+            f"source_conversation_id가 아님: load={load_conversation_id!r}, "
+            f"extract_sources={sorted(source_ids)}"
+        ]
+    return []
 
 
 def _check_collect_member_schedules_rows(spec: dict[str, Any], events: list[dict[str, Any]]) -> list[str]:
@@ -199,6 +331,9 @@ def _check_turn(turn_spec: dict[str, Any], outcome: dict[str, Any]) -> list[str]
     if "expect_tool_order" in turn_spec:
         failures.extend(_check_tool_order(turn_spec["expect_tool_order"], tool_names))
 
+    if "expect_tool_calls_exact" in turn_spec:
+        failures.extend(_check_tool_calls_exact(turn_spec["expect_tool_calls_exact"], tool_names))
+
     if "expect_tool_prefix" in turn_spec:
         prefix = turn_spec["expect_tool_prefix"]
         if tool_names[: len(prefix)] != prefix:
@@ -212,11 +347,32 @@ def _check_turn(turn_spec: dict[str, Any], outcome: dict[str, Any]) -> list[str]
     if contains_any and not any(phrase in answer for phrase in contains_any):
         failures.append(f"답변에 {contains_any} 중 하나는 있어야 하는데 없음 (답변: {answer!r})")
 
+    contains_all = turn_spec.get("expect_answer_contains_all")
+    if contains_all:
+        missing_phrases = [phrase for phrase in contains_all if phrase not in answer]
+        if missing_phrases:
+            failures.append(
+                f"답변에 {missing_phrases}가 모두 포함돼야 하는데 없음 (답변: {answer!r})"
+            )
+
+    if "expect_tool_call_arguments" in turn_spec:
+        failures.extend(
+            _check_tool_call_arguments(turn_spec["expect_tool_call_arguments"], events)
+        )
+
     if "expect_tool_result_rows_empty" in turn_spec:
         failures.extend(_check_tool_result_rows_empty(turn_spec["expect_tool_result_rows_empty"], events))
 
     for spec in turn_spec.get("expect_tool_result_row_keys", []):
         failures.extend(_check_tool_result_row_keys(spec, events))
+
+    if "expect_tool_result_members" in turn_spec:
+        failures.extend(
+            _check_tool_result_members(turn_spec["expect_tool_result_members"], events)
+        )
+
+    if turn_spec.get("expect_load_uses_extract_source_id"):
+        failures.extend(_check_load_uses_extract_source_id(events))
 
     if "expect_collect_member_schedules_rows" in turn_spec:
         failures.extend(_check_collect_member_schedules_rows(turn_spec["expect_collect_member_schedules_rows"], events))
@@ -251,39 +407,41 @@ def main() -> int:
     parser.add_argument("--keep-tmp", action="store_true", help="종료 후 임시 DB 디렉터리를 지우지 않음(디버깅용)")
     args = parser.parse_args()
 
-    if not CONFIG.has_openai_key:
-        print("PROXY_TOKEN이 .env에 없어 실제 LLM을 호출할 수 없습니다. E2E 시나리오를 건너뜁니다.")
-        return 1
-
-    scenarios = json.loads(Path(args.scenarios).read_text(encoding="utf-8"))
-    if args.only:
-        scenarios = [s for s in scenarios if s["id"] in args.only]
-        missing = set(args.only) - {s["id"] for s in scenarios}
-        if missing:
-            print(f"scenarios.json에 없는 id: {sorted(missing)}")
+    tmp_dir = _configure_isolated_runtime()
+    try:
+        if _CONFIG is None or not _CONFIG.has_openai_key:
+            print("PROXY_TOKEN이 .env에 없어 실제 LLM을 호출할 수 없습니다. E2E 시나리오를 건너뜁니다.")
             return 1
 
-    print(f"임시 DB: {_TMP_DIR}")
-    all_ok = True
-    for scenario in scenarios:
-        print(f"\n=== {scenario['id']} (week {scenario['week']}) ===")
-        print(scenario.get("description", ""))
-        ok, failures = run_scenario(scenario)
-        if ok:
-            print("PASS")
+        scenarios = json.loads(Path(args.scenarios).read_text(encoding="utf-8"))
+        if args.only:
+            scenarios = [s for s in scenarios if s["id"] in args.only]
+            missing = set(args.only) - {s["id"] for s in scenarios}
+            if missing:
+                print(f"scenarios.json에 없는 id: {sorted(missing)}")
+                return 1
+
+        print(f"임시 DB: {tmp_dir}")
+        all_ok = True
+        for scenario in scenarios:
+            print(f"\n=== {scenario['id']} (week {scenario['week']}) ===")
+            print(scenario.get("description", ""))
+            ok, failures = run_scenario(scenario)
+            if ok:
+                print("PASS")
+            else:
+                all_ok = False
+                print("FAIL")
+                for failure in failures:
+                    print(f"  - {failure}")
+
+        print("\n결과:", "ALL PASS" if all_ok else "일부 실패")
+        return 0 if all_ok else 1
+    finally:
+        if args.keep_tmp:
+            print(f"\n임시 DB를 남겨둠: {tmp_dir}")
         else:
-            all_ok = False
-            print("FAIL")
-            for failure in failures:
-                print(f"  - {failure}")
-
-    if not args.keep_tmp:
-        shutil.rmtree(_TMP_DIR, ignore_errors=True)
-    else:
-        print(f"\n임시 DB를 남겨둠: {_TMP_DIR}")
-
-    print("\n결과:", "ALL PASS" if all_ok else "일부 실패")
-    return 0 if all_ok else 1
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":
