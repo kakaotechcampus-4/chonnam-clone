@@ -358,7 +358,14 @@ def search_previous_conversations(
     member_names: list[str] | None = None,
     limit: int = 5,
 ) -> str:
-    """외부 SQLite 데이터베이스에 저장된 이전 대화를 검색합니다. query에는 LLM이 고른 짧은 핵심 명사나 구를 넣습니다."""
+    """외부 멤버의 과거 대화를 검색하는 Week 05 조회 흐름의 첫 단계입니다.
+
+    외부 멤버의 일정이나 busy-time을 조회할 때 먼저 호출하고, query에는 LLM이
+    고른 짧은 핵심 명사나 구를 넣습니다. 검색 결과 유무와 관계없이 다음 단계에서
+    extract_schedules_from_history로 멤버와 날짜 범위의 일정을 확인합니다. 검색 결과가
+    없다는 이유로 conversation_id를 추측하거나 다른 개인 기록 검색 tool을 호출하지
+    않습니다. 사용자의 앱 내부 개인 일정이나 저장 기록 검색에는 사용하지 않습니다.
+    """
 
     return call_mcp_tool_sync(
         "search_previous_conversations",
@@ -372,7 +379,13 @@ def search_previous_conversations(
 
 @tool(args_schema=LoadConversationMessagesInput)
 def load_conversation_messages(conversation_id: str) -> str:
-    """외부 SQLite 데이터베이스에서 특정 이전 대화의 모든 메시지를 불러옵니다."""
+    """외부 일정의 원문 근거가 필요할 때 특정 과거 대화의 메시지를 불러옵니다.
+
+    사용자가 원문 대화를 요구하거나 추출된 일정의 근거를 확인해야 할 때만 사용합니다.
+    search_previous_conversations와 extract_schedules_from_history를 먼저 호출한 뒤,
+    extract 결과에서 얻은 실제 source_conversation_id를 conversation_id로 전달합니다.
+    conversation_id를 추측하거나 검색보다 먼저 호출하지 않습니다.
+    """
 
     payload = call_external_tool_payload(
         "load_conversation_messages",
@@ -383,7 +396,14 @@ def load_conversation_messages(conversation_id: str) -> str:
 
 @tool(args_schema=ExtractSchedulesFromHistoryInput)
 def extract_schedules_from_history(member_names: list[str], date_from: str, date_to: str) -> str:
-    """외부 SQLite 이전 대화에서 멤버별 일정을 추출합니다."""
+    """검색된 외부 과거 대화에서 멤버별 일정과 busy-time을 추출합니다.
+
+    외부 멤버 일정만 조회하는 요청에서는 search_previous_conversations 결과가
+    비어 있더라도 두 번째 단계로 호출합니다. 이 tool의 멤버·날짜 조회 결과까지
+    비어 있을 때만 일정이 없다고 판단합니다. 사용자가 나의 일정과 외부 멤버 일정을
+    함께 요청해 collect_member_schedules를 호출한 경우에는 이 tool을 중복 호출하지
+    않습니다. 사용자의 앱 내부 개인 일정 조회에는 사용하지 않습니다.
+    """
 
     return call_mcp_tool_sync(
         "extract_schedules_from_history",
@@ -406,7 +426,11 @@ def create_shared_schedule(
     source_conversation_id: str | None = None,
     schedule_id: str | None = None,
 ) -> str:
-    """외부 MCP 공유 일정 저장소에 일정을 등록하거나 갱신합니다."""
+    """외부 MCP 공유 일정 저장소에 확정된 일정 하나를 등록하거나 갱신합니다.
+
+    과거 대화나 busy-time을 조회하는 tool이 아닙니다. 사용자가 공유 일정의 생성 또는
+    갱신을 요청했고 저장할 필드가 확정된 경우에만 사용합니다.
+    """
 
     return call_mcp_tool_sync(
         "create_shared_schedule",
@@ -428,7 +452,11 @@ def delete_shared_schedule(
     schedule_id: str | None = None,
     source_conversation_id: str | None = None,
 ) -> str:
-    """외부 MCP 공유 일정 저장소에서 일정을 삭제합니다."""
+    """외부 MCP 공유 일정 저장소에서 식별 가능한 일정만 삭제합니다.
+
+    과거 대화나 추출된 busy-time을 삭제하는 tool이 아닙니다. schedule_id 또는 조회
+    결과에서 얻은 source_conversation_id가 있을 때만 사용하며 식별자를 추측하지 않습니다.
+    """
 
     return call_mcp_tool_sync(
         "delete_shared_schedule",
@@ -447,7 +475,12 @@ def list_shared_schedules(
     source_conversation_id: str | None = None,
     limit: int = 50,
 ) -> str:
-    """외부 MCP 공유 일정 저장소에 등록된 일정을 조회합니다. 필터가 없으면 기본 공유 일정을 반환합니다."""
+    """외부 MCP 공유 일정 저장소에 이미 등록된 확정 일정을 조회합니다.
+
+    과거 대화에서 외부 멤버의 일정이나 busy-time을 찾는 요청에는 사용하지 않습니다.
+    그런 요청에는 search_previous_conversations 다음 extract_schedules_from_history를
+    사용합니다. 필터가 없으면 기본 공유 일정을 반환합니다.
+    """
 
     return call_mcp_tool_sync(
         "list_shared_schedules",
@@ -463,7 +496,14 @@ def list_shared_schedules(
 
 @tool(args_schema=CollectMemberSchedulesInput)
 def collect_member_schedules(member_names: list[str], date_from: str, date_to: str) -> str:
-    """내 일정과 다른 사람들의 일정을 MCP SQLite 기록에서 모읍니다."""
+    """나의 개인 일정과 외부 멤버 일정을 한 요청에서 함께 수집합니다.
+
+    사용자가 '나'와 한 명 이상의 외부 멤버 일정을 함께 조회·비교·정리해 달라고
+    명시한 경우에만 사용합니다. 외부 멤버 일정만 조회하는 요청에는 사용하지 말고
+    search_previous_conversations 다음 extract_schedules_from_history를 호출합니다.
+    이 tool은 내부에서 외부 일정 추출까지 수행하므로 호출한 뒤 같은 요청에
+    extract_schedules_from_history를 중복 호출하지 않습니다.
+    """
 
     return json_payload(
         _collect_member_schedules(

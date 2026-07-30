@@ -300,6 +300,18 @@ class Week05PromptAndTraceTest(unittest.TestCase):
 
         prompt = week05_system_prompt()
         self.assertIn("직접 SQL을 작성", prompt)
+        self.assertIn("다음 세 유형 중 정확히 하나로 분류", prompt)
+        self.assertIn("외부 멤버 이름이 여러 명이라는 이유만으로 C로 분류하지 않는다", prompt)
+        self.assertIn(
+            "검색 결과 rows가 비어 있더라도 extract_schedules_from_history",
+            prompt,
+        )
+        self.assertIn("extract 결과 rows도 비어 있으면 조회를 중단", prompt)
+        self.assertIn(
+            "search_previous_conversations -> extract_schedules_from_history",
+            prompt,
+        )
+        self.assertIn("collect_member_schedules 하나만 호출", prompt)
         self.assertLess(
             prompt.index("search_previous_conversations"),
             prompt.index("extract_schedules_from_history"),

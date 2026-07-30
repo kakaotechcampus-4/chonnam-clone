@@ -13,12 +13,21 @@ WEEK05_MCP_BOUNDARY_PROMPT = """
 """
 
 WEEK05_HISTORY_WORKFLOW_PROMPT = """
-외부 멤버의 과거 일정이나 busy-time을 직접 조회할 때는
-search_previous_conversations를 먼저 호출하고,
-extract_schedules_from_history를 두 번째로 호출한다.
-load_conversation_messages는 사용자가 원문을 요구하거나
-추출된 일정의 근거를 확인해야 할 때만 선택적으로 호출한다.
-load_conversation_messages를 search_previous_conversations보다 먼저 호출하지 않는다.
+Week 05 외부 일정 조회는 아래 상태 전이를 끝까지 따른다.
+
+1. search_previous_conversations를 먼저 호출한다.
+2. 검색 결과 rows가 비어 있더라도 extract_schedules_from_history를 두 번째로 호출한다.
+   search는 LLM이 고른 문자열의 일치 여부를 확인하고 extract는 멤버와 날짜 범위로
+   busy-time을 조회하므로, search 결과만으로 일정이 없다고 확정하지 않는다.
+   첫 번째 tool 결과를 받은 뒤 최종 답변하지 말고 반드시 두 번째 호출까지 계속한다.
+3. extract 결과 rows도 비어 있으면 조회를 중단하고 일정이 없다고 답한다.
+   이때 load_conversation_messages를 호출하거나 conversation_id를 추측하지 않는다.
+4. 사용자가 원문 근거도 요청했고 extract 결과 rows가 있다면 실제
+   source_conversation_id로
+   load_conversation_messages를 세 번째로 호출한다.
+   두 번째 tool 결과를 받은 뒤 최종 답변하지 말고 반드시 세 번째 호출까지 계속한다.
+
+conversation_id와 source_conversation_id를 추측하지 않는다.
 """
 
 WEEK05_TRACEABILITY_PROMPT = """
@@ -29,10 +38,31 @@ WEEK05_TRACEABILITY_PROMPT = """
 """
 
 WEEK05_SCHEDULE_COLLECTION_PROMPT = """
-내 일정과 외부 멤버의 busy-time을 한 번에 확인하는 요청에는
-collect_member_schedules를 사용한다.
-이 경우 collect_member_schedules가 외부 일정 추출까지 수행하므로 같은 수집 작업을
-extract_schedules_from_history로 중복 실행하지 않는다.
+사용자 요청을 tool 호출 전에 다음 세 유형 중 정확히 하나로 분류한다.
+
+A. 외부 멤버 일정만 조회
+- 요청에 '나', '내 일정', '나랑'처럼 사용자의 개인 일정이 포함되지 않은 경우다.
+- search_previous_conversations부터 시작해 WEEK05_HISTORY_WORKFLOW_PROMPT를 따른다.
+- collect_member_schedules, personal_list_saved_schedules, search_saved_requests를
+  호출하지 않는다.
+
+B. 외부 멤버 일정과 원문 근거 조회
+- A의 순서에 load_conversation_messages까지 이어서 호출한다.
+- search_previous_conversations -> extract_schedules_from_history
+  -> load_conversation_messages 세 호출을 마치기 전에 최종 답변하지 않는다.
+- personal_list_saved_schedules와 search_saved_requests를 호출하지 않는다.
+
+C. 나의 일정과 외부 멤버 일정을 함께 수집
+- 요청에 사용자의 일정과 외부 멤버 일정이 모두 명시된 경우에만 해당한다.
+- collect_member_schedules 하나만 호출한다.
+- 이 경우 collect_member_schedules가 개인 일정 조회와 외부 일정 추출을 모두 수행한다.
+- search_previous_conversations, extract_schedules_from_history,
+  personal_list_saved_schedules, search_saved_requests를 중복 호출하지 않는다.
+
+외부 멤버 이름이 여러 명이라는 이유만으로 C로 분류하지 않는다.
+'철수와 영희의 일정'은 사용자의 일정이 없으므로 A이고,
+'나랑 철수의 일정'만 C다.
+
 tool이 반환한 rows와 schedule_summary를 근거로 답하고,
 Week 05에서는 여러 사람의 최종 공통 가능 시간을 임의로 확정하지 않는다.
 """
