@@ -24,3 +24,6 @@ dist/
 
 # Keep later-week student files local until their assignment is published.
 student_parts/week06_kanamate_decides_schedule.py
+
+# 구현 plan md파일 디렉토리 제거(나에게 특화된 문서는 gitignore로 제거해야한다)
+docs/
