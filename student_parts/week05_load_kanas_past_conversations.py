@@ -281,6 +281,13 @@ def _structured_request_from_schedule_row(row: dict[str, Any]) -> StructuredRequ
     )
 
 
+# LLM이 조회 경계를 빈 문자열로 넘겼을 때 "그 방향은 제한하지 않는다"를 뜻하는 값입니다.
+# MCP tool이 date_from/date_to를 필수 문자열로 받아 경계 생략을 표현할 수 없으므로,
+# 내 일정 비교와 MCP 인자가 같은 값을 쓰도록 여기서 한 번만 정합니다.
+NO_LOWER_BOUND = "0001-01-01"
+NO_UPPER_BOUND = "9999-12-31"
+
+
 def _collect_member_schedules(
     *,
     member_names: list[str],
@@ -294,6 +301,8 @@ def _collect_member_schedules(
     bound_from, bound_to = normalize_external_schedule_date_bounds(
         member_names, date_from, date_to
     )
+    bound_from = bound_from or NO_LOWER_BOUND
+    bound_to = bound_to or NO_UPPER_BOUND
     external_members = [name for name in members if name != PERSONAL_SHARED_MEMBER_NAME]
 
     rows: list[dict[str, Any]] = []
