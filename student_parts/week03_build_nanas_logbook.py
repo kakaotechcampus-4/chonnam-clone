@@ -449,16 +449,88 @@ def _delete_saved_schedules(
             "deleted": [],
         }
 
+    if delete_all and any([schedule_ids, date, title, start_time, time_unspecified]):
+        # 스키마는 둘을 함께 허용하지만 구현은 delete_all 분기로 들어가 개별 조건을 조용히 무시한
+        # 채 전부 지운다. 파괴적 연산에서 모호한 입력은 실행하지 않고 거부한다.
+        return {
+            "ok": False,
+            "error": {
+                "code": "conflicting_filters",
+                "message": (
+                    "전체 삭제(delete_all=True)와 개별 삭제 조건을 함께 넘겼습니다. "
+                    "전체를 지우려면 delete_all=True만, 일부를 지우려면 delete_all 없이 "
+                    "schedule_ids나 date/title/start_time 필터만 넘기세요."
+                ),
+            },
+            "deleted_count": 0,
+            "filters": filters,
+            "deleted": [],
+        }
+
+    # store의 find/delete는 빈 리스트를 "조건 없음"이 아니라 "즉시 0건"으로 읽는다. 정규화하지 않으면
+    # schedule_ids=[]와 date를 함께 넘겼을 때 date가 통째로 무시된다.
+    effective_schedule_ids = schedule_ids or None
+
+    if not delete_all:
+        # delete_schedules_by_filter는 기본 상한 100건이라 그 이상 일치하면 일부만 지우고
+        # 성공처럼 보인다. 삭제 전에 세어 보고 넘치면 실행하지 않는다(101 = store 상한 + 1).
+        # 사전 조회와 삭제는 별도 DB 작업이므로 이 계약은 "사전 조회 시점 기준"이다 —
+        # 단일 사용자 Gradio 세션에서 agent가 tool을 순차 호출하는 단일 작성자 환경을 전제한다.
+        candidates = store.find_schedules(
+            schedule_ids=effective_schedule_ids,
+            date=date,
+            title=title,
+            start_time=start_time,
+            time_unspecified=time_unspecified,
+            limit=101,
+        )
+        if len(candidates) > 100:
+            return {
+                "ok": False,
+                "error": {
+                    "code": "too_many_matches",
+                    "message": (
+                        "삭제 조건에 맞는 일정이 100건을 넘습니다. 한 번에 지울 수 있는 상한이 "
+                        "100건이라 일부만 지워질 수 있어 실행하지 않았습니다. date나 title로 "
+                        "범위를 좁혀 다시 요청하거나, schedule_ids를 100개 이하 묶음으로 나눠 "
+                        "여러 번 요청하세요. 전부 지우려면 delete_all=True로 요청하세요."
+                    ),
+                    "matched_at_least": 101,
+                    "delete_limit": 100,
+                },
+                "deleted_count": 0,
+                "filters": filters,
+                "deleted": [],
+            }
+
     if delete_all:
         deleted = store.delete_all_schedules()
     else:
         deleted = store.delete_schedules_by_filter(
-            schedule_ids=schedule_ids,
+            schedule_ids=effective_schedule_ids,
             date=date,
             title=title,
             start_time=start_time,
             time_unspecified=time_unspecified,
         )
+
+    if not delete_all and not deleted:
+        # 유효한 조건이었지만 일치 row가 0건이면 요청한 효과가 생기지 않은 것이다.
+        # delete_all은 "남기지 말라"는 최종 상태 요청이라 빈 DB에서도 성립하므로 이 갈래에 넣지 않는다.
+        return {
+            "ok": False,
+            "error": {
+                "code": "no_match",
+                "message": (
+                    "삭제 조건에 맞는 저장 일정이 없습니다. personal_list_saved_schedules로 "
+                    "대상을 다시 확인한 뒤 정확한 schedule_ids나 필터로 요청하세요."
+                ),
+            },
+            "deleted_count": 0,
+            "filters": filters,
+            "deleted": [],
+        }
+
     return {
         "ok": True,
         "deleted_count": len(deleted),
@@ -616,6 +688,23 @@ def personal_update_saved_schedule(
     attendees: list[str] | None = None,
 ) -> str:
     """앱 DB에 저장된 내 일정 원본을 수정하고 공유 일정 복사본을 같은 값으로 갱신합니다."""
+
+    if all(value is None for value in (title, date, start_time, end_time, attendees)):
+        # 변경 필드가 없으면 store는 현재 값을 그대로 다시 써 넣고 row를 돌려준다. 그러면 "고쳤다"와
+        # "바꿀 게 없었다"가 같은 응답이 되어 agent가 수정했다고 답한다. 여기서 거부해 LLM이 바꿀
+        # 필드를 채워 다시 호출하게 만든다(attendees=[]는 "참석자를 비우라"는 변경이므로 해당 없음).
+        return json_payload(tool_result(
+            "personal_update_saved_schedule",
+            ok=False,
+            schedule_id=schedule_id,
+            error={
+                "code": "missing_fields",
+                "message": (
+                    "수정할 필드가 없습니다. title/date/start_time/end_time/attendees 중 "
+                    "사용자가 바꾸라고 한 필드를 채워 다시 호출하세요."
+                ),
+            },
+        ))
 
     result = _store().update_schedule(
         schedule_id,

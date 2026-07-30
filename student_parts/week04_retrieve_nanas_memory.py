@@ -238,7 +238,10 @@ def search_personal_reference_hits(
 ) -> list[dict[str, Any]]:
     """ChromaDB 검색 결과를 tool이 바로 반환하기 쉬운 hit 구조로 정리합니다."""
 
-    raw_hits = reference_store.search_personal_references(query, limit=top_k)
+    # 보정을 helper 입구에 둔다 — tool 밖에서 재사용하는 호출자(search_nana_memory)가 같은 코드를
+    # 복붙하지 않도록 helper가 자기 입구를 스스로 방어한다(PR #106 멘토 제안).
+    limit = safe_limit(top_k, default=2, maximum=20)
+    raw_hits = reference_store.search_personal_references(query, limit=limit)
     return [
         {
             "id": hit.get("id"),
@@ -258,7 +261,8 @@ def search_saved_request_rows(
 ) -> list[dict[str, Any]]:
     """SQLite 저장 요청을 검색하고 실제 검색 결과만 반환합니다."""
 
-    return sqlite_store.search_saved_requests(query, limit=top_k)
+    limit = safe_limit(top_k, default=3, maximum=50)
+    return sqlite_store.search_saved_requests(query, limit=limit)
 
 
 def search_conversation_messages_dict(
@@ -271,13 +275,14 @@ def search_conversation_messages_dict(
 ) -> dict[str, Any]:
     """SQLite 대화 목록을 lazy sync한 뒤 ChromaDB conversation RAG 결과를 반환합니다."""
 
+    limit = safe_limit(top_k, default=5, maximum=50)
     sync = conversation_rag_store.sync_from_sqlite(sqlite_store)
     exclude_conversation_id = current_session_scope()
     if exclude_conversation_id == DEFAULT_SESSION_SCOPE:
         exclude_conversation_id = None
     hits = conversation_rag_store.search(
         query=query,
-        top_k=top_k,
+        top_k=limit,
         exclude_conversation_id=exclude_conversation_id,
         conversation_id=conversation_id,
     )
@@ -325,8 +330,7 @@ def add_personal_reference(title: str, content: str, tags: list[str] | None = No
 def search_personal_references(query: str, top_k: int = 2) -> str:
     """개인 참고자료를 ChromaDB와 OpenAI embedding 기반으로 검색합니다."""
 
-    limit = safe_limit(top_k, default=2, maximum=20)
-    hits = search_personal_reference_hits(REFERENCE_STORE, query=query, top_k=limit)
+    hits = search_personal_reference_hits(REFERENCE_STORE, query=query, top_k=top_k)
     return json_payload({"query": query, "hits": hits})
 
 
@@ -334,8 +338,7 @@ def search_personal_references(query: str, top_k: int = 2) -> str:
 def search_saved_requests(query: str, top_k: int = 3) -> str:
     """SQLite에 저장된 구조화 일정/할 일/알림 row를 검색합니다. query에는 LLM이 고른 일정/할 일/알림 핵심어를 넣습니다."""
 
-    limit = safe_limit(top_k, default=3, maximum=50)
-    rows = search_saved_request_rows(SQLITE_STORE, query=query, top_k=limit)
+    rows = search_saved_request_rows(SQLITE_STORE, query=query, top_k=top_k)
     return json_payload({"query": query, "rows": rows})
 
 
@@ -347,15 +350,29 @@ def search_conversation_messages(
 ) -> str:
     """앱 SQLite 대화 목록을 대화 단위 ChromaDB RAG로 검색합니다. query에는 LLM이 고른 짧은 핵심 명사나 구를 넣습니다."""
 
-    limit = safe_limit(top_k, default=5, maximum=50)
     payload = search_conversation_messages_dict(
         SQLITE_STORE,
         CONVERSATION_RAG_STORE,
         query=query,
-        top_k=limit,
+        top_k=top_k,
         conversation_id=conversation_id,
     )
     return json_payload(payload)
+
+
+SCHEDULE_CANDIDATE_LIMIT = 200
+
+
+def _schedule_chunk(row: dict[str, Any]) -> dict[str, Any]:
+    """저장 일정 row에서 통합 검색이 근거로 쓰는 필드만 남깁니다."""
+
+    return {
+        "schedule_id": row.get("schedule_id"),
+        "title": row.get("title") or "",
+        "date": row.get("date"),
+        "start_time": row.get("start_time"),
+        "attendees": row.get("attendees") or [],
+    }
 
 
 @tool(args_schema=SearchNanaMemoryInput)
@@ -368,8 +385,73 @@ def search_nana_memory(
 ) -> str:
     """개인 참고자료와 SQLite 저장 일정을 한 번에 검색하고 일정 chunk를 반환합니다."""
 
-    # TODO: compatibility 통합 검색이 필요하면 개인 참고자료와 SQLite 일정 chunk를 함께 구성하세요.
-    ...
+    # limit은 출처별 상한이다 — 참고자료에서 최대 limit건, 일정에서 최대 limit건을 각각 가져오므로
+    # 결과는 최대 limit * 2건이 된다. 두 출처는 척도가 달라(embedding 거리 vs 날짜 순) 하나의
+    # 순위로 합치지 않는다. 그 사실은 아래 filters.limit_scope·max_total_results로 에코한다.
+    per_source_limit = safe_limit(limit, default=5, maximum=20)
+
+    reference_hits = search_personal_reference_hits(
+        REFERENCE_STORE, query=query, top_k=per_source_limit
+    )
+
+    rows = SQLITE_STORE.list_schedules(
+        limit=SCHEDULE_CANDIDATE_LIMIT, date_from=date_from, date_to=date_to
+    )
+    # 필터를 Python에서 걸므로 store에서는 넓게 읽는다 — 먼저 자르면 일치하는 일정이 후보에
+    # 들어오기도 전에 잘려 나간다. 그래도 전수 검색은 아니다: list_schedules는 날짜·시각
+    # 오름차순으로 앞 200개만 주므로 저장 일정이 200건을 넘으면 잘리는 쪽은 최신 일정이다.
+    # 또 schedules에는 원문·근거 컬럼이 없어 query 매칭 범위는 title과 attendees뿐이다
+    # (원문·근거 검색은 search_saved_requests의 몫).
+    query_text = (query or "").strip().casefold()
+    attendee_text = (attendee or "").strip().casefold()
+    matched: list[dict[str, Any]] = []
+    for row in rows:
+        attendees = [str(name).casefold() for name in (row.get("attendees") or [])]
+        if query_text:
+            title_text = (row.get("title") or "").casefold()
+            if query_text not in title_text and not any(query_text in name for name in attendees):
+                continue
+        if attendee_text and not any(attendee_text in name for name in attendees):
+            continue
+        matched.append(_schedule_chunk(row))
+    schedule_chunks = matched[:per_source_limit]
+
+    context_blocks: list[str] = []
+    if reference_hits:
+        reference_lines = "\n".join(hit.get("content", "") for hit in reference_hits)
+        context_blocks.append(f"[개인 참고자료]\n{reference_lines}")
+    if schedule_chunks:
+        schedule_lines = "\n".join(
+            "{date} {start_time} | {title} | {attendees}".format(
+                date=chunk["date"] or "날짜 미정",
+                start_time=chunk["start_time"] or "시간 미정",
+                title=chunk["title"],
+                attendees=", ".join(chunk["attendees"]),
+            )
+            for chunk in schedule_chunks
+        )
+        context_blocks.append(f"[저장 일정]\n{schedule_lines}")
+
+    return json_payload({
+        "query": query,
+        "filters": {
+            "date_from": date_from,
+            "date_to": date_to,
+            "attendee": attendee,
+            "limit": per_source_limit,
+            # limit은 출처별 상한이라 실제 결과는 최대 limit * 2건이다. 필드명을 바꿀 수 없으므로
+            # 호출자가 payload만 보고도 그 사실을 알 수 있게 에코한다.
+            "limit_scope": "per_source",
+            "max_total_results": per_source_limit * 2,
+            # 200건을 꽉 채워 받았으면 날짜 오름차순으로 뒤쪽(최신) 일정이 잘렸을 수 있다.
+            "schedule_candidate_limit": SCHEDULE_CANDIDATE_LIMIT,
+            "schedule_candidates_may_be_truncated": len(rows) == SCHEDULE_CANDIDATE_LIMIT,
+        },
+        "reference_backend": REFERENCE_STORE.backend_info(),
+        "reference_hits": reference_hits,
+        "schedule_chunks": schedule_chunks,
+        "context": "\n\n".join(context_blocks),
+    })
 
 
 def week04_tools() -> list[Any]:
@@ -398,8 +480,15 @@ def week04_prompt_parts() -> list[str]:
         "## Week 4 기억 검색 — 출처 구분\n"
         "- 사용자가 예전에 메모해 둔 개인 참고자료(지식·선호·습관)에 대해 물으면 "
         "search_personal_references로 뜻이 비슷한 자료를 검색해 근거로 삼는다.\n"
-        "- 기록장에 저장된 일정·할 일·알림 기록에 대해 물으면 "
-        "search_saved_requests로 저장 기록을 검색한다.\n"
+        "- 저장 기록 질문에서 '검색'과 '목록'을 구분한다. 제목·원문·근거의 특정 키워드로 찾아야 하면 "
+        "kind와 무관하게 search_saved_requests를 쓴다(예: '저장된 보고서 제출 할 일을 검색해줘'). "
+        "전체 목록을 보거나 날짜·종류 필터로 수정·삭제 대상을 고를 때만 목록 tool을 쓴다.\n"
+        "- 상속된 '조회 요청이면 대상에 맞는 tool을 한 번만 호출한다' 블록의 세 규칙 — "
+        "'저장된 일정 목록: personal_list_saved_schedules', '저장된 할 일/알림: list_saved_requests', "
+        "'저장된 원본 기록의 목록/단건: list_saved_requests / get_saved_request' — 은 모두 "
+        "목록·필터 조회에만 적용된다. 키워드로 특정 기록을 찾는 검색에는 적용되지 않는다.\n"
+        "- 따라서 '저장된 할 일을 검색해줘'처럼 kind가 todo/reminder인 기록의 키워드 검색도 "
+        "list_saved_requests가 아니라 search_saved_requests로 처리한다.\n"
         "- 예전 채팅에서 나눈 일반 대화 내용(구조화되지 않은 발화)에 대해 물으면 "
         "search_conversation_messages로 대화 청크를 검색한다. conversation_id는 사용자가 특정 대화를 "
         "콕 집어 지목했을 때만 채운다. 비워두면 지금 진행 중인 대화가 검색에서 자동으로 제외되므로 "
