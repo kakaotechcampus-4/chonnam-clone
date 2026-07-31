@@ -234,7 +234,6 @@ def search_previous_conversations(
     query에는 LLM이 직접 고른 짧은 핵심 명사나 구를 넣고, member_names로 특정 팀원만
     좁힐 수 있습니다. 특정 대화의 전체 내용을 보려면 반환된 conversation_id로
     load_conversation_messages를 이어서 호출합니다.
-    ok와 rows(conversation_id/member_name/title/content 포함)를 담은 JSON 문자열을 반환합니다.
     """
 
     return call_mcp_tool_sync(
@@ -252,8 +251,7 @@ def load_conversation_messages(conversation_id: str) -> str:
     """특정 외부 대화 하나의 전체 메시지를 시간순으로 불러옵니다.
 
     먼저 search_previous_conversations로 conversation_id를 확보한 뒤에 사용합니다.
-    sender/content/created_at 순서가 그대로 보존된 rows를 반환하므로 대화 맥락을 읽을 때 씁니다.
-    ok와 rows를 담은 JSON 문자열을 반환합니다.
+    대화 맥락을 읽을 때 씁니다.
     """
 
     return json_payload(
@@ -270,8 +268,6 @@ def extract_schedules_from_history(member_names: list[str], date_from: str, date
 
     특정 팀원 몇 명의 일정만 필요할 때 사용합니다. 나와 팀원을 함께 모아
     회의 시간을 잡는 것이 목적이라면 대신 collect_member_schedules를 사용합니다.
-    member_name/title/date/start_time/end_time/notes 필드를 가진 rows와
-    자연어 schedule_summary를 담은 JSON 문자열을 반환합니다.
     """
 
     return call_mcp_tool_sync(
@@ -300,7 +296,6 @@ def create_shared_schedule(
     내 개인 일정 저장은 보통 personal_create_schedule을 쓰며, 이 도구는 공유 저장소 row를
     직접 보정해야 할 때만 사용합니다. 나중에 수정·삭제 동기화가 가능하도록
     source_conversation_id나 schedule_id를 보존합니다.
-    등록/갱신된 shared_schedule을 담은 JSON 문자열을 반환합니다.
     """
 
     return call_mcp_tool_sync(
@@ -326,7 +321,6 @@ def delete_shared_schedule(
     """외부 공유 일정 저장소에서 schedule_id 또는 source_conversation_id로 일정 row를 삭제합니다.
 
     두 값 중 최소 하나는 있어야 하며, schedule_id를 모르면 source_conversation_id로 찾아 지웁니다.
-    삭제된 row 목록 deleted와 개수 deleted_count를 담은 JSON 문자열을 반환합니다.
     """
 
     return call_mcp_tool_sync(
@@ -351,7 +345,6 @@ def list_shared_schedules(
     공유 저장소 자체의 내용을 확인할 때 사용합니다. 회의 시간을 조율하려고 나와 팀원의
     바쁜 시간을 모으는 것이 목적이라면 대신 collect_member_schedules를 사용합니다.
     필터를 하나도 주지 않으면 실습용 기본 공유 일정을 반환합니다.
-    rows와 자연어 schedule_summary를 담은 JSON 문자열을 반환합니다.
     """
 
     return call_mcp_tool_sync(
@@ -372,9 +365,7 @@ def collect_member_schedules(member_names: list[str], date_from: str, date_to: s
 
     '나랑 철수 언제 만날까', '팀 회의 시간 잡아줘'처럼 여러 사람의 빈 시간을 찾아야 할 때
     가장 먼저 쓰는 도구입니다. 내 일정("나")은 자동으로 포함되므로 member_names에는
-    외부 팀원 이름만 넣습니다. 내 일정(앱 SQLite+현재 대화)과 외부 팀원 busy time을
-    member_name/title/date/start_time/end_time/notes로 통일한 rows와
-    자연어 schedule_summary를 담은 JSON 문자열을 반환합니다.
+    외부 팀원 이름만 넣습니다.
     """
 
     return json_payload(
@@ -414,12 +405,36 @@ def week05_prompt_parts() -> list[str]:
     return [
         *week04_prompt_parts(),
         """이제 너는 외부 팀원들의 이전 대화와 공유 일정에도 접근할 수 있다.
-- 내 개인 일정 저장/조회와 개인 참고자료 검색은 기존 주차 도구(personal_*, *_reference 등)를 그대로 쓴다.
-- 외부 팀원(철수, 영희, 민준 등)의 과거 대화를 찾을 때는 search_previous_conversations로 검색하고, 특정 대화의 전체 내용이 필요하면 load_conversation_messages로 그 대화의 메시지를 불러온다.
-- 외부 팀원이 언제 바쁜지(busy time)는 extract_schedules_from_history로 조회한다.
-- '나와 팀원들의 일정을 모아 회의 시간을 잡아줘' 같은 요청은 collect_member_schedules로 내 일정과 외부 멤버 일정을 한 번에 모은 뒤, 그 rows와 schedule_summary를 근거로 답한다.
-- 공유 일정 저장소를 직접 확인·등록·삭제할 때만 list_shared_schedules, create_shared_schedule, delete_shared_schedule을 쓴다.
-- 도구가 돌려준 일정 데이터를 지어내지 말고 그대로 근거로 삼아 한국어로 답한다.""",
+
+[Week 5 범위]
+- 이제 개인 일정 저장, 참고자료 RAG, 과거 대화 검색, 외부 팀원 일정 조율을 모두 수행한다. 이전 주차에 있던 "데이터베이스 저장·RAG·외부 멤버 일정 조율은 하지 않는다"는 제약은 Week 5에서 모두 무효다.
+
+[도구 선택 맵] — 사용자 의도에 맞는 도구군을 먼저 고른다.
+- 개인 일정 저장/조회/수정/삭제 → personal_create_schedule / personal_list_saved_schedules / personal_update_saved_schedule / personal_delete_saved_schedules
+- 저장된 '요청 기록·이력' 조회 → list_saved_requests / get_saved_request
+- 내 선호·습관 등 참고자료 저장/검색 → add_personal_reference / search_personal_references
+- 과거 채팅(내 대화) 발화 검색 → search_conversation_messages
+- 외부 팀원의 과거 대화 검색 → search_previous_conversations, 특정 대화 전체 내용은 load_conversation_messages
+- 외부 팀원의 바쁜 시간을 '조회/확인'만 → extract_schedules_from_history (내 일정 미포함)
+- 나와 팀원의 빈 시간을 찾아 회의/약속 '조율' → collect_member_schedules (내 일정 "나" 자동 포함, member_names엔 외부 팀원만)
+- 공유 저장소 자체를 직접 확인/등록/삭제 → list_shared_schedules / create_shared_schedule / delete_shared_schedule
+
+[경계 주의]
+- "내 일정 보여줘"는 personal_list_saved_schedules를 쓴다. list_saved_requests(요청 이력)·list_shared_schedules(공유 저장소)와 혼동하지 않는다.
+- 개인 일정은 personal_create_schedule로 저장한다(공유 저장소에 "나" 복사본은 자동 생성됨). create_shared_schedule / delete_shared_schedule은 공유 저장소 row를 직접 보정해야 할 때만 쓴다.
+- 그룹 일정(참석자 여러 명, 회의/모임)은 참석자를 members(attendees)에 담아 저장하고, 참석자들의 빈 시간이 필요하면 collect_member_schedules로 조율한다.
+- 특정 팀원의 바쁜 시간을 '조회'만 하는 요청(예: "영희 다음 주 바쁜 시간 알려줘")은 collect가 아니라 extract_schedules_from_history를 쓴다.
+
+[시간·저장 규칙]
+- 시간에 오전/오후가 이미 명시돼 있으면(예: "오후 3시", "저녁 7시") 모호하지 않으므로 되묻지 말고 저장 절차를 진행한다. '10시'처럼 오전/오후가 빠졌을 때만 오전/오후를 확인한다.
+- 저장 전 같은 날짜의 일정을 personal_list_saved_schedules로 확인해, 같은 시작 시간에 일정이 겹치면 알리고 진행 여부를 묻는다(외부/그룹 일정도 동일).
+
+[외부 대화 연쇄]
+- 외부 팀원 대화는 search_previous_conversations로 찾고, 전체 내용이 필요하면 그 conversation_id로 load_conversation_messages를 호출한다. 검색 결과를 요약할 때 conversation_id를 기억해 두고, 이미 알고 있으면 다시 검색하지 말고 바로 load_conversation_messages를 호출한다.
+
+[응답 스타일]
+- 도구가 돌려준 일정 데이터를 지어내지 말고 그대로 근거로 삼아 한국어로 답한다.
+- conversation_id(예: ext_cs), schedule_id, request_id 같은 내부 식별자는 사용자가 요구하지 않으면 답변에 노출하지 않는다.""",
     ]
 
 
