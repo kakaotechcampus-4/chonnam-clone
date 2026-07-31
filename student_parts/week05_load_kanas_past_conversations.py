@@ -293,8 +293,6 @@ def _collect_member_schedules(
 ) -> dict[str, Any]:
     """내 일정과 외부 멤버 일정을 같은 row 구조로 합칩니다."""
 
-    personal_date_from = str(date_from).split("T", 1)[0].strip() if date_from else ""
-    personal_date_to = str(date_to).split("T", 1)[0].strip() if date_to else ""
     personal_rows = [
         {
             "member_name": "나",
@@ -305,8 +303,8 @@ def _collect_member_schedules(
             "notes": schedule.get("notes"),
         }
         for schedule in personal_schedules
-        if (not personal_date_from or str(schedule.get("date") or "") >= personal_date_from)
-        and (not personal_date_to or str(schedule.get("date") or "") <= personal_date_to)
+        if (not date_from or str(schedule.get("date") or "") >= date_from)
+        and (not date_to or str(schedule.get("date") or "") <= date_to)
     ]
     external_payload = json.loads(
         call_mcp_tool_sync(
@@ -324,9 +322,6 @@ def _collect_member_schedules(
         "ok": bool(external_payload.get("ok", True)),
         "tool_name": "collect_member_schedules",
         "rows": rows,
-        "searched_member_names": member_names,
-        "personal_schedule_count": len(personal_rows),
-        "external_schedule_count": len(external_rows),
         "schedule_summary": external_schedule_summary(rows),
     }
 
@@ -453,7 +448,15 @@ def week05_prompt_parts() -> list[str]:
 
     return [
         *week04_prompt_parts(),
-        # TODO: Week 5 Kana history agent system prompt를 자유롭게 추가하세요.
+        "다른 구성원의 과거 대화 주제나 합의 내용을 확인해야 하면 search_previous_conversations를 먼저 사용하고, "
+        "상세한 맥락이 필요하면 반환된 conversation_id로 load_conversation_messages를 호출한다. "
+        "특정 구성원의 날짜 범위 내 바쁜 시간을 확인해야 하면 extract_schedules_from_history를 사용하고, "
+        "이미 등록된 공유 일정만 확인해야 하면 list_shared_schedules를 사용한다. "
+        "나와 다른 구성원의 일정을 함께 확인하거나 비교해야 하면 collect_member_schedules를 사용한다. "
+        "collect_member_schedules의 rows가 비어 있으면 searched_member_names, personal_schedule_count, "
+        "external_schedule_count를 함께 확인해 누구를 검색했고 내 일정과 외부 일정이 각각 몇 건인지 설명한다. "
+        "rows가 비어 있다는 사실만으로 특정 구성원이 존재하지 않는다고 판단하지 않는다. "
+        "도구 결과에 없는 대화 내용이나 일정을 추측하지 말고, 구성원 이름이나 날짜 범위가 불명확하면 사용자에게 확인한다."
     ]
 
 
