@@ -376,7 +376,19 @@ def create_shared_schedule(
     """외부 MCP 공유 일정 저장소에 일정을 등록하거나 갱신합니다."""
 
     # TODO: call_mcp_tool_sync("create_shared_schedule", args)로 공유 일정 row를 생성/갱신하세요.
-    ...
+    return call_mcp_tool_sync(
+        "create_shared_schedule",
+        {
+            "member_name": member_name,
+            "title": title,
+            "date": date,
+            "start_time": start_time,
+            "end_time": end_time,
+            "notes": notes,
+            "source_conversation_id": source_conversation_id,
+            "schedule_id": schedule_id,
+        },
+    )
 
 
 @tool(args_schema=DeleteSharedScheduleInput)
@@ -387,7 +399,13 @@ def delete_shared_schedule(
     """외부 MCP 공유 일정 저장소에서 일정을 삭제합니다."""
 
     # TODO: call_mcp_tool_sync("delete_shared_schedule", args)로 공유 일정을 삭제하세요.
-    ...
+    return call_mcp_tool_sync(
+        "delete_shared_schedule",
+        {
+            "schedule_id": schedule_id,
+            "source_conversation_id": source_conversation_id,
+        },
+    )
 
 
 @tool(args_schema=ListSharedSchedulesInput)
@@ -432,6 +450,8 @@ def week05_tools() -> list[Any]:
         search_previous_conversations,
         load_conversation_messages,
         extract_schedules_from_history,
+        create_shared_schedule,
+        delete_shared_schedule,
         list_shared_schedules,
         collect_member_schedules,
     ]   
@@ -452,9 +472,9 @@ def week05_prompt_parts() -> list[str]:
         "상세한 맥락이 필요하면 반환된 conversation_id로 load_conversation_messages를 호출한다. "
         "특정 구성원의 날짜 범위 내 바쁜 시간을 확인해야 하면 extract_schedules_from_history를 사용하고, "
         "이미 등록된 공유 일정만 확인해야 하면 list_shared_schedules를 사용한다. "
+        "공유 일정을 새로 등록하거나 같은 schedule_id의 일정을 갱신해야 하면 create_shared_schedule을 사용한다. "
+        "공유 일정을 삭제해야 하면 schedule_id 또는 source_conversation_id를 기준으로 delete_shared_schedule을 사용한다. "
         "나와 다른 구성원의 일정을 함께 확인하거나 비교해야 하면 collect_member_schedules를 사용한다. "
-        "collect_member_schedules의 rows가 비어 있으면 searched_member_names, personal_schedule_count, "
-        "external_schedule_count를 함께 확인해 누구를 검색했고 내 일정과 외부 일정이 각각 몇 건인지 설명한다. "
         "rows가 비어 있다는 사실만으로 특정 구성원이 존재하지 않는다고 판단하지 않는다. "
         "도구 결과에 없는 대화 내용이나 일정을 추측하지 말고, 구성원 이름이나 날짜 범위가 불명확하면 사용자에게 확인한다."
     ]
