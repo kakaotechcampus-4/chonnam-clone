@@ -300,6 +300,10 @@ def _collect_member_schedules(
     personal_rows = []
     for row in personal_schedules:
         structured = _structured_request_from_schedule_row(row)
+        if not structured.date:
+            continue
+        if structured.date < date_from or structured.date > date_to:
+            continue
         personal_rows.append({
             "member_name": "나",
             "title": structured.title,
