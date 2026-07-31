@@ -189,27 +189,24 @@ def _schedule_scope(schedule: dict[str, Any]) -> str:
 def _personal_schedules_for_current_scope() -> list[dict[str, Any]]:
     """SQLite 저장 일정과 현재 대화의 임시 일정만 group 조율 후보로 사용합니다."""
 
-    # TODO: SQLite 저장 일정과 현재 대화의 임시 일정을 합쳐 반환하세요.
+    # kind 필터를 두지 않는다 — personal_schedule/group_schedule 모두 schedules 테이블에
+    # owner='me'로 저장되므로, "나"의 그룹 일정(예: 다른 멤버와 잡은 회의)도 내 busy-time에
+    # 포함시켜야 한다. kind="personal_schedule"로만 걸렀다면 그룹 일정으로 잡은 내 약속이
+    # 통째로 빠져서, 실제로는 바쁜데 비어있는 것처럼 보이는 문제가 생긴다.
     store = AppSQLiteStore(CONFIG.app_db_path)
-    saved_schedules = store.list_schedules(limit=200, kind="personal_schedule") #SQLite 저장 일정 불러오기 (반환할 실제 저장 일정)
-    saved_requests = store.list_saved_requests(kind="personal_schedule", limit=200) #source_schedule_id(personal_id) 필드가 있는 requests 목록 불러오기 (정확히는 request 객체의 raw_json 필드에 저장된 dict에 source_schedule_id가 있다)
-    
-    synced_personal_ids: set[str] = set() # SQLite 저장 일정의 personal_id를 중복없이 저장하기 위한 세트
-    for request_row in saved_requests:
-        try:
-            raw = json.loads(request_row.get("raw_json") or "{}")
-        except Exception:
-            raw = {}
-        source_id = raw.get("source_schedule_id")
-        if source_id:
-            synced_personal_ids.add(source_id)
+    saved_schedules = store.list_schedules(limit=200)  # SQLite 저장 일정 불러오기 (반환할 실제 저장 일정)
+
+    # AppSQLiteStore.save_structured_request()를 보면, source_schedule_id(=Week1 personal_id)가
+    # 있을 때 그 값을 그대로 schedules.schedule_id로 쓴다. 그래서 raw_json을 따로 파싱할 필요 없이,
+    # 이미 가져온 saved_schedules의 schedule_id를 임시 일정의 personal_id와 비교하여 필터링하면 된다.
+    saved_schedule_ids = {schedule["schedule_id"] for schedule in saved_schedules}
 
     session_id = current_session_scope()
-    temp_schedules = [ # 현재 대화의 임시 저장 일정 중 SQLite 저장 일정의 personal_id와 중복되지 않은 일정만 필터링
+    temp_schedules = [  # 현재 대화의 임시 저장 일정 중 SQLite에 이미 동기화된 것과 중복되지 않은 일정만 필터링
         schedule
         for schedule in PERSONAL_SCHEDULES
         if _schedule_scope(schedule) == session_id
-        and schedule.get("personal_id") not in synced_personal_ids
+        and schedule.get("personal_id") not in saved_schedule_ids
     ]
 
     return [*saved_schedules, *temp_schedules] # SQLite 저장 일정과 필터링된 임시 일정을 합쳐 반환
