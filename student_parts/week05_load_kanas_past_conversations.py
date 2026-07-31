@@ -345,7 +345,13 @@ def _collect_member_schedules(
     
     # 내 일정과 외부 일정 합치기
     rows = [*personal_rows, *external_rows]
-    return { "rows": rows, "schedule_summary": external_schedule_summary(rows) }
+    return {
+        "rows": rows,
+        "schedule_summary": external_schedule_summary(rows),
+        # rows가 비어도 "조회했는데 일정이 없다"와 "조회 자체를 안 했다"를 구분할 수 있도록,
+        # 실제로 조회를 시도한 멤버 목록을 함께 반환한다.
+        "queried_members": ["나", *normalized_members],
+    }
         
 
 
