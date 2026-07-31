@@ -282,6 +282,32 @@ class Week05ScheduleCollectionTest(unittest.TestCase):
         self.assertIn("내 회의", result["schedule_summary"])
         self.assertIn("고객 인터뷰", result["schedule_summary"])
 
+    @patch(
+        "student_parts.week05_load_kanas_past_conversations.call_mcp_tool_sync"
+    )
+    def test_collect_member_schedules_calls_mcp_even_with_empty_member_names(
+        self,
+        call_mcp,
+    ):
+        call_mcp.return_value = json.dumps({"ok": True, "rows": []})
+
+        result = _collect_member_schedules(
+            member_names=[],
+            date_from="2026-07-07T00:00:00",
+            date_to="2026-07-17T23:59:59",
+            personal_schedules=[],
+        )
+
+        call_mcp.assert_called_once_with(
+            "extract_schedules_from_history",
+            {
+                "member_names": [],
+                "date_from": "2026-07-07",
+                "date_to": "2026-07-17",
+            },
+        )
+        self.assertEqual(result["rows"], [])
+
 
 class Week05PromptAndTraceTest(unittest.TestCase):
     def test_week05_prompt_accumulates_week04_then_adds_unique_week05_parts(self):
