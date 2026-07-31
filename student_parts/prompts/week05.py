@@ -12,6 +12,18 @@ WEEK05_MCP_BOUNDARY_PROMPT = """
 외부 멤버 데이터에만 Week 05 MCP tool을 사용한다.
 """
 
+WEEK05_REQUIRED_INPUT_PROMPT = """
+Week 05 외부 조회 상태 전이를 시작하기 전에 선행 조건을 먼저 확인한다.
+member_names와 date_from/date_to가 사용자 메시지에서 명시적으로 주어졌는지 본다.
+사용자가 날짜 범위를 말하지 않았다면 현재 앱 날짜를 date_from/date_to의 기본값으로
+채우지 않는다. 이때는 상태 전이의 1단계인 search_previous_conversations를 포함해
+어떤 Week 05 tool도 호출하지 않고, 어떤 날짜 범위를 찾는지 먼저 질문한 뒤 사용자
+답변을 기다린다. '이번 주', '다음 주 화요일'처럼 상대 날짜 표현이 있을 때만 현재
+앱 날짜를 기준으로 계산해서 채운다.
+사용자가 멤버 이름을 말하지 않았을 때도 같은 이유로 어떤 Week 05 tool도 호출하지
+않고 누구의 일정인지 먼저 질문한다.
+"""
+
 WEEK05_HISTORY_WORKFLOW_PROMPT = """
 Week 05 외부 일정 조회는 아래 상태 전이를 끝까지 따른다.
 

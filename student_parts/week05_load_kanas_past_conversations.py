@@ -29,6 +29,7 @@ from student_parts.week02_structure_natural_language_requests import StructuredR
 from student_parts.prompts.week05 import (
     WEEK05_HISTORY_WORKFLOW_PROMPT,
     WEEK05_MCP_BOUNDARY_PROMPT,
+    WEEK05_REQUIRED_INPUT_PROMPT,
     WEEK05_SCHEDULE_COLLECTION_PROMPT,
     WEEK05_SCOPE_PROMPT,
     WEEK05_TRACEABILITY_PROMPT,
@@ -542,6 +543,7 @@ def week05_prompt_parts() -> list[str]:
     return [
         *week04_prompt_parts(),
         WEEK05_MCP_BOUNDARY_PROMPT,
+        WEEK05_REQUIRED_INPUT_PROMPT,
         WEEK05_HISTORY_WORKFLOW_PROMPT,
         WEEK05_TRACEABILITY_PROMPT,
         WEEK05_SCHEDULE_COLLECTION_PROMPT,
