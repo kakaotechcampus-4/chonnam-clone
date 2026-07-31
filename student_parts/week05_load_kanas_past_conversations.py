@@ -293,6 +293,8 @@ def _collect_member_schedules(
 ) -> dict[str, Any]:
     """내 일정과 외부 멤버 일정을 같은 row 구조로 합칩니다."""
 
+    personal_date_from = str(date_from).split("T", 1)[0].strip() if date_from else ""
+    personal_date_to = str(date_to).split("T", 1)[0].strip() if date_to else ""
     personal_rows = [
         {
             "member_name": "나",
@@ -303,8 +305,8 @@ def _collect_member_schedules(
             "notes": schedule.get("notes"),
         }
         for schedule in personal_schedules
-        if (not date_from or str(schedule.get("date") or "") >= date_from)
-        and (not date_to or str(schedule.get("date") or "") <= date_to)
+        if (not personal_date_from or str(schedule.get("date") or "") >= personal_date_from)
+        and (not personal_date_to or str(schedule.get("date") or "") <= personal_date_to)
     ]
     external_payload = json.loads(
         call_mcp_tool_sync(
