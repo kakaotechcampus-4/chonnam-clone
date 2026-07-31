@@ -212,7 +212,7 @@ class Week05ScheduleCollectionTest(unittest.TestCase):
         with conversation_session_scope("session-a"):
             result = _personal_schedules_for_current_scope()
 
-        store.list_schedules.assert_called_once_with(limit=200)
+        store.list_schedules.assert_called_once_with(limit=200, kind="personal_schedule")
         result_ids = [
             row.get("schedule_id") or row.get("id")
             for row in result

@@ -200,7 +200,7 @@ def _personal_schedules_for_current_scope() -> list[dict[str, Any]]:
     store = AppSQLiteStore(CONFIG.app_db_path)
     # AppSQLiteStore의 기본 limit=12로는 일정 조율 범위에 포함된 오래된 저장 일정이
     # 누락될 수 있다. API가 허용하는 상한인 200건을 읽어 충분한 busy-time 후보를 확보한다.
-    stored_schedules = store.list_schedules(limit=200)
+    stored_schedules = store.list_schedules(limit=200, kind="personal_schedule")
     stored_schedule_ids = {
         str(schedule.get("schedule_id") or schedule.get("id"))
         for schedule in stored_schedules
