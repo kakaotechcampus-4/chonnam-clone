@@ -205,7 +205,7 @@ def json_payload(payload: dict[str, Any]) -> str:
 class SearchPreviousConversationsInput(BaseModel):
     """외부 이전 대화 검색 입력입니다."""
 
-    query: str
+    query: str = Field(description="사용자 요청에서 고른 짧은 핵심 명사나 구. 문장 전체를 넣지 않습니다.")
     member_names: list[str] | None = None
     limit: int = Field(default=5, ge=1, le=50)
 
@@ -213,15 +213,15 @@ class SearchPreviousConversationsInput(BaseModel):
 class LoadConversationMessagesInput(BaseModel):
     """외부 대화 메시지 조회 입력입니다."""
 
-    conversation_id: str
+    conversation_id: str = Field(description="search_previous_conversations 결과의 conversation_id 값을 그대로 넣습니다.")
 
 
 class ExtractSchedulesFromHistoryInput(BaseModel):
     """외부 멤버 일정 추출 입력입니다."""
 
     member_names: list[str]
-    date_from: str
-    date_to: str
+    date_from: str = Field(description="조회 시작일 (YYYY-MM-DD)")
+    date_to: str = Field(description="조회 종료일 (YYYY-MM-DD)")
 
 
 class CreateSharedScheduleInput(BaseModel):
@@ -229,12 +229,12 @@ class CreateSharedScheduleInput(BaseModel):
 
     member_name: str
     title: str
-    date: str
-    start_time: str
-    end_time: str = "미정"
+    date: str = Field(description="일정 날짜 (YYYY-MM-DD)")
+    start_time: str = Field(description="시작 시각 (HH:MM)")
+    end_time: str = Field(default="미정", description="종료 시각 (HH:MM). 모르면 '미정'")
     notes: str | None = None
     source_conversation_id: str | None = None
-    schedule_id: str | None = None
+    schedule_id: str | None = Field(default=None, description="같은 값을 다시 넣으면 기존 공유 일정을 갱신합니다.")
 
 
 class DeleteSharedScheduleInput(BaseModel):
@@ -248,8 +248,8 @@ class ListSharedSchedulesInput(BaseModel):
     """공유 일정 조회 입력입니다."""
 
     member_names: list[str] | None = None
-    date_from: str | None = None
-    date_to: str | None = None
+    date_from: str | None = Field(default=None, description="조회 시작일 (YYYY-MM-DD)")
+    date_to: str | None = Field(default=None, description="조회 종료일 (YYYY-MM-DD)")
     source_conversation_id: str | None = None
     limit: int = Field(default=50, ge=1, le=200)
 
@@ -257,9 +257,9 @@ class ListSharedSchedulesInput(BaseModel):
 class CollectMemberSchedulesInput(BaseModel):
     """내 일정과 외부 멤버 busy-time 수집 입력입니다."""
 
-    member_names: list[str]
-    date_from: str
-    date_to: str
+    member_names: list[str] = Field(description="외부 멤버 이름 목록. '나'는 넣지 않아도 항상 포함됩니다.")
+    date_from: str = Field(description="조회 시작일 (YYYY-MM-DD)")
+    date_to: str = Field(description="조회 종료일 (YYYY-MM-DD)")
 
 
 def _structured_request_from_schedule_row(row: dict[str, Any]) -> StructuredRequest:
@@ -458,35 +458,25 @@ def week05_prompt_parts() -> list[str]:
         [5주차 agent 안내]
         - 이 agent는 Week 1~5 tool을 모두 사용할 수 있습니다. 이번 주차부터는 "나" 혼자만의 일정이 아니라
           철수, 영희 같은 외부 멤버의 예전 대화/일정과, 여러 사람이 같이 보는 공유 일정 저장소를 다룹니다.
+        - 각 tool이 무엇을 하고 어떤 인자를 받는지는 tool 정의(설명과 입력 스키마)를 그대로 따르세요.
+          아래는 어떤 상황에 어떤 tool을 고르고 어떤 순서로 이어 쓰는지에 대한 규칙입니다.
         - 개인 일정 tool(personal_list_saved_schedules, search_saved_requests 등, Week 1~4)은 "나"의 일정에만
-          씁니다. 요청에 외부 멤버 이름이 하나라도 나오면(예: "철수 일정", "영희랑 나랑") 반드시 아래 Week 5
+          씁니다. 요청에 외부 멤버 이름이 하나라도 나오면(예: "철수 일정", "영희랑 나랑") 반드시 Week 5
           MCP tool을 대신 쓰세요. 개인 tool로는 외부 멤버 정보를 절대 찾을 수 없습니다.
-        - search_previous_conversations(query, member_names, limit): 외부 멤버와 나눴던 예전 대화를
-          키워드로 찾습니다. query에는 사용자가 언급한 핵심 명사/구를 짧게 넣으세요.
-          예: "철수랑 API 연동 얘기했던 거 찾아줘" → query="API 연동", member_names=["철수"].
-        - load_conversation_messages(conversation_id): search_previous_conversations로 찾은 특정 대화의
-          전체 메시지(발신자/내용/시각)를 읽습니다. conversation_id는 검색 결과에서 그대로 가져오세요.
-          예: 검색 결과에 conversation_id="ext_cs"가 나오면 그 대화 원문이 궁금할 때 이 tool을 씁니다.
-        - extract_schedules_from_history(member_names, date_from, date_to): 외부 멤버의 예전 대화에서
-          일정/바쁜 시간 rows(member_name/title/date/start_time/end_time/notes)를 뽑습니다. 특정 멤버의
-          일정만 궁금할 때 바로 이 tool을 쓰세요.
-          예: "철수 7월 일정 알려줘" → member_names=["철수"], date_from="2026-07-01", date_to="2026-07-31".
-        - collect_member_schedules(member_names, date_from, date_to): 나의 일정과 여러 외부 멤버의
-          busy-time을 같은 구조의 rows로 한 번에 합쳐서 schedule_summary까지 반환합니다. "누구누구랑 나랑
-          언제 다 시간 되는지/바쁜지" 처럼 나와 외부 멤버를 같이 비교해야 하면 extract_schedules_from_history
-          대신 이 tool을 우선 쓰세요.
-          예: "철수랑 나랑 7월에 언제 둘 다 바쁜지 알려줘" → member_names=["철수"].
-        - list_shared_schedules(member_names, date_from, date_to, source_conversation_id, limit): 이미
-          등록된 공유 일정 저장소 row를 조회합니다. "공유 일정 목록/공유 캘린더 보여줘" 같은 요청에 씁니다.
-          필터를 안 주면 기본 공유 일정이 반환될 수 있다는 점을 참고하세요.
-        - create_shared_schedule(member_name, title, date, start_time, end_time, notes,
-          source_conversation_id, schedule_id): 회의/약속을 공유 일정 저장소에 등록하거나(같은 schedule_id면)
-          갱신합니다. "이거 공유 일정에 등록해줘/공유 캘린더에 올려줘" 요청에 씁니다.
-        - delete_shared_schedule(schedule_id, source_conversation_id): 공유 일정 저장소 row를 삭제합니다.
-          "그 공유 일정 취소해줘/삭제해줘" 요청에 씁니다. 가능하면 방금 만든 schedule_id를 그대로 넘기세요.
-        - 여러 tool을 이어서 써야 할 때가 많습니다: 먼저 search_previous_conversations로 관련 대화를 찾고,
-          필요하면 load_conversation_messages로 원문을 확인한 뒤, extract_schedules_from_history나
-          collect_member_schedules로 일정을 뽑는 순서를 기본으로 삼으세요.
+        - 외부 멤버 일정 요청은 "나"가 비교 대상인지로 tool을 고릅니다.
+          "나" 언급이 없으면(멤버가 몇 명이든) extract_schedules_from_history.
+          예: "철수 7월 일정", "철수랑 영희 일정".
+          "나"가 포함되면 collect_member_schedules.
+          예: "철수랑 나랑 7월에 언제 둘 다 바쁜지".
+        - 예전 대화 내용 자체를 찾아야 할 때만 search_previous_conversations를 씁니다.
+          예: "철수랑 API 연동 얘기했던 거 찾아줘".
+        - 이미 등록된 공유 일정 저장소를 확인하는 요청("공유 일정 목록 보여줘", "공유 캘린더 보여줘")에는
+          list_shared_schedules를 씁니다.
+        - 회의/약속을 공유 일정 저장소에 올리라는 요청에는 create_shared_schedule을, 취소/삭제 요청에는
+          delete_shared_schedule을 씁니다. 삭제할 때는 방금 등록한 일정의 schedule_id를 그대로 넘기세요.
+        - 여러 tool을 이어 써야 할 때 기본 순서: search_previous_conversations로 관련 대화를 찾고,
+          원문 확인이 필요하면 load_conversation_messages로 읽은 뒤, extract_schedules_from_history나
+          collect_member_schedules로 일정을 뽑습니다.
         - 이번 주차 범위는 외부 멤버 busy-time 조회와 공유 저장소 row 조회/등록/삭제까지입니다. 여러 사람의
           최종 회의 시간을 자동으로 골라주는 것은 다음 주차 범위이니 하지 않습니다.
         """,
