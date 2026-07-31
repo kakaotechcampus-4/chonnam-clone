@@ -324,19 +324,31 @@ def _collect_member_schedules(
     external_member_names = [name for name in normalized_members if name != PERSONAL_SHARED_MEMBER_NAME]
 
     external_rows: list[dict[str, Any]] = []
+    external_lookup_ok = True
+    external_lookup_error: str | None = None
     if external_member_names:
-        raw = call_mcp_tool_sync(
-            "extract_schedules_from_history",
-            {
-                "member_names": external_member_names,
-                "date_from": normalized_date_from,
-                "date_to": normalized_date_to,
-            },
-        )
-        external_rows = json.loads(raw).get("rows") or []
+        try:
+            raw = call_mcp_tool_sync(
+                "extract_schedules_from_history",
+                {
+                    "member_names": external_member_names,
+                    "date_from": normalized_date_from,
+                    "date_to": normalized_date_to,
+                },
+            )
+            external_rows = json.loads(raw).get("rows") or []
+        except Exception as exc:
+            external_lookup_ok = False
+            external_lookup_error = f"{type(exc).__name__}: {exc}"
 
     rows = [*my_rows, *external_rows]
-    return {"rows": rows, "schedule_summary": external_schedule_summary(rows)}
+    return {
+        "members": [PERSONAL_SHARED_MEMBER_NAME, *external_member_names],
+        "rows": rows,
+        "schedule_summary": external_schedule_summary(rows),
+        "external_lookup_ok": external_lookup_ok,
+        "external_lookup_error": external_lookup_error,
+    }
 
 
 @tool(args_schema=SearchPreviousConversationsInput)
@@ -475,7 +487,10 @@ def week05_prompt_parts() -> list[str]:
             "- 과거 대화 원문이 필요하면 search_previous_conversations로 먼저 찾고, "
             "conversation_id로 load_conversation_messages를 이어서 호출한다.\n"
             "- busy-time 답변은 rows/schedule_summary 근거로만 하고, "
-            "여러 사람의 최종 회의 시간 확정은 이번 주차 범위가 아니다."
+            "여러 사람의 최종 회의 시간 확정은 이번 주차 범위가 아니다.\n"
+            "- collect_member_schedules 결과의 external_lookup_ok가 false이면, "
+            "members에 있던 외부 멤버라도 rows에 없다고 해서 \"그 사람은 한가하다\"고 단정하지 않는다. "
+            "대신 외부 일정 조회에 실패했다고 알린다."
         ),
     ]
 
