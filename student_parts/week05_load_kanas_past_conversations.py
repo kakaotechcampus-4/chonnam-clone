@@ -14,6 +14,7 @@ from fixed.external_people_store import (
     external_schedule_summary,
     normalize_external_member_names,
     normalize_external_schedule_date_bounds,
+    PERSONAL_SHARED_MEMBER_NAME,
 )
 from fixed.llm import chat_model
 from fixed.mcp_client import (
@@ -180,25 +181,37 @@ call_mcp_tool_sync = call_local_mcp_tool_sync
 load_langchain_mcp_tools = load_local_mcp_tools
 load_langchain_mcp_tools_sync = load_local_mcp_tools_sync
 
+PERSONAL_SCHEDULE_LOOKUP_LIMIT = 200
+
 
 def _schedule_scope(schedule: dict[str, Any]) -> str:
     return str(schedule.get("session_id") or DEFAULT_SESSION_SCOPE)
 
 
-def _personal_schedules_for_current_scope() -> list[dict[str, Any]]:
+def _personal_schedules_for_current_scope(
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> list[dict[str, Any]]:
     """SQLite 저장 일정과 현재 대화의 임시 일정만 group 조율 후보로 사용합니다."""
 
     # TODO: SQLite 저장 일정과 현재 대화의 임시 일정을 합쳐 반환하세요.
     store = AppSQLiteStore(CONFIG.app_db_path)
-    sqlite_rows = store.list_schedules()
+    sqlite_rows = store.list_schedules(
+        limit=PERSONAL_SCHEDULE_LOOKUP_LIMIT, date_from=date_from, date_to=date_to
+    )
     scope = current_session_scope()
     new_set = set()
     for rows in sqlite_rows:
         new_set.add(rows["schedule_id"])
     new_lst = []
     for s in PERSONAL_SCHEDULES:
-        if _schedule_scope(s) == scope and s["id"] not in new_set:
-            new_lst.append(s)
+        if _schedule_scope(s) != scope or s["id"] in new_set:
+            continue
+        if date_from and s.get("date", "") < date_from:
+            continue
+        if date_to and s.get("date", "") > date_to:
+            continue
+        new_lst.append(s)
     return new_lst + sqlite_rows
 
 
@@ -301,7 +314,7 @@ def _collect_member_schedules(
         sr = _structured_request_from_schedule_row(row)
         my_rows.append(
             {
-                "member_name": "나",
+                "member_name": PERSONAL_SHARED_MEMBER_NAME,
                 "title": sr.title,
                 "date": sr.date,
                 "start_time": sr.start_time,
@@ -438,7 +451,7 @@ def collect_member_schedules(
     """내 일정과 다른 사람들의 일정을 MCP SQLite 기록에서 모읍니다."""
 
     # TODO: 내 일정과 외부 멤버 busy-time rows를 모아 JSON 문자열로 반환하세요.
-    personal_schedule = _personal_schedules_for_current_scope()
+    personal_schedule = _personal_schedules_for_current_scope(date_from, date_to)
     result = _collect_member_schedules(
         member_names=member_names,
         date_from=date_from,
