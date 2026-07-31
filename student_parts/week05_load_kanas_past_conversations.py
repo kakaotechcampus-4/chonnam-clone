@@ -331,7 +331,7 @@ def search_previous_conversations(
         "member_names": member_names,
         "limit": limit,
     })
-    return json_payload(result)
+    return result
 
 
 @tool(args_schema=LoadConversationMessagesInput)
@@ -351,7 +351,7 @@ def extract_schedules_from_history(member_names: list[str], date_from: str, date
         "date_from": date_from,
         "date_to": date_to,
     })
-    return json_payload({"busy_rows": busy_rows})
+    return busy_rows
 
 
 @tool(args_schema=CreateSharedScheduleInput)
@@ -377,7 +377,7 @@ def create_shared_schedule(
         "source_conversation_id": source_conversation_id,
         "schedule_id": schedule_id,
     })
-    return json_payload(result)
+    return result
 
 
 @tool(args_schema=DeleteSharedScheduleInput)
@@ -391,7 +391,7 @@ def delete_shared_schedule(
         "schedule_id": schedule_id,
         "source_conversation_id": source_conversation_id,
     })
-    return json_payload(result)
+    return result
 
 
 @tool(args_schema=ListSharedSchedulesInput)
@@ -411,7 +411,7 @@ def list_shared_schedules(
         "source_conversation_id": source_conversation_id,
         "limit": limit,
     })
-    return json_payload(result)
+    return result
 
 
 @tool(args_schema=CollectMemberSchedulesInput)
