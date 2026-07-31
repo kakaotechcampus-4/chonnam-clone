@@ -277,6 +277,78 @@
     ]
   },
   {
+    "id": "missing-date-range-external-lookup",
+    "description": "외부 멤버 일정 조회 요청에 날짜 범위가 없으면 임의로 날짜를 추측해 tool을 호출하지 않고 먼저 되물어야 한다.",
+    "week": 5,
+    "turns": [
+      {
+        "message": "철수 일정 좀 알려줘.",
+        "expect_tool_calls_exact": [],
+        "expect_no_tool_called": [
+          "search_previous_conversations",
+          "extract_schedules_from_history",
+          "load_conversation_messages",
+          "collect_member_schedules",
+          "list_shared_schedules"
+        ],
+        "expect_answer_contains_any": ["언제", "날짜", "기간", "부터", "며칠"]
+      }
+    ]
+  },
+  {
+    "id": "missing-member-name-external-lookup",
+    "description": "누구의 일정인지 멤버 이름이 없으면 임의로 멤버를 추측해 tool을 호출하지 않고 먼저 되물어야 한다.",
+    "week": 5,
+    "turns": [
+      {
+        "message": "2026년 7월 7일부터 17일까지 그 사람 바쁜 일정 좀 알려줘.",
+        "expect_tool_calls_exact": [],
+        "expect_no_tool_called": [
+          "search_previous_conversations",
+          "extract_schedules_from_history",
+          "load_conversation_messages",
+          "collect_member_schedules",
+          "list_shared_schedules"
+        ],
+        "expect_answer_contains_any": ["누구", "이름", "누구의", "어떤 분", "멤버"]
+      }
+    ]
+  },
+  {
+    "id": "missing-date-range-then-followup-provides-it",
+    "description": "날짜 없이 물은 뒤 다음 turn에서 날짜를 알려주면 그때는 정상적으로 search->extract 순서를 따라야 한다.",
+    "week": 5,
+    "turns": [
+      {
+        "message": "영희 일정 좀 알려줘.",
+        "expect_tool_calls_exact": [],
+        "expect_no_tool_called": [
+          "search_previous_conversations",
+          "extract_schedules_from_history",
+          "collect_member_schedules"
+        ]
+      },
+      {
+        "message": "2026년 7월 7일부터 17일까지야.",
+        "expect_tool_called": ["search_previous_conversations", "extract_schedules_from_history"],
+        "expect_tool_calls_exact": [
+          "search_previous_conversations",
+          "extract_schedules_from_history"
+        ],
+        "expect_tool_call_arguments": [
+          {
+            "tool_name": "extract_schedules_from_history",
+            "arguments": {
+              "member_names": ["영희"],
+              "date_from": "2026-07-07",
+              "date_to": "2026-07-17"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  {
     "id": "mixed-schedule-paraphrase-uses-collector",
     "description": "'내 캘린더도 포함'이라는 다른 표현의 혼합 요청도 collect_member_schedules 하나로 처리해야 한다.",
     "week": 5,

@@ -131,6 +131,9 @@ class Week05E2ERunnerTest(unittest.TestCase):
                 "external-only-with-personal-negation",
                 "personal-saved-schedule-stays-in-app",
                 "registered-shared-schedule-uses-shared-store",
+                "missing-date-range-external-lookup",
+                "missing-member-name-external-lookup",
+                "missing-date-range-then-followup-provides-it",
                 "mixed-schedule-paraphrase-uses-collector",
             },
         )
