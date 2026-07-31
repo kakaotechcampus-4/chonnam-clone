@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import json
+import tempfile
 import unittest
+from pathlib import Path
 from typing import Any
 from unittest.mock import PropertyMock, patch
 
+from fixed.app_store import AppSQLiteStore
 from fixed.config import CONFIG
 from fixed.session_scope import conversation_session_scope
+from fixed.week_agent_registry import stream_active_week_agent
 
 import student_parts.week05_load_kanas_past_conversations as week05
 
@@ -19,6 +23,24 @@ class ScheduleStoreFake:
     def list_schedules(self, **arguments: Any) -> list[dict[str, Any]]:
         self.list_calls.append(arguments)
         return self.rows
+
+
+class ToolCallMessageFake:
+    type = "ai"
+    content = ""
+    tool_calls = [
+        {
+            "name": "search_previous_conversations",
+            "args": {"query": "고객 인터뷰", "member_names": ["철수"], "limit": 5},
+            "id": "call-review-error",
+        }
+    ]
+
+
+class FailingStreamAgentFake:
+    def stream(self, *_args: Any, **_kwargs: Any) -> Any:
+        yield {"model": {"messages": [ToolCallMessageFake()]}}
+        raise RuntimeError("MCP unavailable")
 
 
 class PersonalScheduleCollectionTests(unittest.TestCase):
@@ -106,6 +128,83 @@ class PersonalScheduleCollectionTests(unittest.TestCase):
         self.assertEqual(request.kind, "personal_schedule")
         self.assertEqual(request.members, ["Mina"])
         self.assertEqual(request.original_text, "planning")
+
+    def test_group_schedule_row_preserves_its_kind(self) -> None:
+        request = week05._structured_request_from_schedule_row(
+            {
+                "request_kind": "group_schedule",
+                "title": "team planning",
+                "date": "2026-08-04",
+                "start_time": "14:00",
+                "end_time": "15:00",
+                "attendees": ["Mina"],
+            }
+        )
+
+        self.assertEqual(request.kind, "group_schedule")
+
+    def test_saved_personal_and_group_schedules_are_both_my_busy_time(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            store = AppSQLiteStore(Path(temp_dir) / "app.sqlite3")
+            with (
+                patch(
+                    "fixed.app_store.sync_personal_schedule_to_shared",
+                    return_value={"ok": True, "status": "synced"},
+                ),
+                patch(
+                    "fixed.app_store.sync_group_schedule_to_shared",
+                    return_value={"ok": True, "status": "synced"},
+                ),
+            ):
+                store.save_structured_request(
+                    {
+                        "kind": "personal_schedule",
+                        "title": "개인 운동",
+                        "date": "2026-08-04",
+                        "start_time": "09:00",
+                        "end_time": "10:00",
+                        "members": [],
+                    }
+                )
+                store.save_structured_request(
+                    {
+                        "kind": "group_schedule",
+                        "title": "그룹 회의",
+                        "date": "2026-08-04",
+                        "start_time": "14:00",
+                        "end_time": "15:00",
+                        "members": ["철수"],
+                    }
+                )
+
+            saved_schedules = store.list_schedules(limit=10)
+            self.assertEqual(
+                [row["request_kind"] for row in saved_schedules],
+                ["personal_schedule", "group_schedule"],
+            )
+
+            with (
+                patch.object(week05, "AppSQLiteStore", return_value=store),
+                patch.object(week05, "PERSONAL_SCHEDULES", []),
+                patch.object(week05, "call_mcp_tool_sync") as mcp_call,
+            ):
+                result = json.loads(
+                    week05.collect_member_schedules.invoke(
+                        {
+                            "member_names": [],
+                            "date_from": "2026-08-04",
+                            "date_to": "2026-08-04",
+                        }
+                    )
+                )
+
+        mcp_call.assert_not_called()
+        self.assertEqual(result["member_names"], [])
+        self.assertEqual(
+            [(row["member_name"], row["title"]) for row in result["rows"]],
+            [("나", "개인 운동"), ("나", "그룹 회의")],
+        )
+        self.assertTrue(all(row["notes"] == "내 일정" for row in result["rows"]))
 
 
 class HistoryMCPWrapperTests(unittest.TestCase):
@@ -210,6 +309,40 @@ class HistoryMCPWrapperTests(unittest.TestCase):
                 week05.search_previous_conversations.invoke(
                     {"query": "meeting", "member_names": None, "limit": 5}
                 )
+
+    def test_streaming_app_runtime_keeps_tool_call_and_error_in_trace(self) -> None:
+        with (
+            patch.object(
+                type(week05.CONFIG),
+                "has_openai_key",
+                new_callable=PropertyMock,
+                return_value=True,
+            ),
+            patch.object(
+                week05,
+                "build_week_agent",
+                return_value=FailingStreamAgentFake(),
+            ),
+        ):
+            events = list(
+                stream_active_week_agent(
+                    5,
+                    [{"role": "user", "content": "철수의 고객 인터뷰 대화를 찾아줘"}],
+                )
+            )
+
+        self.assertEqual(events[1].status_text, "현재 search_previous_conversations 실행 중")
+        result = events[-1].result
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertIn("Week 5 agent 실행 중 오류가 발생했습니다", result.answer)
+        self.assertIn("MCP unavailable", result.answer)
+        self.assertEqual(result.trace["error"], "MCP unavailable")
+        self.assertEqual(result.trace["error_type"], "RuntimeError")
+        self.assertEqual(
+            result.trace["events"][0]["tool_name"],
+            "search_previous_conversations",
+        )
 
 
 class SharedScheduleMCPWrapperTests(unittest.TestCase):
@@ -404,18 +537,16 @@ class MemberScheduleAggregationTests(unittest.TestCase):
             },
         ]
 
-        with patch.object(
-            week05,
-            "call_mcp_tool_sync",
-            return_value='{"ok": true, "rows": []}',
-        ):
+        with patch.object(week05, "call_mcp_tool_sync") as mcp_call:
             result = week05._collect_member_schedules(
-                member_names=[],
+                member_names=["  ", ""],
                 date_from="2026-07-29",
                 date_to="2026-08-02",
                 personal_schedules=personal_schedules,
             )
 
+        mcp_call.assert_not_called()
+        self.assertEqual(result["member_names"], [])
         self.assertEqual([row["title"] for row in result["rows"]], ["첫날", "마지막 날"])
 
     def test_malformed_external_payloads_are_not_treated_as_empty_results(self) -> None:
@@ -499,12 +630,14 @@ class Week05AgentTests(unittest.TestCase):
     def test_prompt_defines_source_routing_and_week06_boundary(self) -> None:
         prompt = week05.week05_system_prompt()
 
-        self.assertIn("누구의 기록인지로 구분", prompt)
+        self.assertIn("사용자가 명시한 데이터 출처를 우선", prompt)
         self.assertIn("사용자가 자신이 Nana 앱에서 전에 한 말", prompt)
         self.assertIn("search_conversation_messages", prompt)
         self.assertIn("철수, 영희처럼 이름이 지정된 다른 구성원", prompt)
         self.assertIn("search_previous_conversations", prompt)
         self.assertIn("search_conversation_messages를 사용하지 않는다", prompt)
+        self.assertIn("철수가 검색어로 포함됐더라도", prompt)
+        self.assertIn("명시된 출처가 사용자의 Nana 앱 대화", prompt)
         self.assertIn("문맥이 부족할 때만", prompt)
         self.assertIn("extract_schedules_from_history를 직접 호출", prompt)
         self.assertIn("collect_member_schedules만 호출", prompt)

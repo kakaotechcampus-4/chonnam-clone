@@ -285,8 +285,13 @@ class CollectMemberSchedulesInput(BaseModel):
 def _structured_request_from_schedule_row(row: dict[str, Any]) -> StructuredRequest:
     """앱 일정 row를 Week 2 StructuredRequest 기준으로 읽습니다."""
 
+    schedule_kind = (
+        "group_schedule"
+        if (row.get("request_kind") or row.get("kind")) == "group_schedule"
+        else "personal_schedule"
+    )
     return StructuredRequest(
-        kind="personal_schedule",
+        kind=schedule_kind,
         title=row.get("title"),
         date=row.get("date"),
         start_time=row.get("start_time"),
@@ -303,7 +308,11 @@ def _collect_member_schedules(
     date_to: str,
     personal_schedules: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """내 일정과 외부 멤버 일정을 같은 row 구조로 합칩니다."""
+    """유효 조회 조건을 공유해 내 일정과 외부 멤버 일정을 같은 row 구조로 합칩니다.
+
+    단일 MCP wrapper와 달리 이 composite helper는 로컬 날짜 필터와 반환 메타데이터도
+    책임지므로, 모든 출처가 같은 이름 및 날짜 조건을 사용하도록 먼저 정규화합니다.
+    """
 
     normalized_member_names = normalize_external_member_names(member_names)
     normalized_date_from, normalized_date_to = normalize_external_schedule_date_bounds(
@@ -324,6 +333,7 @@ def _collect_member_schedules(
             not schedule_date or schedule_date > normalized_date_to
         ):
             continue
+        # 그룹 일정도 앱 DB의 owner가 me이므로 나의 busy-time이다.
         personal_rows.append(
             {
                 "member_name": "나",
@@ -335,30 +345,33 @@ def _collect_member_schedules(
             }
         )
 
-    external_payload_text = call_mcp_tool_sync(
-        "extract_schedules_from_history",
-        {
-            "member_names": normalized_member_names,
-            "date_from": normalized_date_from,
-            "date_to": normalized_date_to,
-        },
-    )
-    try:
-        external_payload = json.loads(external_payload_text)
-    except (json.JSONDecodeError, TypeError) as exc:
-        raise RuntimeError(
-            "extract_schedules_from_history returned invalid JSON"
-        ) from exc
-    if not isinstance(external_payload, dict):
-        raise RuntimeError(
-            "extract_schedules_from_history returned a non-object payload"
+    external_source_rows: list[Any] = []
+    if normalized_member_names:
+        external_payload_text = call_mcp_tool_sync(
+            "extract_schedules_from_history",
+            {
+                "member_names": normalized_member_names,
+                "date_from": normalized_date_from,
+                "date_to": normalized_date_to,
+            },
         )
+        try:
+            external_payload = json.loads(external_payload_text)
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise RuntimeError(
+                "extract_schedules_from_history returned invalid JSON"
+            ) from exc
+        if not isinstance(external_payload, dict):
+            raise RuntimeError(
+                "extract_schedules_from_history returned a non-object payload"
+            )
 
-    external_source_rows = external_payload.get("rows")
-    if not isinstance(external_source_rows, list):
-        raise RuntimeError(
-            "extract_schedules_from_history returned a non-list rows field"
-        )
+        payload_rows = external_payload.get("rows")
+        if not isinstance(payload_rows, list):
+            raise RuntimeError(
+                "extract_schedules_from_history returned a non-list rows field"
+            )
+        external_source_rows = payload_rows
 
     external_rows: list[dict[str, Any]] = []
     for row in external_source_rows:
@@ -539,11 +552,13 @@ def week05_prompt_parts() -> list[str]:
         *week04_prompt_parts(),
         (
             "Week 5의 외부 구성원 대화 및 일정 조회 규칙은 이전 주차의 그룹 일정 조율 금지 규칙보다 우선한다. "
-            "도구는 '과거 대화'라는 표현만 보고 고르지 말고 누구의 기록인지로 구분한다. 사용자가 자신이 Nana 앱에서 "
+            "사람 이름이나 검색 키워드보다 사용자가 명시한 데이터 출처를 우선한다. 사용자가 자신이 Nana 앱에서 "
             "전에 한 말을 묻는 경우에만 search_conversation_messages를 사용한다. 철수, 영희처럼 이름이 지정된 "
-            "다른 구성원이 과거에 말한 내용을 묻는 경우에는 반드시 search_previous_conversations를 사용하고 "
+            "다른 구성원이 직접 말한 내용을 묻는 경우에는 반드시 search_previous_conversations를 사용하고 "
             "search_conversation_messages를 사용하지 않는다. 예를 들어 '철수가 이전 대화에서 고객 인터뷰에 대해 "
             "뭐라고 했어?'는 search_previous_conversations의 대상이다. "
+            "반대로 '내가 Nana와 나눈 대화 중에서 철수 얘기한 부분 찾아줘'는 철수가 검색어로 포함됐더라도 "
+            "명시된 출처가 사용자의 Nana 앱 대화이므로 search_conversation_messages의 대상이다. "
             "현재 대화에서 방금 제공된 내용은 검색하지 않고 현재 message history를 사용한다."
         ),
         (
