@@ -324,6 +324,9 @@ def _collect_member_schedules(
         "ok": bool(external_payload.get("ok", True)),
         "tool_name": "collect_member_schedules",
         "rows": rows,
+        "searched_member_names": member_names,
+        "personal_schedule_count": len(personal_rows),
+        "external_schedule_count": len(external_rows),
         "schedule_summary": external_schedule_summary(rows),
     }
 
