@@ -255,7 +255,7 @@ class Week05ScheduleCollectionTest(unittest.TestCase):
                     "date": "2026-07-08",
                     "start_time": "10:00",
                     "end_time": "11:00",
-                    "attendees": [],
+                    "attendees": ["영희", "민수"],
                 },
                 {
                     "schedule_id": "mine-out-of-range",
@@ -277,6 +277,7 @@ class Week05ScheduleCollectionTest(unittest.TestCase):
             },
         )
         self.assertEqual([row["member_name"] for row in result["rows"]], ["나", "철수"])
+        self.assertEqual(result["rows"][0]["members"], ["영희", "민수"])
         self.assertEqual(result["rows"][1]["source_conversation_id"], "ext_cs")
         self.assertIn("내 회의", result["schedule_summary"])
         self.assertIn("고객 인터뷰", result["schedule_summary"])

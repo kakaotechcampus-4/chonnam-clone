@@ -339,6 +339,7 @@ def _collect_member_schedules(
                 "date": request.date,
                 "start_time": request.start_time,
                 "end_time": request.end_time or "미정",
+                "members": request.members,
                 "notes": schedule.get("notes"),
             }
         )
