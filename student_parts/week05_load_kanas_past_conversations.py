@@ -56,7 +56,11 @@ WEEK05_SCHEDULE_COLLECTION_PROMPT = (
     "날짜 범위는 사용자가 기간을 지정한 경우에만 넣고, 지정하지 않았으면 date_from과 date_to를 비워 둔다. "
     "기간을 임의로 오늘 하루로 좁히면 등록된 row가 있어도 0건이 조회된다. "
     "여러 사람이 모두 가능한 최종 회의 시간을 확정하는 것은 이번 주차의 범위가 아니므로, "
-    "모은 일정을 근거로 바쁜 시간과 비어 있는 시간을 설명하는 데까지만 답한다."
+    "모은 일정을 근거로 바쁜 시간과 비어 있는 시간을 설명하는 데까지만 답한다. "
+    "종료 시간이 '미정'인 일정은 겹침 여부를 판단하지 말고, "
+    "빈 시간대를 제안하기 전에 사용자에게 종료 시간을 먼저 확인한다. "
+    "tool 결과에 errors 항목이 비어 있지 않으면 조회하지 못한 대상이 있다는 뜻이므로, "
+    "확보한 rows로 답하되 어떤 조회가 실패했는지 함께 알린다."
 )
 
 
@@ -221,6 +225,9 @@ load_langchain_mcp_tools_sync = load_local_mcp_tools_sync
 """
 APP_SCHEDULE_FETCH_LIMIT = 200
 
+# date, start_time, title이 모두 비어 있는 일정의 내용 키입니다.
+EMPTY_CONTENT_KEY = ("", "", "")
+
 
 def _schedule_scope(schedule: dict[str, Any]) -> str:
     return str(schedule.get("session_id") or DEFAULT_SESSION_SCOPE)
@@ -235,14 +242,44 @@ def _schedule_identifier(schedule: dict[str, Any]) -> str:
        앱 SQLite 일정 row는 schedule_id(예: sch_0d7edca91b)를 가지고,
        Week 1 임시 일정 row는 id(예: personal_ab12cd34ef)를 가진다.
 
-    2. 두 값의 형식이 겹치지 않는다.
-       임시 일정 id는 week01_wake_up_nana.py의 _new_personal_id()가 만드는
-       "personal_" 접두어 문자열이고, 앱 일정 id는 "sch_" 접두어 문자열이다.
-       따라서 이 함수로 만든 식별자 집합 비교는 같은 row가 두 목록에 동시에 들어간
-       경우만 걸러내고, 사용자가 같은 일정을 임시 저장과 DB 저장으로 각각 만든
-       경우(내용은 같고 id는 다른 경우)는 걸러내지 않는다.
+    2. 두 값이 같아지는 경로가 있다.
+       Week 3 저장 tool에 source_schedule_id를 넘기면 fixed/app_store.py:353의
+       schedule_id = source_schedule_id or new_id("sch")에 의해 앱 일정 row의
+       schedule_id가 임시 일정 id("personal_...")를 그대로 물려받는다.
+       이 경로로 저장된 일정은 이 함수의 식별자 비교만으로 중복이 판정된다.
+
+    3. 그 경로를 거치지 않으면 식별자가 달라진다.
+       source_schedule_id 없이 저장하면 앱 일정 id가 "sch_" 접두어로 새로 발급되어
+       임시 일정 id와 겹치지 않는다. 이 경우(내용은 같고 id는 다른 경우)는
+       _schedule_content_key()의 내용 기반 비교로 판정한다.
     """
     return str(schedule.get("schedule_id") or schedule.get("id") or "")
+
+
+def _schedule_content_key(schedule: dict[str, Any]) -> tuple[str, str, str]:
+    """내용이 같은 일정을 판정하기 위한 복합 키를 만듭니다."""
+
+    """식별자 비교에 더해 내용 비교를 두는 이유.
+
+    1. 식별자 비교가 닿지 않는 경로가 있다.
+       _schedule_identifier()의 3번 항목대로, source_schedule_id 없이 저장된 일정은
+       임시 일정과 id가 다르다. 사용자가 Week 1 tool로 임시 일정을 만들고 같은
+       대화에서 Week 3 tool로 다시 저장하면 내용이 같은 row가 두 번 들어간다.
+
+    2. 키는 date, start_time, title 세 값으로 만든다.
+       일정 조율의 판단 근거가 되는 값이고, 세 값이 모두 같으면 같은 일정으로
+       처리해도 바쁜 시간 계산 결과가 달라지지 않는다.
+       각 값은 앞뒤 공백을 제거해 비교한다.
+
+    3. 이 비교는 임시 일정에만 적용한다.
+       저장 일정끼리의 중복 제거는 Week 3 저장 tool의 범위이므로 여기서 하지 않는다.
+       앱 SQLite에 같은 내용의 저장 row가 여러 건 있으면 그대로 rows에 들어간다.
+    """
+    return (
+        str(schedule.get("date") or "").strip(),
+        str(schedule.get("start_time") or "").strip(),
+        str(schedule.get("title") or "").strip(),
+    )
 
 
 def _personal_schedules_for_current_scope() -> list[dict[str, Any]]:
@@ -260,14 +297,32 @@ def _personal_schedules_for_current_scope() -> list[dict[str, Any]]:
        전부 조회된다. 반면 임시 일정은 다른 대화에서 만든 값이 섞이면 안 되므로
        current_session_scope()와 같은 범위만 남긴다.
 
-    3. 처리 순서
+    3. 중복 판정을 식별자와 내용 두 기준으로 한다.
+       식별자 비교는 Week 3 저장 tool에 source_schedule_id를 넘긴 경로를 잡고,
+       내용 비교는 그 경로를 거치지 않아 id가 새로 발급된 경우를 잡는다.
+       두 기준의 근거는 각각 _schedule_identifier()와 _schedule_content_key()에 있다.
+
+    4. 처리 순서
        (1) 앱 SQLite에서 저장된 일정을 조회한다.
-       (2) 조회된 일정의 식별자 집합을 만든다.
-       (3) 임시 일정 중 현재 대화 범위이고 식별자가 (2)에 없는 항목만 고른다.
+       (2) 조회된 일정의 식별자 집합과 내용 키 집합을 만든다.
+       (3) 임시 일정 중 현재 대화 범위이고 두 집합 어디에도 없는 항목만 고른다.
        (4) 저장 일정 뒤에 임시 일정을 이어 붙여 반환한다.
     """
     saved_schedules = AppSQLiteStore(CONFIG.app_db_path).list_schedules(limit=APP_SCHEDULE_FETCH_LIMIT)
     saved_identifiers = {_schedule_identifier(schedule) for schedule in saved_schedules}
+
+    """내용 키 집합에서 EMPTY_CONTENT_KEY를 제외하는 이유.
+
+    date, start_time, title이 모두 비어 있는 저장 row가 하나라도 있으면
+    ("", "", "") 키가 집합에 들어가고, 같은 조건의 임시 일정이 전부 중복으로
+    판정된다. 세 값이 모두 비어 있으면 같은 일정인지 확인할 수 없으므로
+    이 키는 비교 대상에서 제외한다.
+    """
+    saved_content_keys = {
+        _schedule_content_key(schedule)
+        for schedule in saved_schedules
+        if _schedule_content_key(schedule) != EMPTY_CONTENT_KEY
+    }
 
     current_scope = current_session_scope()
     temporary_schedules = [
@@ -275,6 +330,7 @@ def _personal_schedules_for_current_scope() -> list[dict[str, Any]]:
         for schedule in PERSONAL_SCHEDULES
         if _schedule_scope(schedule) == current_scope
         and _schedule_identifier(schedule) not in saved_identifiers
+        and _schedule_content_key(schedule) not in saved_content_keys
     ]
     return [*saved_schedules, *temporary_schedules]
 
@@ -542,11 +598,29 @@ def _collect_member_schedules(
        MCP 호출 1회는 서버 subprocess를 새로 기동하므로 수 초가 걸린다.
        조회할 외부 멤버가 없으면 호출 자체를 건너뛴다.
 
-    4. 두 출처의 row를 같은 필드 구조로 맞춘다.
+    4. 내 일정을 외부 호출보다 먼저 계산한다.
        내 일정은 _personal_schedule_row로 변환하고 날짜 범위로 걸러낸다.
        외부 row는 store가 이미 같은 필드로 반환하므로 그대로 사용한다.
+       계산 순서를 이렇게 두면 외부 호출이 실패해도 personal_rows는 남는다.
 
-    5. 날짜, 시작 시간, 이름 순으로 정렬한다.
+    5. 외부 호출 실패를 이 함수 안에서 처리한다.
+       (1) 예외를 그대로 올리면 외부 멤버 조회 실패 하나가 내 일정 답변까지 막는다.
+           그래서 외부 호출 구간만 try로 감싸고, 실패해도 personal_rows로 답할 수
+           있게 한다.
+
+       (2) 실패를 숨기지 않는다. 반환 payload의 errors 항목에 tool 이름과 예외
+           정보를 담고, WEEK05_SCHEDULE_COLLECTION_PROMPT가 errors가 비어 있지
+           않으면 실패 사실을 함께 알리도록 지시한다.
+
+       (3) 잡는 예외 타입을 좁히지 않고 try 구간을 좁힌다.
+           call_local_mcp_tool_sync는 단일 예외 타입을 보장하지 않는다.
+           tool 이름 오류는 ValueError(fixed/mcp_client.py:112), subprocess 기동
+           실패는 OSError 계열, adapter 내부 실패는 또 다른 타입으로 올라오고,
+           _run_coroutine_sync가 별도 thread의 예외를 그대로 다시 발생시킨다.
+           타입으로 좁히면 통신 실패 일부가 빠지므로, try 안에 MCP 호출과 JSON
+           파싱 두 줄만 두어 구간으로 범위를 제한한다.
+
+    6. 날짜, 시작 시간, 이름 순으로 정렬한다.
        외부 store의 조회 순서와 같은 기준으로 맞춰, 두 출처를 합친 뒤에도
        읽는 순서가 일정하게 유지되도록 한다.
     """
@@ -561,25 +635,35 @@ def _collect_member_schedules(
         name for name in normalized_member_names if name != PERSONAL_SHARED_MEMBER_NAME
     ]
 
-    external_rows: list[dict[str, Any]] = []
-    if external_member_names:
-        external_payload = json.loads(
-            call_mcp_tool_sync(
-                "extract_schedules_from_history",
-                {
-                    "member_names": external_member_names,
-                    "date_from": normalized_date_from,
-                    "date_to": normalized_date_to,
-                },
-            )
-        )
-        external_rows = external_payload.get("rows") or []
-
     personal_rows = [
         _personal_schedule_row(schedule)
         for schedule in personal_schedules
         if _row_in_date_range(schedule.get("date"), normalized_date_from, normalized_date_to)
     ]
+
+    external_rows: list[dict[str, Any]] = []
+    errors: list[dict[str, str]] = []
+    if external_member_names:
+        try:
+            external_payload = json.loads(
+                call_mcp_tool_sync(
+                    "extract_schedules_from_history",
+                    {
+                        "member_names": external_member_names,
+                        "date_from": normalized_date_from,
+                        "date_to": normalized_date_to,
+                    },
+                )
+            )
+            external_rows = external_payload.get("rows") or []
+        except Exception as exc:
+            errors.append(
+                {
+                    "tool": "extract_schedules_from_history",
+                    "error_type": type(exc).__name__,
+                    "reason": str(exc),
+                }
+            )
 
     rows = [*personal_rows, *external_rows]
     rows.sort(
@@ -601,6 +685,7 @@ def _collect_member_schedules(
         "external_row_count": len(external_rows),
         "rows": rows,
         "schedule_summary": external_schedule_summary(rows),
+        "errors": errors,
     }
 
 
