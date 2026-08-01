@@ -63,6 +63,18 @@ WEEK05_SCHEDULE_COLLECTION_PROMPT = (
     "확보한 rows로 답하되 어떤 조회가 실패했는지 함께 알린다."
 )
 
+WEEK05_SHARED_SCHEDULE_WRITE_PROMPT = (
+    # 공유 일정 저장소에 직접 등록/삭제하는 tool의 사용 조건을 좁힌다.
+    "내 일정을 새로 만들거나 지우는 요청은 Week 3 앱 일정 tool로 처리한다. "
+    "앱 일정을 저장하거나 삭제하면 공유 일정 저장소의 내 복사본도 함께 처리되므로, "
+    "create_shared_schedule과 delete_shared_schedule을 따로 호출하지 않는다. "
+    "이 두 tool은 앱에 대응 일정이 없는 공유 저장소 일정을 직접 등록하거나 정리할 때만 쓴다. "
+    "delete_shared_schedule은 사용자가 삭제 대상을 지정한 경우에만 호출하고, "
+    "먼저 list_shared_schedules로 대상 schedule_id를 확인한다. "
+    "schedule_id와 source_conversation_id 중 확인된 값 하나만 넣는다. "
+    "두 값을 함께 넣으면 조건이 OR로 묶여 의도한 것보다 많은 일정이 삭제된다."
+)
+
 
 # [5주차 수강생 구현 가이드]
 #
@@ -530,11 +542,11 @@ def _collect_member_schedules(
 
 
       ┌──────────────────────────────────────────────┐
-      │ collect_member_schedules                     │  이 파일 734
+      │ collect_member_schedules                     │  이 파일 863
       └───────────────────────┬──────────────────────┘
                               ▼
       ┌──────────────────────────────────────────────┐
-      │ _personal_schedules_for_current_scope        │  이 파일 246
+      │ _personal_schedules_for_current_scope        │  이 파일 285
       └───────────────────────┬──────────────────────┘
                               ▼
                              ___
@@ -543,13 +555,13 @@ def _collect_member_schedules(
                               │
                               ▼
       ┌──────────────────────────────────────────────┐
-      │ _collect_member_schedules                    │  이 파일 420
+      │ _collect_member_schedules                    │  이 파일 511
       └──────┬────────────────────────────────┬──────┘
              │ 내 일정                          │ 외부 멤버 일정
              ▼                                ▼
       ┌────────────────────────┐       ┌──────────────────────────┐
-      │ _personal_schedule_row │ 388   │ call_mcp_tool_sync(      │
-      │ _row_in_date_range     │ 360   │  "extract_schedules_     │
+      │ _personal_schedule_row │ 479   │ call_mcp_tool_sync(      │
+      │ _row_in_date_range     │ 451   │  "extract_schedules_     │
       └──────────┬─────────────┘       │   from_history", args)   │
                  │                     └────────────┬─────────────┘
                  │                              .-~-▼-~-~-~-~-~-.
@@ -614,7 +626,7 @@ def _collect_member_schedules(
 
        (3) 잡는 예외 타입을 좁히지 않고 try 구간을 좁힌다.
            call_local_mcp_tool_sync는 단일 예외 타입을 보장하지 않는다.
-           tool 이름 오류는 ValueError(fixed/mcp_client.py:112), subprocess 기동
+           tool 이름 오류는 ValueError(fixed/mcp_client.py:113), subprocess 기동
            실패는 OSError 계열, adapter 내부 실패는 또 다른 타입으로 올라오고,
            _run_coroutine_sync가 별도 thread의 예외를 그대로 다시 발생시킨다.
            타입으로 좁히면 통신 실패 일부가 빠지므로, try 안에 MCP 호출과 JSON
@@ -794,8 +806,41 @@ def create_shared_schedule(
 ) -> str:
     """외부 MCP 공유 일정 저장소에 일정을 등록하거나 갱신합니다."""
 
-    # TODO: call_mcp_tool_sync("create_shared_schedule", args)로 공유 일정 row를 생성/갱신하세요.
-    ...
+    """인자를 그대로 넘기고 결과 문자열을 반환하는 이유.
+
+    1. store가 등록 직전에 값을 정리한다.
+       fixed/external_people_store.py:253-262가 member_name/title/notes에서 소괄호
+       내용을 제거하고, date에서 ISO datetime의 날짜 부분만 남기고, start_time과
+       end_time이 비어 있으면 "미정"을 채운다. wrapper에서 같은 처리를 하면 정리
+       지점이 두 곳으로 늘어난다.
+
+    2. schedule_id는 None을 그대로 넘긴다.
+       None이면 store가 new_id("shared")로 새 id를 발급하고(같은 파일 263행),
+       기존 id를 넘기면 ON CONFLICT(schedule_id) DO UPDATE로 같은 일정이 갱신된다
+       (278-285행). wrapper에서 id를 만들어 채우면 갱신 경로를 쓸 수 없다.
+
+    3. end_time 기본값 "미정"을 다른 값으로 바꾸지 않는다.
+       사용자가 종료 시간을 말하지 않은 일정은 "미정"으로 남긴다. 겹침 판정은
+       WEEK05_SCHEDULE_COLLECTION_PROMPT의 지시대로 사용자에게 확인한 뒤 한다.
+
+    4. source_conversation_id를 보존한다.
+       앱 개인 일정의 자동 동기화 복사본은 이 값에 "app:{request_id}"를 넣고
+       (fixed/external_mcp.py:50), 삭제할 때 같은 값으로 대상을 찾는다(126행).
+       직접 등록한 일정도 같은 규칙을 따를 수 있게 값을 그대로 전달한다.
+    """
+    return call_mcp_tool_sync(
+        "create_shared_schedule",
+        {
+            "member_name": member_name,
+            "title": title,
+            "date": date,
+            "start_time": start_time,
+            "end_time": end_time,
+            "notes": notes,
+            "source_conversation_id": source_conversation_id,
+            "schedule_id": schedule_id,
+        },
+    )
 
 
 @tool(args_schema=DeleteSharedScheduleInput)
@@ -803,10 +848,30 @@ def delete_shared_schedule(
     schedule_id: str | None = None,
     source_conversation_id: str | None = None,
 ) -> str:
-    """외부 MCP 공유 일정 저장소에서 일정을 삭제합니다."""
+    """외부 MCP 공유 일정 저장소에서 일정을 삭제합니다. schedule_id와 source_conversation_id 중 확인된 값 하나만 넣습니다."""
 
-    # TODO: call_mcp_tool_sync("delete_shared_schedule", args)로 공유 일정을 삭제하세요.
-    ...
+    """두 인자에 기본값을 채우지 않고 그대로 넘기는 이유.
+
+    1. 두 값이 모두 없으면 store가 아무 일정도 삭제하지 않는다.
+       fixed/external_people_store.py:318-319가 빈 목록을 반환하고 DELETE 문을
+       실행하지 않는다. wrapper에서 기본값을 채우면 이 조건이 동작하지 않는다.
+
+    2. 두 값을 함께 넘기면 삭제 범위가 넓어진다.
+       조회와 삭제의 조건이 AND가 아니라 OR로 연결되므로(같은 파일 335행, 340행),
+       schedule_id와 source_conversation_id 중 하나만 일치해도 삭제된다.
+       그래서 확인된 값 하나만 넣도록 WEEK05_SHARED_SCHEDULE_WRITE_PROMPT에 적었다.
+
+    3. 결과 문자열을 가공하지 않는다.
+       mcp_server/sqlite_mcp_server.py:124-132가 deleted_count와 삭제된 일정 목록을
+       담아 반환하므로, LLM이 몇 건이 삭제됐는지 답변 근거로 쓸 수 있다.
+    """
+    return call_mcp_tool_sync(
+        "delete_shared_schedule",
+        {
+            "schedule_id": schedule_id,
+            "source_conversation_id": source_conversation_id,
+        },
+    )
 
 
 @tool(args_schema=ListSharedSchedulesInput)
@@ -894,20 +959,20 @@ def collect_member_schedules(member_names: list[str], date_from: str, date_to: s
 def week05_tools() -> list[Any]:
     """4주차까지의 도구에 외부 SQLite/MCP 일정 도구를 누적한 목록입니다."""
 
-    """create_shared_schedule과 delete_shared_schedule을 목록에서 제외한 이유.
+    """create_shared_schedule과 delete_shared_schedule을 목록에 넣은 이유.
 
-    1. 두 tool은 추가 과제 대상이고 이번에는 구현하지 않았다.
-       두 함수는 파일에 정의되어 있지만 본문이 TODO 상태이므로 호출되면
-       None을 반환한다. LangChain tool은 문자열 반환을 기대하므로 목록에
-       남겨 두면 LLM이 선택했을 때 오류가 발생한다.
+    1. 두 tool의 본문을 구현했다.
+       추가 과제 대상이지만 call_mcp_tool_sync 호출로 구현해 문자열을 반환하므로,
+       문자열 반환을 요구하는 LangChain tool 목록에 넣어도 조건이 맞는다.
 
-    2. 목록에서 빼면 LLM에게 노출되지 않는다.
-       create_agent에 전달되는 tool 목록이 LLM이 선택할 수 있는 범위이므로,
-       목록에서 제외하는 것으로 호출 자체를 막을 수 있다.
+    2. 사용 조건은 코드가 아니라 prompt에서 좁힌다.
+       create_agent에 전달되는 tool 목록이 LLM이 선택할 수 있는 범위다. 두 tool을
+       목록에 넣은 뒤, 어떤 요청에서 호출해야 하는지는
+       WEEK05_SHARED_SCHEDULE_WRITE_PROMPT에 적었다.
 
-    3. 공유 저장소 조회는 메인과제 tool로 가능하다.
-       row를 등록·삭제하는 기능만 빠지고, list_shared_schedules로 저장소 상태를
-       확인하는 경로는 유지된다.
+    3. 조회 tool을 쓰기 tool보다 앞에 둔다.
+       삭제는 list_shared_schedules로 대상 schedule_id를 확인한 뒤 호출하는
+       순서이므로, 목록에서도 조회 tool을 먼저 둔다.
     """
     return [
         *week04_tools(),
@@ -916,6 +981,8 @@ def week05_tools() -> list[Any]:
         extract_schedules_from_history,
         list_shared_schedules,
         collect_member_schedules,
+        create_shared_schedule,
+        delete_shared_schedule,
     ]
 
 
@@ -928,12 +995,13 @@ def week05_system_prompt() -> str:
 def week05_prompt_parts() -> list[str]:
     """1~5주차 system prompt 조각을 누적합니다."""
 
-    """prompt 조각을 세 개로 나눈 이유.
+    """prompt 조각을 네 개로 나눈 이유.
 
-    1. 출처 구분과 호출 규칙을 분리했다.
+    1. 출처 구분과 호출 규칙, 쓰기 조건을 분리했다.
        WEEK05_EXTERNAL_HISTORY_PROMPT는 어떤 데이터가 외부 저장소에 있고 어떤
-       tool로 접근하는지를 정하고, WEEK05_SCHEDULE_COLLECTION_PROMPT는 여러 tool
-       중 무엇을 몇 번 호출할지를 정한다.
+       tool로 접근하는지를 정하고, WEEK05_SCHEDULE_COLLECTION_PROMPT는 조회 tool
+       중 무엇을 몇 번 호출할지를 정하고, WEEK05_SHARED_SCHEDULE_WRITE_PROMPT는
+       공유 저장소에 직접 등록·삭제하는 tool을 언제 쓰는지를 정한다.
 
     2. 마지막 조각에는 실행 시점 값이 들어간다.
        current_app_date_iso()는 호출 시점의 앱 기준 날짜를 반환하므로 상수로
@@ -947,6 +1015,7 @@ def week05_prompt_parts() -> list[str]:
         *week04_prompt_parts(),
         WEEK05_EXTERNAL_HISTORY_PROMPT,
         WEEK05_SCHEDULE_COLLECTION_PROMPT,
+        WEEK05_SHARED_SCHEDULE_WRITE_PROMPT,
         (
             f"오늘 날짜는 {current_app_date_iso()}이다. 이번 주(Week 5)의 범위는 "
             "외부 저장소에 있는 다른 사람의 이전 대화와 일정을 MCP tool로 불러오는 것이다. "
