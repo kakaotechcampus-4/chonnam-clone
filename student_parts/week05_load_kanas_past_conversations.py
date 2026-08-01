@@ -464,6 +464,9 @@ def week05_prompt_parts() -> list[str]:
         "필요하면 load_conversation_messages로 전체 메시지를 확인한다. "
         "외부 멤버의 바쁜 시간/일정만 필요하면 search_previous_conversations 없이 "
         "extract_schedules_from_history를 바로 호출한다. "
+        "'다들'/'다 같이'/'모두'처럼 특정 멤버 이름 없이 집합 표현으로만 busy-time을 물으면 "
+        "member_names에 그 집합 표현이나 임의값을 채워 extract_schedules_from_history/"
+        "collect_member_schedules를 호출하지 않는다. 어떤 멤버들인지 먼저 되묻는다. "
         "개인 저장 일정 조회/RAG는 이전 주차 도구를 그대로 쓰고, 외부 멤버 일정과 공유 일정 저장소 조회/등록/삭제는 "
         "이 주차의 MCP wrapper 도구(list_shared_schedules, collect_member_schedules, create_shared_schedule, "
         "delete_shared_schedule)를 사용한다.",
