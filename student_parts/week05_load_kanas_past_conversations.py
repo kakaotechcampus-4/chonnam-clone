@@ -11,6 +11,7 @@ from fixed.app_store import AppSQLiteStore
 from fixed.config import CONFIG
 from fixed.external_mcp import call_external_tool_payload
 from fixed.external_people_store import (
+    PERSONAL_SHARED_MEMBER_NAME,
     external_schedule_summary,
     normalize_external_member_names,
     normalize_external_schedule_date_bounds,
@@ -188,10 +189,17 @@ def _schedule_scope(schedule: dict[str, Any]) -> str:
 
 #     Week 3 이후 SQLite에 저장된 내 일정과 현재 대화에만 남아 있는 Week 1 임시 일정을 합칩니다.
 #     이미 SQLite에 저장된 일정과 임시 일정이 중복되지 않도록 schedule_id/id를 기준으로 한 번 걸러냅니다.
-def _personal_schedules_for_current_scope() -> list[dict[str, Any]]:
+def _personal_schedules_for_current_scope(
+    date_from: str,
+    date_to: str,
+) -> list[dict[str, Any]]:
     """SQLite 저장 일정과 현재 대화의 임시 일정만 group 조율 후보로 사용합니다."""
     # week 3 이후 sqlite에 저장된 내 일정
-    personal_schedules = AppSQLiteStore(CONFIG.app_db_path).list_schedules()
+    personal_schedules = AppSQLiteStore(CONFIG.app_db_path).list_schedules(
+        date_from=date_from,
+        date_to=date_to,
+        limit=100,
+    )
     saved_ids = {schedule.get("schedule_id") for schedule in personal_schedules}
 
     # 현재 대화에만 남아있는 week1 임시일정
@@ -297,7 +305,7 @@ def _collect_member_schedules(
 
     my_rows = [
         {
-            "member_name": "나",
+            "member_name": PERSONAL_SHARED_MEMBER_NAME,
             "title": schedule.get("title"),
             "date": schedule.get("date"),
             "start_time": schedule.get("start_time"),
@@ -324,8 +332,6 @@ def _collect_member_schedules(
         "rows": rows,
         "schedule_summary": external_schedule_summary(rows),
     }
-
-    # TODO: 내 SQLite/임시 일정과 외부 MCP 일정 rows를 같은 구조로 합치세요.
 
 
 @tool(args_schema=SearchPreviousConversationsInput)
@@ -381,8 +387,20 @@ def create_shared_schedule(
 ) -> str:
     """외부 MCP 공유 일정 저장소에 일정을 등록하거나 갱신합니다."""
 
-    # TODO: call_mcp_tool_sync("create_shared_schedule", args)로 공유 일정 row를 생성/갱신하세요.
-    ...
+    update = call_mcp_tool_sync(
+        "create_shared_schedule",
+        {
+            "member_name": member_name,
+            "title": title,
+            "date": date,
+            "start_time": start_time,
+            "end_time": end_time,
+            "notes": notes,
+            "source_conversation_id": source_conversation_id,
+            "schedule_id": schedule_id,
+        },
+    )
+    return update
 
 
 @tool(args_schema=DeleteSharedScheduleInput)
@@ -392,8 +410,14 @@ def delete_shared_schedule(
 ) -> str:
     """외부 MCP 공유 일정 저장소에서 일정을 삭제합니다."""
 
-    # TODO: call_mcp_tool_sync("delete_shared_schedule", args)로 공유 일정을 삭제하세요.
-    ...
+    delete = call_mcp_tool_sync(
+        "delete_shared_schedule",
+        {
+            "source_conversation_id": source_conversation_id,
+            "schedule_id": schedule_id,
+        },
+    )
+    return delete
 
 
 @tool(args_schema=ListSharedSchedulesInput)
@@ -426,7 +450,9 @@ def collect_member_schedules(
 ) -> str:
     """내 일정과 다른 사람들의 일정을 MCP SQLite 기록에서 모읍니다."""
 
-    personal_schedules = _personal_schedules_for_current_scope()
+    personal_schedules = _personal_schedules_for_current_scope(
+        date_from=date_from, date_to=date_to
+    )
     result = _collect_member_schedules(
         member_names=member_names,
         date_from=date_from,
@@ -446,6 +472,8 @@ def week05_tools() -> list[Any]:
         extract_schedules_from_history,
         list_shared_schedules,
         collect_member_schedules,
+        create_shared_schedule,
+        delete_shared_schedule,
     ]
 
 
@@ -479,6 +507,12 @@ def week05_prompt_parts() -> list[str]:
         """
         단, 여러 사람의 일정을 모아 실제 공통 가능 시간을 최종적으로 정하는 것은 이번 주차의 범위가 아니다.
         일정 정보를 조회하고 정리해서 보여주는 데까지만 담당한다.
+        """,
+        """
+        공유 일정 저장소에 새 일정을 등록하거나 기존 일정을 갱신해야 하면 create_shared_schedule을 사용해라.
+        나중에 같은 일정을 다시 찾아 수정하거나 지울 수 있도록 schedule_id 또는 source_conversation_id를
+        반드시 남겨라. 공유 일정을 지워야 하면 delete_shared_schedule을 schedule_id 또는
+        source_conversation_id로 호출해라.
         """,
     ]
 
