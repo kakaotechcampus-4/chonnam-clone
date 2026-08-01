@@ -205,7 +205,7 @@ def _personal_schedules_for_current_scope() -> list[dict[str, Any]]:
         
     scheduleIds = [row.get("schedule_id") for row in schedulesSql]
     for row in PERSONAL_SCHEDULES:
-        if row.get("id") not in scheduleIds and _schedule_scope(row)==_schedule_scope():
+        if row.get("id") not in scheduleIds and _schedule_scope(row)==current_session_scope():
             tmp = {}
             tmp['member_name'] = owner
             tmp['title'] = row.get("title")
