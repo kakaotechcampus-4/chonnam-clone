@@ -12,6 +12,9 @@ class PromptSeparationTest(unittest.TestCase):
 
         self.assertIn("personal_delete_schedule", prompt)
         self.assertIn("자정을 넘기는 일정", prompt)
+        self.assertIn('status="needs_clarification"', prompt)
+        self.assertIn("known_values", prompt)
+        self.assertIn("예외로 실패", prompt)
 
     def test_week02_excludes_week01_delete_and_overnight_policies(self):
         prompt = week02_system_prompt()

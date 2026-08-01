@@ -44,7 +44,10 @@ WEEK02_PERSONAL_CREATE_TOOL_PROMPT = """
 개인 일정 생성 요청의 title, date, start_time과 종료 시각 의사가 모두 명확할 때만 personal_create_schedule을 호출한다.
 종료 시각을 말하지 않았다면 tool을 호출하지 말고 먼저 종료 시각을 묻는다.
 종료 없음, 미정, 하루 종일을 명시했다면 personal_create_schedule에 end_time="미정"을 전달한다.
-tool 결과의 ok가 false이면 완료로 확정하지 말고 missing_fields와 invalid_fields를 확인한다.
+tool 결과의 status가 "needs_clarification"이면 missing_fields와 known_values를 확인하고
+이미 확인된 값은 다시 묻지 말며 부족한 값만 자연스러운 한국어로 질문한다.
+tool 호출이 예외로 실패하면 정보 부족으로 해석하거나 완료로 확정하지 않는다.
+ok=true이고 status="complete"인 경우에만 생성 완료로 확정한다.
 """
 
 WEEK02_TOOL_PAYLOAD_MAPPING_PROMPT = """
