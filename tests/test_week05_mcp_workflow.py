@@ -285,12 +285,10 @@ class Week05ScheduleCollectionTest(unittest.TestCase):
     @patch(
         "student_parts.week05_load_kanas_past_conversations.call_mcp_tool_sync"
     )
-    def test_collect_member_schedules_calls_mcp_even_with_empty_member_names(
+    def test_collect_member_schedules_skips_mcp_when_member_names_empty(
         self,
         call_mcp,
     ):
-        call_mcp.return_value = json.dumps({"ok": True, "rows": []})
-
         result = _collect_member_schedules(
             member_names=[],
             date_from="2026-07-07T00:00:00",
@@ -298,14 +296,24 @@ class Week05ScheduleCollectionTest(unittest.TestCase):
             personal_schedules=[],
         )
 
-        call_mcp.assert_called_once_with(
-            "extract_schedules_from_history",
-            {
-                "member_names": [],
-                "date_from": "2026-07-07",
-                "date_to": "2026-07-17",
-            },
+        call_mcp.assert_not_called()
+        self.assertEqual(result["rows"], [])
+
+    @patch(
+        "student_parts.week05_load_kanas_past_conversations.call_mcp_tool_sync"
+    )
+    def test_collect_member_schedules_skips_mcp_when_member_names_are_blank(
+        self,
+        call_mcp,
+    ):
+        result = _collect_member_schedules(
+            member_names=["  ", ""],
+            date_from="2026-07-07T00:00:00",
+            date_to="2026-07-17T23:59:59",
+            personal_schedules=[],
         )
+
+        call_mcp.assert_not_called()
         self.assertEqual(result["rows"], [])
 
 

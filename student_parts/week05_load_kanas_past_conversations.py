@@ -312,16 +312,19 @@ def _collect_member_schedules(
         date_from,
         date_to,
     )
-    external_payload_text = call_mcp_tool_sync(
-        "extract_schedules_from_history",
-        {
-            "member_names": normalized_member_names,
-            "date_from": normalized_date_from,
-            "date_to": normalized_date_to,
-        },
-    )
-    external_payload = json.loads(external_payload_text)
-    external_rows = external_payload.get("rows", [])
+    if normalized_member_names:
+        external_payload_text = call_mcp_tool_sync(
+            "extract_schedules_from_history",
+            {
+                "member_names": normalized_member_names,
+                "date_from": normalized_date_from,
+                "date_to": normalized_date_to,
+            },
+        )
+        external_payload = json.loads(external_payload_text)
+        external_rows = external_payload.get("rows", [])
+    else:
+        external_rows = []
 
     personal_rows: list[dict[str, Any]] = []
     for schedule in personal_schedules:
