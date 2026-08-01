@@ -190,12 +190,10 @@ def _schedule_scope(schedule: dict[str, Any]) -> str:
 def _personal_schedules_for_current_scope() -> list[dict[str, Any]]:
     """SQLite 저장 일정과 현재 대화의 임시 일정만 group 조율 후보로 사용합니다."""
 
-    # 기본 limit 12로는 조율 대상 일정이 잘린다. 넓게 가져오고 날짜로 거르는 일은
-    # _collect_member_schedules가 맡는다.
-    # list_schedules의 SQL 날짜 필터는 일부러 안 쓴다 — 임시분은 SQL을 안 타므로 날짜 의미가 두 층이 된다.
+    # 기본 limit 12로는 조율 대상 일정이 잘린다. SQL 날짜 필터는 일부러 안 쓴다 — 아래 임시분이
+    # SQL을 안 타 날짜 의미가 두 층이 되므로, 날짜 거르기는 _collect_member_schedules가 맡는다.
     stored = AppSQLiteStore(CONFIG.app_db_path).list_schedules(limit=200)
-    # 키는 출처당 하나다 — 저장분은 schedule_id, 임시분은 id. week03이 저장할 때 임시 id를
-    # source_schedule_id로 넘겨 schedule_id에 물려주므로(app_store.py:353) 두 키가 맞물린다.
+    # 저장분 schedule_id와 임시분 id가 맞물린다 — week03이 임시 id를 물려준다(app_store.py:353).
     stored_ids = {str(row["schedule_id"]) for row in stored if row.get("schedule_id")}
     scope = current_session_scope()
     pending = [
