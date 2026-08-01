@@ -36,6 +36,7 @@ from student_parts.prompts.week01 import (
     WEEK01_TOOL_SELECTION_PROMPT,
 )
 from student_parts.schedule_clarification import (
+    ScheduleInputValidationError,
     is_valid_date as _is_valid_date,
     is_valid_time as _is_valid_time,
     validate_schedule_input as _validate_schedule_input,
@@ -70,10 +71,10 @@ def _current_session_schedules() -> list[dict[str, Any]]:
 
 @tool
 def personal_create_schedule(
-    title: str,
-    date: str,
-    start_time: str,
-    end_time: str,
+    title: str | None = None,
+    date: str | None = None,
+    start_time: str | None = None,
+    end_time: str | None = None,
     end_date: str | None = None,
     attendees: list[str] | None = None,
 ) -> str:
@@ -86,17 +87,31 @@ def personal_create_schedule(
     """
 
     validation = _validate_schedule_input(title, date, start_time, end_time, end_date)
-    if not validation["valid"]:
+    if validation["invalid_fields"]:
+        raise ScheduleInputValidationError(validation["invalid_fields"])
+    if validation["missing_fields"]:
         return _json(
             {
                 "ok": False,
+                "status": "needs_clarification",
                 "tool_name": "personal_create_schedule",
-                "error": "invalid_input",
+                "error": "insufficient_information",
                 "missing_fields": validation["missing_fields"],
-                "invalid_fields": validation["invalid_fields"],
+                "known_values": {
+                    "title": title,
+                    "date": date,
+                    "start_time": start_time,
+                    "end_time": end_time,
+                    "end_date": end_date,
+                    "attendees": list(attendees or []),
+                },
             }
         )
 
+    assert title is not None
+    assert date is not None
+    assert start_time is not None
+    assert end_time is not None
     schedule = {
         "id": _new_personal_id(),
         "title": title.strip(),
@@ -112,6 +127,7 @@ def personal_create_schedule(
     return _json(
         {
             "ok": True,
+            "status": "complete",
             "tool_name": "personal_create_schedule",
             "created_schedule": schedule,
         }
