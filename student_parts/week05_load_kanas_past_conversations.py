@@ -195,7 +195,7 @@ def _personal_schedules_for_current_scope() -> list[dict[str, Any]]:
     rows=[]
     for row in schedulesSql: 
         tmp = {}
-        tmp['member_name'] = row.get("member_name")
+        tmp['member_name'] = row.get("owner")
         tmp['title'] = row.get("title")
         tmp['date'] = row.get("date")
         tmp['start_time'] = row.get("start_time")
@@ -308,7 +308,7 @@ def _collect_member_schedules(
 
     # TODO: 내 SQLite/임시 일정과 외부 MCP 일정 rows를 같은 구조로 합치세요.
     date = normalize_external_schedule_date_bounds(member_names,date_from,date_to)
-    args = {"member_names":normalize_external_member_names(member_names),
+    args = {"member_names":[name for name in normalize_external_member_names(member_names) if name not in ['나','me']],
             "date_from":date[0], "date_to":date[1]}
     result = json.loads(call_mcp_tool_sync("extract_schedules_from_history", args))
     rows_raw = result.get("rows",[])
@@ -322,7 +322,14 @@ def _collect_member_schedules(
         tmp['end_time'] = row.get("end_time")
         tmp['notes'] = row.get("notes")
         rows.append(tmp)
-    rows.extend(personal_schedules)
+    for row in personal_schedules:
+        row_date = row.get("date")
+
+        if date[0] and row_date and row_date < date[0]:
+            continue
+        if date[1] and row_date and row_date > date[1]:
+            continue
+        rows.append(row)
     schedule_summary = external_schedule_summary(rows) or result.get("schedule_summary","")
     return {"ok":True,"tool_name":"collect_member_schedules","rows":rows,"schedule_summary":schedule_summary}
 
