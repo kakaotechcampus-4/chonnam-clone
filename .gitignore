@@ -30,3 +30,9 @@ student_parts/week06_kanamate_decides_schedule.py
 
 # 개인 작업 지침 (팀 공유 안 함)
 CLAUDE.md
+
+# 개인 검증용 테스트 코드 (리뷰 대상 아님, 로컬에서만 실행)
+tests/
+
+# 개인 확인용 실행 trace 기록 (리뷰 대상 아님)
+docs/pr-evidence/week05/answer*.md
