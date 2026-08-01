@@ -31,6 +31,7 @@ from student_parts.week04_retrieve_nanas_memory import week04_prompt_parts, week
 
 
 _WEEK05_AGENT: Any | None = None
+_PERSONAL_SCHEDULE_LOOKUP_LIMIT = 200
 
 
 # [5주차 수강생 구현 가이드]
@@ -199,7 +200,7 @@ def _personal_schedules_for_current_scope(
         date_to or "",
     )
     stored_schedules = AppSQLiteStore(CONFIG.app_db_path).list_schedules(
-        limit=200,
+        limit=_PERSONAL_SCHEDULE_LOOKUP_LIMIT,
         date_from=normalized_date_from or None,
         date_to=normalized_date_to or None,
     )
@@ -257,21 +258,33 @@ class ExtractSchedulesFromHistoryInput(BaseModel):
 class CreateSharedScheduleInput(BaseModel):
     """공유 일정 생성 입력입니다."""
 
-    member_name: str
-    title: str
-    date: str
-    start_time: str
-    end_time: str = "미정"
-    notes: str | None = None
-    source_conversation_id: str | None = None
-    schedule_id: str | None = None
+    member_name: str = Field(description="외부 공유 일정의 소유 팀원 이름")
+    title: str = Field(description="외부 공유 일정 제목")
+    date: str = Field(description="외부 공유 일정 ISO 날짜(YYYY-MM-DD)")
+    start_time: str = Field(description="외부 공유 일정 시작 시간(HH:MM)")
+    end_time: str = Field(default="미정", description="외부 공유 일정 종료 시간(HH:MM)")
+    notes: str | None = Field(default=None, description="공유 일정에 남길 선택 메모")
+    source_conversation_id: str | None = Field(
+        default=None,
+        description="생성 출처를 추적하거나 관련 rows를 함께 찾을 때 사용할 선택 식별자",
+    )
+    schedule_id: str | None = Field(
+        default=None,
+        description="새 일정이면 생략하고 기존 공유 일정을 갱신할 때는 조회한 ID를 전달",
+    )
 
 
 class DeleteSharedScheduleInput(BaseModel):
     """공유 일정 삭제 입력입니다."""
 
-    schedule_id: str | None = None
-    source_conversation_id: str | None = None
+    schedule_id: str | None = Field(
+        default=None,
+        description="삭제할 공유 일정의 조회된 ID",
+    )
+    source_conversation_id: str | None = Field(
+        default=None,
+        description="같은 생성 출처에 연결된 공유 rows를 삭제할 때 사용할 선택 식별자",
+    )
 
 
 class ListSharedSchedulesInput(BaseModel):
@@ -334,6 +347,8 @@ def _collect_member_schedules(
         request = _structured_request_from_schedule_row(schedule)
         if not request.date:
             continue
+        # SQLite rows는 조회 단계에서 좁혀지지만 현재 scope의 임시 rows와 직접 호출 입력은
+        # 필터되지 않을 수 있으므로 통합 helper의 날짜 계약을 여기서 최종 보장합니다.
         if normalized_date_from and request.date < normalized_date_from:
             continue
         if normalized_date_to and request.date > normalized_date_to:
@@ -428,10 +443,21 @@ def create_shared_schedule(
     source_conversation_id: str | None = None,
     schedule_id: str | None = None,
 ) -> str:
-    """외부 MCP 공유 일정 저장소에 일정을 등록하거나 갱신합니다."""
+    """사용자가 외부 MCP 공유 저장소를 직접 지정했을 때 일정을 등록하거나 같은 ID를 갱신합니다."""
 
-    # TODO: call_mcp_tool_sync("create_shared_schedule", args)로 공유 일정 row를 생성/갱신하세요.
-    ...
+    return call_mcp_tool_sync(
+        "create_shared_schedule",
+        {
+            "member_name": member_name,
+            "title": title,
+            "date": date,
+            "start_time": start_time,
+            "end_time": end_time,
+            "notes": notes,
+            "source_conversation_id": source_conversation_id,
+            "schedule_id": schedule_id,
+        },
+    )
 
 
 @tool(args_schema=DeleteSharedScheduleInput)
@@ -439,10 +465,15 @@ def delete_shared_schedule(
     schedule_id: str | None = None,
     source_conversation_id: str | None = None,
 ) -> str:
-    """외부 MCP 공유 일정 저장소에서 일정을 삭제합니다."""
+    """조회로 대상을 특정한 뒤 외부 MCP 공유 저장소에서 ID가 일치하는 일정을 삭제합니다."""
 
-    # TODO: call_mcp_tool_sync("delete_shared_schedule", args)로 공유 일정을 삭제하세요.
-    ...
+    return call_mcp_tool_sync(
+        "delete_shared_schedule",
+        {
+            "schedule_id": schedule_id,
+            "source_conversation_id": source_conversation_id,
+        },
+    )
 
 
 @tool(args_schema=ListSharedSchedulesInput)
@@ -493,6 +524,8 @@ def week05_tools() -> list[Any]:
         search_previous_conversations,
         load_conversation_messages,
         extract_schedules_from_history,
+        create_shared_schedule,
+        delete_shared_schedule,
         list_shared_schedules,
         collect_member_schedules,
     ]
@@ -534,8 +567,16 @@ def week05_prompt_parts() -> list[str]:
             "Week 5 외부 대화·일정 조회에서는 tool 결과의 rows와 schedule_summary를 근거로 답한다. "
             "이전 주차 tool은 각 tool이 반환하는 reference, hits, schedules, rows 등의 계약을 그대로 따른다. "
             "조회 결과가 비어 있으면 일정이나 대화를 추측하지 않는다. "
-            "Week 5에서는 공유 일정 row를 직접 생성하거나 삭제하지 않고, 여러 사람의 공통 가능 시간이나 "
-            "최종 회의 시간을 계산·확정하지 않는다."
+            "여러 사람의 공통 가능 시간이나 최종 회의 시간을 계산·확정하지 않는다."
+        ),
+        (
+            "사용자가 외부 MCP 공유 일정 저장소에 직접 등록해 달라고 명시한 경우에만 "
+            "create_shared_schedule을 사용한다. 내 개인 일정 저장 요청에는 이전 주차 개인 일정 저장 tool을 사용한다. "
+            "기존 공유 일정을 갱신하거나 삭제하려면 먼저 list_shared_schedules로 후보와 schedule_id를 확인한다. "
+            "후보가 여러 개면 사용자의 선택을 받고, 대상이 하나로 확정된 경우에만 같은 schedule_id로 "
+            "create_shared_schedule을 호출하거나 delete_shared_schedule로 삭제한다. 삭제 식별자가 없으면 "
+            "delete_shared_schedule을 호출하지 말고 어떤 일정을 삭제할지 질문한다. 생성·갱신 결과는 "
+            "shared_schedule, 삭제 결과는 deleted_count와 deleted를 근거로 답하며 빈 결과를 성공으로 추측하지 않는다."
         ),
     ]
 

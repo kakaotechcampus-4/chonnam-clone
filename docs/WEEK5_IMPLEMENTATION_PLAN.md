@@ -2,8 +2,9 @@
 
 > 대상 파일: `student_parts/week05_load_kanas_past_conversations.py`
 >
-> 이 문서는 구현 전 계획서다. **Week 5 메인 과제만 구현**하며, 추가 과제인
-> `create_shared_schedule`과 `delete_shared_schedule` wrapper는 구현하지 않는다.
+> 이 문서는 Week 5 메인 과제와 후속 추가 과제의 구현 계획서다. 최초 구현에서는 메인 과제만
+> 완료했고, 리뷰 대응 단계에서 추가 과제인 `create_shared_schedule`과
+> `delete_shared_schedule` wrapper까지 확장한다.
 > `student_parts_baseline/week04_retrieve_nanas_memory.py`와 `fixed/`,
 > `mcp_server/` 아래의 제공 코드는 참고만 하고 수정하지 않는다.
 >
@@ -47,7 +48,8 @@ Week 5에서는 외부 SQLite/MCP 서버에 저장된 Kana의 이전 대화와 �
    이미 SQLite에 저장된 임시 일정은 ID 기준으로 중복 제거한다.
 5. **모든 일정 row를 같은 모양으로 맞춘다.**
    `member_name/title/date/start_time/end_time/notes` 필드를 유지한다.
-6. **미구현 tool을 agent에 노출하지 않는다.** 추가 과제 wrapper는 `week05_tools()`에서 제외한다.
+6. **구현 단계에 맞는 tool만 agent에 노출한다.** 최초 구현에서는 미완성 추가 과제 wrapper를
+   `week05_tools()`에서 제외하고, 후속 구현과 검증을 마친 뒤 두 tool을 노출한다.
 7. **Week 6 책임을 앞당기지 않는다.** 이번 주차는 busy-time 수집까지 수행하고,
    여러 사람의 최종 회의 시간 선택이나 공통 빈 시간 계산은 구현하지 않는다.
 
@@ -77,7 +79,7 @@ Week 5에서는 외부 SQLite/MCP 서버에 저장된 Kana의 이전 대화와 �
 - Week 5 tool 선택 규칙 추가
   - `week05_prompt_parts`
 
-### 1.2 이번 구현에서 제외
+### 1.2 최초 구현에서 제외하고 후속 단계로 이동
 
 - `create_shared_schedule`
 - `delete_shared_schedule`
@@ -87,10 +89,11 @@ Week 5에서는 외부 SQLite/MCP 서버에 저장된 Kana의 이전 대화와 �
 - `fixed/` 또는 `mcp_server/` 제공 코드 수정
 - `student_parts_baseline/` 정답 파일 수정
 
-추가 과제 함수와 입력 스키마는 starter 코드에 그대로 둘 수 있지만 구현하지 않는다.
+최초 구현에서는 추가 과제 함수와 입력 스키마를 starter 코드에 그대로 두고 구현하지 않는다.
 미완성 함수가 실행 중 선택되지 않도록 `create_shared_schedule`과
-`delete_shared_schedule`은 `week05_tools()`에서 반드시 제거한다. Week 5 prompt에도
-공유 일정 생성·삭제를 지시하는 문구를 넣지 않는다.
+`delete_shared_schedule`은 `week05_tools()`에서 제거하고, Week 5 prompt에도 공유 일정
+생성·삭제를 지시하는 문구를 넣지 않는다. 후속 단계에서 두 wrapper를 구현하고 tool 목록과
+prompt를 함께 확장하는 계획은 이 문서의 7절에서 다룬다.
 
 ---
 
@@ -342,7 +345,7 @@ store/MCP 경계에서 이미 수행되므로 중복 변환하지 않는다.
 
 #### `week05_tools`
 
-`week04_tools()` 위에 아래 메인 과제 tool만 누적한다.
+최초 구현에서는 `week04_tools()` 위에 아래 메인 과제 tool만 누적한다.
 
 ```text
 search_previous_conversations
@@ -352,7 +355,8 @@ list_shared_schedules
 collect_member_schedules
 ```
 
-다음 추가 과제 tool은 제외한다.
+최초 구현에서는 다음 추가 과제 tool을 제외한다. 후속 단계에서는 구현과 검증을 마친 뒤 다시
+포함한다.
 
 ```text
 create_shared_schedule
@@ -381,7 +385,7 @@ delete_shared_schedule
 - tool 결과가 비어 있으면 대화나 일정이 있다고 추측하지 않는다.
 - `rows`와 `schedule_summary`를 근거로 답하고, 조회되지 않은 시간은 임의로 만들지 않는다.
 - Week 5에서는 최종 회의 시간이나 공통 빈 시간을 계산·확정하지 않는다.
-- 공유 일정 직접 생성·삭제 tool은 사용하지 않는다.
+- 최초 구현에서는 공유 일정 직접 생성·삭제 tool을 사용하지 않는다.
 
 ---
 
@@ -510,8 +514,244 @@ helper, wrapper, MCP fixture 수준의 결정론적 검증은 완료한다.
 - 모든 통합 row에 `member_name/title/date/start_time/end_time/notes`가 있다.
 - 외부 MCP의 `rows`, `schedule_summary`, 메시지 순서가 불필요하게 변형되지 않는다.
 - Week 1~4 tool과 prompt가 유지된 상태로 Week 5 기능이 누적된다.
-- 추가 과제인 `create_shared_schedule`과 `delete_shared_schedule`은 구현하지 않고
-  agent tool 목록에서도 제외된다.
+- 최초 구현에서는 추가 과제인 `create_shared_schedule`과 `delete_shared_schedule`을
+  구현하지 않고 agent tool 목록에서도 제외한다.
 - `fixed/`, `mcp_server/`, `student_parts_baseline/` 제공 파일을 수정하지 않는다.
 - 정적 검증, 결정론적 helper/wrapper 검증, 실제 MCP fixture 검증이 통과한다.
 - 가능한 환경에서는 Week 5 agent trace까지 확인한다.
+
+---
+
+## 7. 후속 추가 과제 구현 계획
+
+### 7.1 변경 범위
+
+추가 과제는 리뷰 대응 단계에서 현재 `junyoung/week5` 작업에 이어서 구현한다.
+
+1. 제품 구현 코드는 `student_parts/week05_load_kanas_past_conversations.py`에 한정한다.
+2. 리뷰 대응 수정과 추가 과제 구현이 기존 메인 과제 동작을 깨지 않는지 함께 검증한다.
+3. 구현 계획 문서에는 후속 범위와 검증 기준을 기록한다.
+4. 리뷰 답변 초안은 로컬 전용 문서로 유지해 커밋 대상에서 제외한다.
+
+제공 코드인 `fixed/`, `mcp_server/`, `student_parts_baseline/`은 계약 확인에만 사용하고
+수정하지 않는다.
+
+### 7.2 구현 대상
+
+- `create_shared_schedule`
+- `delete_shared_schedule`
+- `week05_tools()`에 두 tool 추가
+- `week05_prompt_parts()`에 공유 일정 직접 생성·갱신·삭제 규칙 추가
+- 생성·삭제 입력 schema의 `Field(description=...)` 보강
+
+### 7.3 제공 MCP 계약
+
+#### `create_shared_schedule`
+
+입력:
+
+- `member_name: str`
+- `title: str`
+- `date: str`
+- `start_time: str`
+- `end_time: str = "미정"`
+- `notes: str | None`
+- `source_conversation_id: str | None`
+- `schedule_id: str | None`
+
+동작과 반환:
+
+- `schedule_id`가 없으면 새 공유 일정 row를 만든다.
+- 기존 `schedule_id`를 전달하면 같은 row를 갱신한다.
+- 반환 JSON의 핵심 필드는 `ok`, `tool_name`, `shared_schedule`이다.
+- `shared_schedule.sync_status`는 `created` 또는 `updated`다.
+
+#### `delete_shared_schedule`
+
+입력:
+
+- `schedule_id: str | None`
+- `source_conversation_id: str | None`
+
+동작과 반환:
+
+- 전달된 식별자와 일치하는 공유 일정 row를 삭제한다.
+- 식별자가 모두 없으면 전체 삭제하지 않고 빈 삭제 결과를 반환한다.
+- 반환 JSON의 핵심 필드는 `ok`, `tool_name`, `deleted_count`, `deleted`다.
+
+### 7.4 생성 wrapper 구현
+
+학생 wrapper는 직접 SQL이나 정규화를 추가하지 않고 MCP 결과 문자열을 그대로 반환한다.
+
+```python
+return call_mcp_tool_sync(
+    "create_shared_schedule",
+    {
+        "member_name": member_name,
+        "title": title,
+        "date": date,
+        "start_time": start_time,
+        "end_time": end_time,
+        "notes": notes,
+        "source_conversation_id": source_conversation_id,
+        "schedule_id": schedule_id,
+    },
+)
+```
+
+wrapper에서 `None` 필드를 임의로 제거하거나 새로운 기본값을 만들지 않는다. 입력 schema와
+MCP 서버의 기본 계약을 유지한다.
+
+### 7.5 삭제 wrapper 구현
+
+두 선택 식별자를 그대로 MCP에 전달한다.
+
+```python
+return call_mcp_tool_sync(
+    "delete_shared_schedule",
+    {
+        "schedule_id": schedule_id,
+        "source_conversation_id": source_conversation_id,
+    },
+)
+```
+
+식별자가 모두 없을 때 wrapper가 전체 삭제나 임의 추론을 수행하지 않는다. MCP의
+`deleted_count=0`, `deleted=[]` 계약을 따른다.
+
+### 7.6 agent tool 목록 확장
+
+구현과 직접 호출 검증을 마친 뒤 `week05_tools()`에 두 tool을 포함한다.
+
+```text
+create_shared_schedule
+delete_shared_schedule
+```
+
+각 tool은 한 번만 포함하고 Week 1~4 및 Week 5 메인 tool의 기존 노출을 유지한다.
+
+### 7.7 prompt와 schema 규칙
+
+agent가 앱 개인 일정과 외부 공유 저장소를 혼동하지 않도록 다음 규칙을 추가한다.
+
+- 외부 공유 일정 저장소에 직접 등록해 달라는 요청에만 `create_shared_schedule`을 사용한다.
+- 앱의 내 일정 저장 요청에는 이전 주차의 개인 일정 저장 tool을 사용한다.
+- 기존 공유 일정을 갱신할 때는 먼저 `list_shared_schedules`로 후보와 `schedule_id`를 확인한다.
+- 후보가 하나로 확정되면 같은 `schedule_id`로 `create_shared_schedule`을 호출한다.
+- 삭제도 먼저 `list_shared_schedules`로 대상을 확인한다.
+- 후보가 여러 개면 사용자의 선택을 받고, 하나로 확정된 뒤 삭제한다.
+- 식별자가 없거나 삭제 결과가 비어 있으면 성공했다고 추측하지 않는다.
+- 생성·갱신은 `shared_schedule`, 삭제는 `deleted_count`와 `deleted`를 근거로 답한다.
+
+`CreateSharedScheduleInput`에는 직접 공유 저장소용 입력임을 설명하고,
+`DeleteSharedScheduleInput`에는 두 식별자의 의미와 둘 다 없을 때 삭제 대상이 확정되지
+않는다는 사실을 설명한다.
+
+### 7.8 wrapper 계약 검증
+
+`call_mcp_tool_sync`를 fake로 교체해 다음을 확인한다.
+
+- 생성 wrapper가 정확히 `create_shared_schedule`을 호출한다.
+- 생성 인자 8개가 누락되거나 이름이 바뀌지 않는다.
+- 삭제 wrapper가 정확히 `delete_shared_schedule`을 호출한다.
+- 삭제 식별자 2개가 그대로 전달된다.
+- 두 wrapper 모두 MCP JSON 문자열을 그대로 반환한다.
+- `week05_tools()`에 생성·삭제 tool이 각각 한 번만 포함된다.
+
+### 7.9 실제 MCP 생성·갱신·삭제 검증
+
+fixture와 충돌하지 않는 고유 식별자를 사용한다.
+
+```text
+schedule_id: shared_week5_extra_review
+source_conversation_id: extra:week5:review
+member_name: 철수
+title: 추가 과제 검증 일정
+date: 2026-07-12
+start_time: 18:00
+end_time: 19:00
+```
+
+검증 순서:
+
+1. 생성 후 `sync_status=created`인지 확인한다.
+2. `source_conversation_id`로 조회해 row가 하나인지 확인한다.
+3. 같은 `schedule_id`로 시간을 바꿔 다시 생성한다.
+4. `sync_status=updated`이고 row가 두 개로 늘지 않았는지 확인한다.
+5. `schedule_id`로 삭제하고 `deleted_count=1`인지 확인한다.
+6. 다시 조회해 row가 없는지 확인한다.
+7. 식별자 없이 삭제해도 다른 row가 삭제되지 않는지 확인한다.
+8. 실제 기본 DB를 사용했다면 검증 마지막에 고유 row를 반드시 정리한다.
+
+### 7.10 UI 검증 시나리오
+
+#### 생성
+
+```text
+외부 MCP 공유 일정 저장소에 철수의 "추가 과제 UI 검증" 일정을
+2026-07-12 18:00부터 19:00까지 직접 등록해줘.
+source_conversation_id는 extra:week5:ui-check로 사용해줘.
+```
+
+통과 기준:
+
+- `create_shared_schedule` 한 번 호출
+- 개인 일정 저장 tool 호출 없음
+- `shared_schedule.sync_status="created"`
+- 반환된 `schedule_id`를 확인할 수 있음
+
+#### 조회와 갱신
+
+```text
+공유 일정 저장소에서 source_conversation_id가 extra:week5:ui-check인 일정을 조회해줘.
+```
+
+조회된 실제 `schedule_id`를 다음 갱신 요청에 명시한다.
+
+```text
+공유 일정 schedule_id가 "조회된_ID"인 일정을 같은 제목과 날짜로 유지하고
+시간을 18:30부터 20:00까지로 갱신해줘.
+```
+
+통과 기준:
+
+- 조회 row가 정확히 하나임
+- 같은 `schedule_id`로 `create_shared_schedule` 호출
+- `sync_status="updated"`
+- 갱신 후에도 row가 하나만 존재함
+
+#### 삭제와 삭제 확인
+
+```text
+공유 일정 schedule_id가 "조회된_ID"인 일정을 삭제해줘.
+```
+
+통과 기준:
+
+- `delete_shared_schedule` 호출
+- `deleted_count=1`
+- 삭제 후 `source_conversation_id` 조회 결과가 `rows=[]`
+
+#### 안전 경계
+
+```text
+어떤 일정인지 지정하지 않을 테니 공유 일정을 삭제해줘.
+```
+
+통과 기준:
+
+- 가장 좋은 동작은 tool을 호출하지 않고 삭제 대상을 질문하는 것임
+- tool을 호출하더라도 식별자 없는 요청은 `deleted_count=0`이어야 함
+- 전체 일정이 삭제되지 않고 삭제 성공을 거짓으로 답하지 않음
+
+### 7.11 추가 과제 완료 기준
+
+- 두 wrapper의 TODO와 `...`가 제거된다.
+- 생성·삭제 wrapper가 MCP tool 이름과 인자 계약을 그대로 따른다.
+- `week05_tools()`에 두 추가 과제 tool이 노출된다.
+- 개인 일정 저장과 외부 공유 일정 직접 생성 routing이 구분된다.
+- 생성, 같은 ID 갱신, 조회, 삭제가 순서대로 동작한다.
+- 식별자 없는 삭제가 전체 삭제로 이어지지 않는다.
+- 기존 메인 과제의 대화 검색, 일정 추출, 통합 rows 동작이 회귀하지 않는다.
+- 제공 코드는 수정되지 않는다.
+- 실제 검증에서 만든 공유 row는 마지막에 정리된다.
