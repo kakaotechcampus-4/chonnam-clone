@@ -91,8 +91,25 @@ class Week03OriginalTextTest(unittest.TestCase):
         self.assertNotIn("session_id", raw["original_text"])
         self.assertEqual(raw["source_schedule_id"], result["created_schedule"]["id"])
 
-    def test_personal_create_schedule_requires_explicit_end_time_decision(self):
-        self.assertTrue(personal_create_schedule.args_schema.model_fields["end_time"].is_required())
+    def test_personal_create_schedule_accepts_missing_end_time_for_clarification(self):
+        self.assertFalse(personal_create_schedule.args_schema.model_fields["end_time"].is_required())
+
+    def test_clarification_result_does_not_write_to_sqlite(self):
+        with patch("student_parts.week03_build_nanas_logbook._store") as store_factory:
+            result = json.loads(
+                personal_create_schedule.invoke(
+                    {
+                        "title": "치과",
+                        "date": "2026-07-21",
+                        "start_time": "09:00",
+                        "original_text": "7월 21일 오전 9시에 치과 일정 잡아줘",
+                    }
+                )
+            )
+
+        self.assertEqual(result["status"], "needs_clarification")
+        self.assertEqual(result["missing_fields"], ["end_time"])
+        store_factory.assert_not_called()
 
 
 if __name__ == "__main__":

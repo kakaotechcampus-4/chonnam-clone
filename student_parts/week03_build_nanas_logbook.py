@@ -397,10 +397,11 @@ def structured_request_from_week01_schedule(
 
 @tool("personal_create_schedule")
 def personal_create_schedule(
-    title: str,
-    date: str,
-    start_time: str,
-    end_time: str,
+    title: str | None = None,
+    date: str | None = None,
+    start_time: str | None = None,
+    end_time: str | None = None,
+    end_date: str | None = None,
     attendees: list[str] | None = None,
     original_text: str = "",
 ) -> str:
@@ -418,12 +419,13 @@ def personal_create_schedule(
                 "date": date,
                 "start_time": start_time,
                 "end_time": end_time,
+                "end_date": end_date,
                 "attendees": attendees,
             }
         )
     )
-    if not week1_result.get("ok"):
-        return json_payload(tool_result("personal_create_schedule", ok=False, **week1_result))
+    if week1_result.get("status") == "needs_clarification":
+        return json_payload(week1_result)
 
     save_input = structured_request_from_week01_schedule(
         week1_result["created_schedule"],
