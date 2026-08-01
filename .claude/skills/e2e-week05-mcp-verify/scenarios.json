@@ -379,5 +379,49 @@
         }
       }
     ]
+  },
+  {
+    "id": "unknown-personal-end-time-is-collected-as-undecided",
+    "description": "종료 시각이 누락되면 반드시 재질문하고, 사용자가 종료 시간 없음을 확인한 뒤에만 '미정'으로 저장·수집해야 한다.",
+    "week": 5,
+    "turns": [
+      {
+        "message": "2026년 7월 9일 오전 10시에 집중 작업 개인 일정을 잡아줘.",
+        "expect_tool_calls_exact": [],
+        "expect_answer_contains_any": ["종료", "몇 시까지", "끝나는"]
+      },
+      {
+        "message": "종료 시간은 따로 없어.",
+        "expect_tool_called": ["personal_create_schedule"]
+      },
+      {
+        "message": "방금 만든 내 일정과 철수의 2026년 7월 9일 일정을 같이 모아줘.",
+        "expect_tool_called": ["collect_member_schedules"],
+        "expect_tool_call_arguments": [
+          {
+            "tool_name": "collect_member_schedules",
+            "arguments": {
+              "member_names": ["철수"],
+              "date_from": "2026-07-09",
+              "date_to": "2026-07-09"
+            }
+          }
+        ],
+        "expect_collect_member_schedules_rows": {
+          "must_include_members": ["나", "철수"],
+          "required_row_fields": ["member_name", "title", "date", "start_time", "end_time", "notes"],
+          "external_rows_require_source_conversation_id": true,
+          "rows_must_include": [
+            {
+              "member_name": "나",
+              "title": "집중 작업",
+              "date": "2026-07-09",
+              "start_time": "10:00",
+              "end_time": "미정"
+            }
+          ]
+        }
+      }
+    ]
   }
 ]

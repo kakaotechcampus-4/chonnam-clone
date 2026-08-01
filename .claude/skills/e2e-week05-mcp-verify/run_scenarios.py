@@ -303,6 +303,17 @@ def _check_collect_member_schedules_rows(spec: dict[str, Any], events: list[dict
             if not row.get("source_conversation_id"):
                 failures.append(f"외부 멤버 row에 source_conversation_id가 없음(근거 추적 불가): {row}")
 
+    for expected_row in spec.get("rows_must_include", []):
+        if not any(
+            isinstance(row, dict)
+            and all(row.get(key) == value for key, value in expected_row.items())
+            for row in rows
+        ):
+            failures.append(
+                "'collect_member_schedules' 결과에 기대 row가 없음: "
+                f"기대 부분값={expected_row}, 실제 rows={rows}"
+            )
+
     if not content.get("schedule_summary"):
         failures.append("'collect_member_schedules' 결과에 schedule_summary가 없음")
 
@@ -394,6 +405,11 @@ def run_scenario(scenario: dict[str, Any]) -> tuple[bool, list[str]]:
             )
             break
         turn_failures = _check_turn(turn_spec, outcome)
+        if turn_failures:
+            failures.append(
+                f"[turn {turn_index + 1}: {turn_spec['message']!r}] "
+                f"agent 답변={outcome['answer']!r}, tool 호출={outcome['tool_names']}"
+            )
         for failure in turn_failures:
             failures.append(f"[turn {turn_index + 1}: {turn_spec['message']!r}] {failure}")
 

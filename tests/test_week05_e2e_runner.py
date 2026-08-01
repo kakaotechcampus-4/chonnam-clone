@@ -135,11 +135,17 @@ class Week05E2ERunnerTest(unittest.TestCase):
                 "missing-member-name-external-lookup",
                 "missing-date-range-then-followup-provides-it",
                 "mixed-schedule-paraphrase-uses-collector",
+                "unknown-personal-end-time-is-collected-as-undecided",
             },
         )
         for scenario in scenarios:
             for turn in scenario["turns"]:
-                self.assertIn("expect_tool_calls_exact", turn)
+                if scenario["id"] == "unknown-personal-end-time-is-collected-as-undecided":
+                    self.assertTrue(
+                        "expect_tool_calls_exact" in turn or "expect_tool_called" in turn
+                    )
+                else:
+                    self.assertIn("expect_tool_calls_exact", turn)
 
         general = by_id["general-external-schedule-lookup"]["turns"][0]
         self.assertEqual(
@@ -198,6 +204,25 @@ class Week05E2ERunnerTest(unittest.TestCase):
         self.assertEqual(
             mixed_paraphrase["expect_tool_calls_exact"],
             ["collect_member_schedules"],
+        )
+
+        unknown_end_turns = by_id["unknown-personal-end-time-is-collected-as-undecided"]["turns"]
+        self.assertEqual(unknown_end_turns[0]["expect_tool_calls_exact"], [])
+        self.assertEqual(
+            unknown_end_turns[1]["expect_tool_called"],
+            ["personal_create_schedule"],
+        )
+        unknown_end = unknown_end_turns[2]
+        self.assertEqual(unknown_end["expect_tool_called"], ["collect_member_schedules"])
+        self.assertIn(
+            {
+                "member_name": "나",
+                "title": "집중 작업",
+                "date": "2026-07-09",
+                "start_time": "10:00",
+                "end_time": "미정",
+            },
+            unknown_end["expect_collect_member_schedules_rows"]["rows_must_include"],
         )
 
 
