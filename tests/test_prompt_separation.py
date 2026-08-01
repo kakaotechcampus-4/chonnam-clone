@@ -27,6 +27,12 @@ class PromptSeparationTest(unittest.TestCase):
         self.assertIn("StructuredRequestBatch", prompt)
         self.assertIn("personal_create_schedule", prompt)
 
+    def test_schedule_creation_requires_end_time_clarification(self):
+        for prompt in (week01_system_prompt(), week02_system_prompt()):
+            self.assertIn("종료 시각이 언제인지 반드시 한 번 재질문", prompt)
+            self.assertIn('end_time="미정"', prompt)
+            self.assertIn("단순 누락을 \"미정\"으로 간주하지 않는다", prompt)
+
 
 if __name__ == "__main__":
     unittest.main()

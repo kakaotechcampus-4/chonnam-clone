@@ -15,6 +15,7 @@ from student_parts.prompts.common import (
     CHAT_MEMORY_PROMPT,
     NANA_IDENTITY_PROMPT,
     NO_GUESSING_PROMPT,
+    SCHEDULE_END_TIME_CLARIFICATION_PROMPT,
     date_time_prompt,
     join_system_prompt,
 )
@@ -309,6 +310,7 @@ def week02_prompt_parts() -> list[str]:
         date_time_prompt(),
         NO_GUESSING_PROMPT,
         CHAT_MEMORY_PROMPT,
+        SCHEDULE_END_TIME_CLARIFICATION_PROMPT,
         WEEK02_CLASSIFICATION_PROMPT,
         WEEK02_CLARIFICATION_STATE_PROMPT,
         WEEK02_STRUCTURED_OUTPUT_PROMPT,

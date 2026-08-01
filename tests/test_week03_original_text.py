@@ -79,6 +79,7 @@ class Week03OriginalTextTest(unittest.TestCase):
                         "title": "치과",
                         "date": "2026-07-21",
                         "start_time": "09:00",
+                        "end_time": "미정",
                         "original_text": original_text,
                     }
                 )
@@ -89,6 +90,9 @@ class Week03OriginalTextTest(unittest.TestCase):
         self.assertEqual(raw["original_text"], original_text)
         self.assertNotIn("session_id", raw["original_text"])
         self.assertEqual(raw["source_schedule_id"], result["created_schedule"]["id"])
+
+    def test_personal_create_schedule_requires_explicit_end_time_decision(self):
+        self.assertTrue(personal_create_schedule.args_schema.model_fields["end_time"].is_required())
 
 
 if __name__ == "__main__":

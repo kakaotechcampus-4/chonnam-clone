@@ -25,6 +25,7 @@ from student_parts.prompts.common import (
     CHAT_MEMORY_PROMPT,
     NANA_IDENTITY_PROMPT,
     NO_GUESSING_PROMPT,
+    SCHEDULE_END_TIME_CLARIFICATION_PROMPT,
     date_time_prompt,
     join_system_prompt,
 )
@@ -72,7 +73,7 @@ def personal_create_schedule(
     title: str,
     date: str,
     start_time: str,
-    end_time: str = "미정",
+    end_time: str,
     end_date: str | None = None,
     attendees: list[str] | None = None,
 ) -> str:
@@ -80,6 +81,7 @@ def personal_create_schedule(
 
     사용자가 일정을 만들거나 등록해 달라고 요청할 때 사용합니다.
     date와 end_date는 YYYY-MM-DD, 시간은 HH:MM 형식으로 전달합니다.
+    사용자가 종료 시각 없음이나 하루 종일을 명시한 경우에만 end_time에 "미정"을 전달합니다.
     end_date를 생략하면 date와 같은 날로 처리합니다.
     """
 
@@ -185,6 +187,7 @@ def week01_prompt_parts() -> list[str]:
         date_time_prompt(),
         NO_GUESSING_PROMPT,
         CHAT_MEMORY_PROMPT,
+        SCHEDULE_END_TIME_CLARIFICATION_PROMPT,
         WEEK01_TOOL_SELECTION_PROMPT,
         WEEK01_OVERNIGHT_SCHEDULE_PROMPT,
         WEEK01_DELETE_SCHEDULE_PROMPT,
