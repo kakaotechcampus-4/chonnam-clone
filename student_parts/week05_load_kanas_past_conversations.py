@@ -185,12 +185,21 @@ def _schedule_scope(schedule: dict[str, Any]) -> str:
     return str(schedule.get("session_id") or DEFAULT_SESSION_SCOPE)
 
 
-def _personal_schedules_for_current_scope() -> list[dict[str, Any]]:
+def _personal_schedules_for_current_scope(date_from: str, date_to: str) -> list[dict[str, Any]]:
     """SQLite 저장 일정과 현재 대화의 임시 일정만 group 조율 후보로 사용합니다."""
 
     scope = current_session_scope()
     store = AppSQLiteStore(CONFIG.app_db_path)
-    saved_schedules = list(store.list_schedules())
+    normalized_date_from, normalized_date_to = normalize_external_schedule_date_bounds(
+        None, date_from, date_to
+    )
+    saved_schedules = list(
+        store.list_schedules(
+            date_from=normalized_date_from or None,
+            date_to=normalized_date_to or None,
+            limit=200,
+        )
+    )
 
     saved_ids = {
         str(schedule_id)
@@ -292,28 +301,25 @@ def _structured_request_from_schedule_row(row: dict[str, Any]) -> StructuredRequ
     )
 
 
-def _collect_member_schedules(
+def _merge_schedule_rows(
     *,
-    member_names: list[str],
+    personal_schedules: list[dict[str, Any]],
+    external_rows: list[dict[str, Any]],
     date_from: str,
     date_to: str,
-    personal_schedules: list[dict[str, Any]],
-) -> dict[str, Any]:
-    """내 일정과 외부 멤버 일정을 같은 row 구조로 합칩니다."""
+) -> list[dict[str, Any]]:
+    """내 일정과 외부 멤버 row를 같은 구조로 합치고 날짜순으로 정렬합니다.
 
-    normalized_members = normalize_external_member_names(member_names)
-    normalized_date_from, normalized_date_to = normalize_external_schedule_date_bounds(
-        member_names,
-        date_from,
-        date_to,
-    )
+    외부 MCP 호출이나 SQLite 조회 없이 이미 가져온 row만으로 동작하는 순수 함수라서,
+    fixture rows만 넘겨 단위 테스트를 붙이기 쉽습니다.
+    """
 
     rows: list[dict[str, Any]] = []
 
     for schedule in personal_schedules:
         request = _structured_request_from_schedule_row(schedule)
         schedule_date = request.date
-        if not schedule_date or not (normalized_date_from <= schedule_date <= normalized_date_to):
+        if not schedule_date or not (date_from <= schedule_date <= date_to):
             continue
 
         rows.append(
@@ -327,20 +333,7 @@ def _collect_member_schedules(
             }
         )
 
-    external_result = call_mcp_tool_sync(
-        "extract_schedules_from_history",
-        {
-            "member_names": normalized_members,
-            "date_from": normalized_date_from,
-            "date_to": normalized_date_to,
-        },
-    )
-    try:
-        external_payload = json.loads(external_result)
-    except (TypeError, json.JSONDecodeError):
-        external_payload = {"rows": []}
-
-    for row in external_payload.get("rows", []):
+    for row in external_rows:
         rows.append(
             {
                 "member_name": row.get("member_name"),
@@ -359,6 +352,50 @@ def _collect_member_schedules(
             str(row.get("member_name") or ""),
         )
     )
+    return rows
+
+
+def _collect_member_schedules(
+    *,
+    member_names: list[str],
+    date_from: str,
+    date_to: str,
+    personal_schedules: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """내 일정과 외부 멤버 일정을 같은 row 구조로 합칩니다."""
+
+    normalized_members = normalize_external_member_names(member_names)
+    normalized_date_from, normalized_date_to = normalize_external_schedule_date_bounds(
+        member_names,
+        date_from,
+        date_to,
+    )
+
+    external_rows: list[dict[str, Any]] = []
+    external_lookup_error: str | None = None
+
+    if normalized_members:
+        # member_names가 비어 있으면(=조회할 외부 멤버가 없으면) MCP 왕복 자체를 하지 않습니다.
+        try:
+            external_result = call_mcp_tool_sync(
+                "extract_schedules_from_history",
+                {
+                    "member_names": normalized_members,
+                    "date_from": normalized_date_from,
+                    "date_to": normalized_date_to,
+                },
+            )
+            external_payload = json.loads(external_result)
+            external_rows = external_payload.get("rows", [])
+        except Exception as exc:  # noqa: BLE001 - MCP 왕복 실패/응답 파싱 실패를 "빈 일정"과 구분해 표시합니다.
+            external_lookup_error = str(exc)
+
+    rows = _merge_schedule_rows(
+        personal_schedules=personal_schedules,
+        external_rows=external_rows,
+        date_from=normalized_date_from,
+        date_to=normalized_date_to,
+    )
 
     return {
         "member_names": ["나", *normalized_members],
@@ -366,6 +403,10 @@ def _collect_member_schedules(
         "date_to": normalized_date_to,
         "rows": rows,
         "schedule_summary": external_schedule_summary(rows),
+        # 외부 조회가 실패했는데도 rows가 비어 있으면 "바쁜 일정 없음"과 구분이 안 되므로,
+        # Week 6 find_common_available_slots가 이 rows를 busy_rows 근거로 쓸 때 실패 여부를
+        # 확인할 수 있도록 명시적으로 남겨둡니다.
+        "external_lookup_error": external_lookup_error,
     }
 
 
@@ -486,7 +527,7 @@ def collect_member_schedules(member_names: list[str], date_from: str, date_to: s
         member_names=member_names,
         date_from=date_from,
         date_to=date_to,
-        personal_schedules=_personal_schedules_for_current_scope(),
+        personal_schedules=_personal_schedules_for_current_scope(date_from, date_to),
     )
     return json_payload(payload)
 
