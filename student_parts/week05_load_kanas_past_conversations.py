@@ -414,7 +414,19 @@ def create_shared_schedule(
     """외부 MCP 공유 일정 저장소에 일정을 등록하거나 갱신합니다."""
 
     # TODO: call_mcp_tool_sync("create_shared_schedule", args)로 공유 일정 row를 생성/갱신하세요.
-    ...
+    return call_mcp_tool_sync(
+        "create_shared_schedule",
+        {
+            "member_name": member_name,
+            "title": title,
+            "date": date,
+            "start_time": start_time,
+            "end_time": end_time,
+            "notes": notes,
+            "source_conversation_id": source_conversation_id,
+            "schedule_id": schedule_id,
+        }
+    )
 
 
 @tool(args_schema=DeleteSharedScheduleInput)
@@ -425,7 +437,12 @@ def delete_shared_schedule(
     """외부 MCP 공유 일정 저장소에서 일정을 삭제합니다."""
 
     # TODO: call_mcp_tool_sync("delete_shared_schedule", args)로 공유 일정을 삭제하세요.
-    ...
+    return call_mcp_tool_sync(
+        "delete_shared_schedule",{
+            "schedule_id": schedule_id,
+            "source_conversation_id": source_conversation_id,
+        }
+    )
 
 
 @tool(args_schema=ListSharedSchedulesInput)
@@ -472,6 +489,8 @@ def week05_tools() -> list[Any]:
         extract_schedules_from_history,
         list_shared_schedules,
         collect_member_schedules,
+        create_shared_schedule,
+        delete_shared_schedule,
     ]
 
 
@@ -487,6 +506,8 @@ def week05_prompt_parts() -> list[str]:
     return [
         *week04_prompt_parts(),
         # TODO: Week 5 Kana history agent system prompt를 자유롭게 추가하세요.
+        
+        # 메인과제
         "팀원의 과거 일정이나 가능한 시간을 묻는 질문은 아래 외부 대화/공유 일정 도구로 처리한다. "
         "팀원 일정과 내 일정을 함께 봐야 하면 collect_member_schedules 하나만 호출한다. "
         "이 도구가 내 일정과 외부 멤버 일정을 같은 rows 구조로 합쳐서 돌려준다. "
@@ -496,7 +517,24 @@ def week05_prompt_parts() -> list[str]:
         "어떤 대화에서 나온 약속인지 근거가 필요할 때만 search_previous_conversations로 검색하고, "
         "찾은 conversation_id의 원문을 확인해야 하면 load_conversation_messages를 호출한다. "
         "도구 결과의 rows와 schedule_summary만 근거로 답하고, rows가 비어 있으면 "
-        "일정을 찾지 못했다고 말한다. 없는 일정을 지어내지 않는다."
+        "일정을 찾지 못했다고 말한다. 없는 일정을 지어내지 않는다. "
+        
+        #추가과제
+        "내 일정을 저장·수정·삭제하는 요청은 Week 3 개인 일정 도구로만 처리한다. "
+        "그렇게 저장된 일정은 공유 일정 저장소에 자동으로 동기화되므로 따로 공유 저장소에 쓰지 않는다. "
+        "create_shared_schedule과 delete_shared_schedule은 공유 일정 저장소 row가 실제와 어긋나서 "
+        "그 저장소를 직접 보정해 달라고 요청받은 경우에만 사용한다. "
+        "공유 일정 row를 등록하거나 갱신할 때는 create_shared_schedule을 호출하고, "
+        "member_name·title·date·start_time을 반드시 채운다. "
+        "이미 있는 row를 갱신하는 경우에는 list_shared_schedules로 확인한 schedule_id를 함께 넘겨야 "
+        "새 row가 중복 생성되지 않는다. "
+        "공유 일정 row를 삭제할 때는 먼저 list_shared_schedules로 대상 row를 조회해 schedule_id를 확인하고, "
+        "확인된 schedule_id를 delete_shared_schedule에 넘긴다. schedule_id를 추측해서 넣지 않는다. "
+        "schedule_id와 source_conversation_id는 둘 중 하나만 채운다. 두 값을 함께 넣으면 "
+        "둘 중 하나라도 일치하는 관련 없는 일정까지 삭제된다. "
+        "공유 저장소에 쓰는 이 두 도구는 되돌리기 어려우므로, 어떤 일정을 등록/삭제할지 사용자에게 확인한 뒤에 호출한다. "
+        "등록 결과는 shared_schedule, 삭제 결과는 deleted_count와 deleted를 근거로 답한다. "
+        "deleted_count가 0이면 삭제된 일정이 없다고 사실대로 말하고, 삭제에 성공했다고 말하지 않는다.",
     ]
 
 
