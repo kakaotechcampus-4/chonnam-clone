@@ -294,6 +294,9 @@ def _collect_member_schedules(
     normalized_from, normalized_to = normalize_external_schedule_date_bounds(
         member_names, date_from, date_to
     )
+    if not normalized_from or not normalized_to:
+        raise ValueError("date_from and date_to are required to collect member schedules")
+
     personal_rows = [
         {
             "member_name": PERSONAL_SHARED_MEMBER_NAME,
