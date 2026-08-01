@@ -430,7 +430,19 @@ def create_shared_schedule(
     """외부 MCP 공유 일정 저장소에 일정을 등록하거나 갱신합니다."""
 
     # TODO: call_mcp_tool_sync("create_shared_schedule", args)로 공유 일정 row를 생성/갱신하세요.
-    ...
+    return call_mcp_tool_sync(
+        "create_shared_schedule",
+        {
+            "member_name": member_name,
+            "title": title,
+            "date": date,
+            "start_time": start_time,
+            "end_time": end_time,
+            "notes": notes,
+            "source_conversation_id": source_conversation_id,
+            "schedule_id": schedule_id,
+        },
+    )
 
 
 @tool(args_schema=DeleteSharedScheduleInput)
@@ -441,7 +453,13 @@ def delete_shared_schedule(
     """외부 MCP 공유 일정 저장소에서 일정을 삭제합니다."""
 
     # TODO: call_mcp_tool_sync("delete_shared_schedule", args)로 공유 일정을 삭제하세요.
-    ...
+    return call_mcp_tool_sync(
+        "delete_shared_schedule",
+        {
+            "schedule_id": schedule_id,
+            "source_conversation_id": source_conversation_id,
+        },
+    )
 
 
 @tool(args_schema=ListSharedSchedulesInput)
@@ -489,6 +507,8 @@ def week05_tools() -> list[Any]:
         search_previous_conversations,
         load_conversation_messages,
         extract_schedules_from_history,
+        create_shared_schedule,
+        delete_shared_schedule,
         list_shared_schedules,
         collect_member_schedules,
     ]
@@ -536,6 +556,24 @@ def week05_prompt_parts() -> list[str]:
             "내 일정과 외부 멤버 일정을 같은 날짜 범위에서 함께 확인할 때는 collect_member_schedules를 사용한다. "
             "외부 공유 일정 저장소에 실제로 등록된 row를 확인할 때만 list_shared_schedules를 사용한다. "
             "도구 결과의 rows와 schedule_summary를 근거로 답하고, 조회되지 않은 일정은 추측하지 않는다."
+        ),
+        (
+            "사용자가 공유 일정의 등록 또는 갱신을 명시적으로 요청한 경우에만 create_shared_schedule을 사용하고, "
+            "공유 일정 삭제를 명시적으로 요청한 경우에만 delete_shared_schedule을 사용한다. "
+            "앞선 주차의 '수정이나 삭제 요청은 지원하지 않는다'는 규칙은 Week 5 공유 일정에는 적용하지 않으며, "
+            "이 Week 5 공유 일정 규칙이 앞선 수정 제한 규칙보다 우선한다. "
+            "공유 일정 수정 요청에는 기존 schedule_id를 그대로 전달해 create_shared_schedule을 호출한다. "
+            "같은 schedule_id의 create_shared_schedule 호출은 기존 row의 갱신이므로 삭제 후 재등록하지 않는다. "
+            "사용자가 schedule_id를 명시했고 현재 대화에서 기존 일정의 member_name, title, date를 확인할 수 있으면 "
+            "list_shared_schedules로 다시 확인하지 말고 기존 값과 사용자가 요청한 변경값을 합쳐 create_shared_schedule을 호출한다. "
+            "기존 필드를 확인하기 위해 조회해야 한다면 현재 대화에서 확인되는 member_names와 date_from, date_to를 "
+            "list_shared_schedules에 명시해 호출한다. 필터 없는 list_shared_schedules는 실습용 기본 일정만 반환할 수 있으므로 "
+            "그 결과만 보고 명시된 schedule_id가 없다고 판단하지 않는다. 기존 필드를 끝내 확인할 수 없을 때만 사용자에게 묻는다. "
+            "조회 요청에는 변경 도구를 호출하지 않는다. 생성·갱신 결과의 schedule_id와 "
+            "source_conversation_id는 이후 동기화와 삭제를 위해 보존한다. "
+            "삭제 대상의 schedule_id 또는 source_conversation_id가 명확하지 않으면 먼저 "
+            "list_shared_schedules로 후보를 조회하고, 하나로 특정할 수 없으면 사용자에게 확인한다. "
+            "식별자 없이 delete_shared_schedule을 호출하지 않는다."
         ),
         (
             f"현재 앱 기준 날짜는 {current_app_date_iso()}이다. "
