@@ -28,6 +28,11 @@
 - **자기 출처 표현과 외부 멤버 이름 동시 언급 시 우선순위**: "내 Nana 대화" 같은 앱 내부 출처 표현과
   특정 외부 멤버 이름이 한 문장에 함께 오면, 외부 멤버 이름이 우선해 search_previous_conversations로
   라우팅된다(자기 출처 표현이 있다고 search_conversation_messages로 새지 않음). 격리 실행으로 검증 완료.
+- **대화 원문+busy-time 복합 요청, 멤버 전무 요청 커버리지**: 원문 조회와 busy-time 조회를 배타적
+  이분법으로만 문구화하면 "대화 내용과 바쁜 시간을 둘 다 알려줘" 같은 복합 요청이나, 집합 표현조차 없이
+  멤버 이름이 아예 없는 요청("다들 일정 어떻게 돼" 류)을 못 다룬다. 복합 요청은 두 tool을 순차 호출하고,
+  멤버 전무 요청은 마찬가지로 되묻도록 규칙을 보강했다. 격리 실행으로 두 케이스와 기존 단일 목적
+  케이스(회귀) 모두 검증 완료.
 - **_personal_schedules_for_current_scope 중복 제거 검증**: multiturn scenario_2에서 personal_create_schedule로
   생성한 일정이 collect_member_schedules 결과에 중복 없이 1번만 나오는지 확인 필요(코드 리뷰로 이미 확인했으나
   실제 agent 경유 결과에서도 재확인).
