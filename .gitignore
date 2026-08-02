@@ -25,3 +25,6 @@ dist/
 # Keep later-week student files local until their assignment is published.
 student_parts/week06_kanamate_decides_schedule.py
 CLAUDE.md
+
+# Playwright MCP 임시 스냅샷/로그
+.playwright-mcp/
