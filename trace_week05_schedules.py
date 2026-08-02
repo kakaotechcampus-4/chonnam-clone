@@ -10,6 +10,7 @@
     라우팅뿐 아니라 rows 내용을 직접 판정합니다.
     · 묻지 않은 내 일정이 섞이지 않는가 (member_names에 "나"가 없으면 내 일정은 넣지 않는다)
     · 사용자가 자신을 포함해 물으면 "나"가 member_names에 들어가는가
+      (이 규약이 지켜지는 비율은 trace_week05_mine_inclusion.py가 반복 측정합니다)
     · 멤버가 늘어도 배열 하나로 한 번만 호출하는가
     · 두 출처 row 의 스키마와 end_time 표기가 같은가
 
@@ -58,6 +59,7 @@ def run() -> int:
     names = {r.get("member_name") for r in all_rows}
     t.check("철수 일정은 있음", "철수" in names, f"멤버={sorted(names)}")
     t.check("없는 사람 일정을 만들지 않음", "홍길동" not in names, f"멤버={sorted(names)}")
+    # 이 구간(7/7~7/9)에는 내 일정 MINE_0708이 있으므로, 섞였다면 여기서 잡힙니다.
     t.check("혼합 조회에도 내 일정 안 섞임", "나" not in names, f"멤버={sorted(names)}")
 
     # ── 나를 포함해 합치기

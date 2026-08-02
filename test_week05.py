@@ -15,14 +15,20 @@ trace_week05_*.py가 LLM 라우팅(변동적)을 보는 반면, 이 대본은 We
 
 점검 갈래
   A. _personal_schedules_for_current_scope — 두 출처 병합, 중복 제거, 대화 범위, DB 날짜 필터
-  B. _collect_member_schedules — include_mine, 자기 지칭, 이중집계 방지, 날짜 경계,
-     end_time 표기, 스키마 일치, MCP 실패 처리 (fake MCP로 분기를 결정적으로 확인)
+  B. _collect_member_schedules — include_mine, 자기 지칭(조사 포함), 이중집계 방지,
+     날짜 경계, end_time 표기, 스키마 일치, MCP 실패 처리
+     (fake MCP로 분기를 결정적으로 확인)
   C. 위임 wrapper 계약 — 실제 MCP subprocess로 rows/필터/보존 필드/삭제 가드 확인
   D. tool·prompt 계약 — week05_tools() 구성과 prompt 누적
 
-가이드를 벗어난 결정의 근거 (실행으로 남기는 목적)
+설계 결정의 근거 (실행으로 남기는 목적)
   · "나"를 외부 조회에서 제외 → B4 (제외하지 않으면 같은 일정이 두 번 집계된다)
   · include_mine → B1/B2 (묻지 않은 내 일정이 rows에 섞이지 않는다)
+    이 선택이 남기는 Week 6 누락 위험은 호출 규약으로 막고, 규약이 실제로 지켜지는지는
+    trace_week05_mine_inclusion.py가 LLM을 태워 반복 측정한다.
+  · 조사 붙은 자기 지칭 → B3b (LLM이 "내가"로 넘겨도 같은 사람으로 본다 — include_mine의 전제)
+  · 오탐 방지 → B3c ("나은"·"제니" 같은 실제 이름은 자기 지칭이 아니다)
+  · 외부 실패 vs 내 버그 구분 → B17 (내 코드의 버그는 external_error로 삼키지 않는다)
   · end_time "미정" 통일 → B7 (병합 rows에 None과 "미정"이 섞이지 않는다)
   · 중복 제거 → A4 (week3 personal_create_schedule은 같은 id로 두 저장소에 쓴다)
 """
@@ -245,6 +251,23 @@ def section_b() -> None:
     self_ref = _collect(["저", "철수"], "2026-07-09", "2026-07-09", MINE, FakeMCP())
     check("B3. '저'도 자기 지칭으로 처리", "나" in names(self_ref), str(names(self_ref)))
 
+    # 조사가 붙어 오는 경우까지 같은 사람으로 본다 (LLM이 "내가 언제 바빠"를 그대로 넘길 수 있다).
+    # 자기 지칭 판정이 빗나가면 내 일정이 조용히 빠지므로, 이 정규화가 include_mine의 전제다.
+    for token in ("내가", "제가", "나는", "저는", "본인은", "나도"):
+        with_particle = _collect([token, "철수"], "2026-07-09", "2026-07-09", MINE, FakeMCP())
+        check(f"B3b. 조사 붙은 자기 지칭 '{token}'을 \"나\"로 정규화",
+              "나" in names(with_particle), str(with_particle.get("member_names")))
+
+    # 반대로 접두어만 같은 실제 이름을 자기 지칭으로 오인하면 남의 일정 조회가 통째로 사라진다.
+    # ("나은"은 받침 없는 "나"에 "은"이 붙을 수 없으므로 조사 결합이 아니다)
+    for name in ("나은", "나연", "제니", "저스틴", "내털리", "본인철"):
+        other = FakeMCP()
+        result = _collect([name], "2026-07-09", "2026-07-09", MINE, other)
+        sent = other.calls[0][1].get("member_names") if other.calls else None
+        check(f"B3c. 실제 이름 '{name}'은 자기 지칭이 아님",
+              "나" not in names(result) and sent == [name],
+              f"members={names(result)} sent={sent}")
+
     # ★ 외부 조회 대상에서 "나"를 빼야 한다. 공유 저장소로 동기화된 "나" 사본이
     #   외부 일정으로 또 잡히면 같은 일정이 두 번 집계된다.
     fake = FakeMCP()
@@ -314,6 +337,74 @@ def section_b() -> None:
           str(failed.get("external_error")))
     check("B16d. 실패해도 내 일정은 보존",
           any(r.get("member_name") == "나" for r in failed["rows"]), str(len(failed["rows"])))
+
+    # ★ "외부 호출이 실패한 것"과 "이 함수에 버그가 있는 것"은 다르게 다뤄야 한다.
+    #   버그까지 external_error에 담으면 '외부 시스템 탓' warning 뒤에 숨어 조용히 넘어간다.
+    def _bug(tool_name: str, args: dict[str, Any]) -> str:
+        raise KeyError("collect 블록 안의 오타(모의)")
+
+    raised: BaseException | None = None
+    try:
+        _collect(["나", "철수"], "2026-07-09", "2026-07-09", MINE, _bug)  # type: ignore[arg-type]
+    except KeyError as exc:
+        raised = exc
+    check("B17. 내 코드 버그(KeyError)는 삼키지 않고 그대로 전파",
+          isinstance(raised, KeyError), type(raised).__name__)
+
+    # 반대로 경계 너머의 실패는 예외로 올리지 않고 external_error로 표시한다.
+    def _broken_json(tool_name: str, args: dict[str, Any]) -> str:
+        return "이건 JSON이 아니다"
+
+    broken = _collect(["나", "철수"], "2026-07-09", "2026-07-09", MINE, _broken_json)  # type: ignore[arg-type]
+    check("B17b. JSON 파싱 실패는 외부 실패로 표시",
+          broken.get("ok") is False and "JSONDecodeError" in str(broken.get("external_error")),
+          str(broken.get("external_error")))
+
+    def _list_payload(tool_name: str, args: dict[str, Any]) -> str:
+        return "[]"
+
+    odd = _collect(["나", "철수"], "2026-07-09", "2026-07-09", MINE, _list_payload)  # type: ignore[arg-type]
+    check("B17c. dict가 아닌 payload도 외부 실패로 표시",
+          odd.get("ok") is False and "UnexpectedPayload" in str(odd.get("external_error")),
+          str(odd.get("external_error")))
+    check("B17d. 그 경우에도 내 일정은 보존",
+          any(r.get("member_name") == "나" for r in odd["rows"]), str(len(odd["rows"])))
+
+    # TypeError는 내 버그 목록에서 뺐다. fixed/mcp_client.py의 _mcp_result_to_text가
+    # json.dumps(result)로 끝나므로, 어댑터가 직렬화 불가능한 객체를 주면 경계 너머에서
+    # TypeError가 올라온다. 이걸 내 버그로 분류하면 외부 실패에 내 일정까지 못 쓰게 된다.
+    def _boundary_type_error(tool_name: str, args: dict[str, Any]) -> str:
+        raise TypeError("Object of type object is not JSON serializable")
+
+    boundary = _collect(["나", "철수"], "2026-07-09", "2026-07-09", MINE,
+                        _boundary_type_error)  # type: ignore[arg-type]
+    check("B17e. 경계에서 온 TypeError는 외부 실패로 표시(전파 아님)",
+          boundary.get("ok") is False and "TypeError" in str(boundary.get("external_error")),
+          str(boundary.get("external_error")))
+    check("B17f. 그 경우에도 내 일정은 보존",
+          any(r.get("member_name") == "나" for r in boundary["rows"]), str(len(boundary["rows"])))
+
+    # ★ include_mine을 유지하면 "나"를 빼먹은 호출이 흔적 없이 지나간다. rows는 그대로 두고
+    #   무엇이 빠졌는지만 payload에 남겨, 규약 위반이 사후에 확인되게 한다.
+    check("B18. \"나\" 미포함 + 범위 내 내 일정 있음 → 제외 사실을 기록",
+          bool(without_me.get("mine_excluded_note")), str(sorted(without_me.keys())))
+    # MINE 중 2026-07-09 범위에 드는 것은 m1, m4 두 건이다 (m2는 범위 밖, m3은 날짜 없음).
+    check("B18b. 제외 건수가 실제 건수와 일치",
+          without_me.get("mine_excluded_count") == 2, str(without_me.get("mine_excluded_count")))
+    # 기록은 사실만 남기고 데이터는 오염시키지 않는다 — 답할 수단 자체를 주지 않는다.
+    check("B18c. 기록해도 rows에는 내 일정이 없음",
+          "나" not in names(without_me), str(names(without_me)))
+    check("B18d. \"나\"를 포함해 부르면 제외 표시가 없음",
+          "mine_excluded_note" not in with_me and "mine_excluded_count" not in with_me,
+          str(sorted(with_me.keys())))
+
+    # 빠진 게 없으면 표시하지 않는다. 매번 붙는 잡음은 곧 무시된다.
+    out_of_range = _collect(["철수"], "2026-07-20", "2026-07-21", MINE, FakeMCP())
+    check("B18e. 범위 내 내 일정이 없으면 표시하지 않음",
+          "mine_excluded_note" not in out_of_range, str(sorted(out_of_range.keys())))
+    no_mine = _collect(["철수"], "2026-07-09", "2026-07-09", [], FakeMCP())
+    check("B18f. 내 일정 자체가 없어도 표시하지 않음",
+          "mine_excluded_note" not in no_mine, str(sorted(no_mine.keys())))
 
 
 # ── C. 위임 wrapper 계약 (실제 MCP) ──────────────────────────────────────────
