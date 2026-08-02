@@ -295,12 +295,25 @@ def _collect_member_schedules(
         date_from,
         date_to,
     )
+    if not normalized_date_from or not normalized_date_to:
+        return {
+            "ok": False,
+            "tool_name": "collect_member_schedules",
+            "rows": [],
+            "schedule_summary": "date_from과 date_to가 필요합니다.",
+            "reason": "missing_date_range",
+        }
+
     rows: list[dict[str, Any]] = []
+    skipped_personal_rows = 0
     for schedule in personal_schedules:
         request = _structured_request_from_schedule_row(schedule)
-        if request.date and request.date < normalized_date_from:
+        if not request.date:
+            skipped_personal_rows += 1
             continue
-        if request.date and request.date > normalized_date_to:
+        if request.date < normalized_date_from:
+            continue
+        if request.date > normalized_date_to:
             continue
         rows.append(
             {
@@ -314,22 +327,24 @@ def _collect_member_schedules(
         )
 
     external_members = [name for name in normalized_members if name != "나"]
-    external_payload = json.loads(
-        call_mcp_tool_sync(
-            "extract_schedules_from_history",
-            {
-                "member_names": external_members,
-                "date_from": normalized_date_from,
-                "date_to": normalized_date_to,
-            },
+    if external_members:
+        external_payload = json.loads(
+            call_mcp_tool_sync(
+                "extract_schedules_from_history",
+                {
+                    "member_names": external_members,
+                    "date_from": normalized_date_from,
+                    "date_to": normalized_date_to,
+                },
+            )
         )
-    )
-    rows.extend(external_payload.get("rows") or [])
+        rows.extend(external_payload.get("rows") or [])
     return {
         "ok": True,
         "tool_name": "collect_member_schedules",
         "rows": rows,
         "schedule_summary": external_schedule_summary(rows),
+        "skipped_personal_rows": skipped_personal_rows,
     }
 
 
@@ -450,6 +465,8 @@ def week05_tools() -> list[Any]:
         search_previous_conversations,
         load_conversation_messages,
         extract_schedules_from_history,
+        create_shared_schedule,
+        delete_shared_schedule,
         list_shared_schedules,
         collect_member_schedules,
     ]
