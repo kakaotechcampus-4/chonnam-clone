@@ -699,11 +699,33 @@ def extract_schedules_from_history(
         return json_payload(payload)
 
     # 날짜 형식 정리도 store 경계에서 한 번만 하므로 여기서 다시 손대지 않습니다.
-    return call_mcp_tool_sync("extract_schedules_from_history", {
+    raw = call_mcp_tool_sync("extract_schedules_from_history", {
         "member_names": scope.names,
         "date_from": date_from,
         "date_to": date_to,
     })
+
+    # 이 도구는 외부 공유 저장소만 봅니다. 그래서 "나"를 넣어 부르면 앱 DB에 있는 내 일정은
+    # 조회되지 않는데, 결과는 ok=true에 rows만 비어 "내 일정이 없다"와 구분되지 않습니다.
+    # (동기화되지 않은 내 일정 1건이 있는 상태에서 extract(["나"])는 0건, collect는 1건입니다)
+    # rows는 건드리지 않고 그 사실만 덧붙입니다 — 이 도구의 '결과를 그대로 전달한다'는
+    # 성격은 유지하고, 조용한 오답이 될 경로에만 근거를 남깁니다.
+    self_referred = [name for name in scope.names if _is_self_reference(name)]
+    if not self_referred:
+        return raw
+    try:
+        payload = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        # 이상 응답은 여기서 판단할 일이 아니므로 손대지 않고 그대로 넘깁니다.
+        return raw
+    if not isinstance(payload, dict):
+        return raw
+    payload["mine_note"] = (
+        f"이 도구는 외부 공유 저장소만 조회하므로 {', '.join(self_referred)}의 앱 일정은 이 결과에 "
+        "없습니다. 공유 저장소로 동기화되지 않은 내 일정은 rows에 나타나지 않으니, rows가 비어 "
+        "있어도 내가 그 시간에 비어 있다고 말하지 말고 collect_member_schedules로 다시 확인하세요."
+    )
+    return json_payload(payload)
 
 
 @tool(args_schema=CreateSharedScheduleInput)
@@ -849,6 +871,14 @@ def week05_prompt_parts() -> list[str]:
             "extract_schedules_from_history는 외부 멤버만 보므로 내 일정을 아예 볼 수 없다.\n"
             "list_shared_schedules는 '공유 저장소에 무엇이 등록돼 있는지' 자체를 확인할 때 쓰는 도구이므로, "
             "단순히 누가 언제 바쁜지 묻는 질문에 이걸로 대신하지 않는다."
+        ),
+        (
+            "내 일정은 extract_schedules_from_history로 묻지 않는다. member_names에 \"나\"를 넣어 이 도구를 "
+            "불러도 앱에 저장된 내 일정은 조회되지 않는데, 결과는 ok에 rows만 비어 있어 '내 일정이 없다'처럼 "
+            "보인다. 내가 언제 바쁜지가 필요하면 내 일정만이면 personal_* 도구를, 다른 사람과 함께 볼 때는 "
+            "collect_member_schedules를 쓴다.\n"
+            "결과에 mine_note가 있으면 내 일정을 확인하지 못한 채 답하려는 상황이라는 뜻이다. 그 rows를 근거로 "
+            "내가 비어 있다고 말하지 말고 collect_member_schedules로 다시 확인한다."
         ),
         (
             "멤버를 여러 명 물으면 한 사람씩 도구를 반복 호출하지 말고 member_names 배열에 이름을 모두 담아 "

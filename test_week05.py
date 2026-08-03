@@ -33,6 +33,8 @@ trace_week05_*.py가 LLM 라우팅(변동적)을 보는 반면, 이 대본은 We
     MCP tool의 member_names는 필수 list라 None을 그대로 넘기면 경계에서 거부되므로,
     등록 멤버 이름으로 풀어서 넘긴다)
                           → B20 (빈 목록은 전체로 넓히지 않고 '대상 없음'으로 남긴다)
+  · extract는 내 일정을 못 본다 → C7d (외부 저장소만 보므로 "나"를 넣어도 앱 일정은 안 나온다.
+    rows만 비면 '내 일정 없음'과 구분되지 않으므로 그 사실을 payload에 남긴다)
   · end_time "미정" 통일 → B7 (병합 rows에 None과 "미정"이 섞이지 않는다)
   · 중복 제거 → A4 (week3 personal_create_schedule은 같은 id로 두 저장소에 쓴다)
 """
@@ -503,6 +505,23 @@ def section_c() -> None:
           bool(extracted["rows"]) and all(need <= set(r) for r in extracted["rows"]),
           str(sorted(extracted["rows"][0])) if extracted["rows"] else "rows 없음")
     check("C7b. extract가 schedule_summary 포함", isinstance(extracted.get("schedule_summary"), str))
+    check("C7c. 남만 물으면 mine_note를 붙이지 않음", "mine_note" not in extracted,
+          str(sorted(extracted.keys())))
+
+    # ★ 이 도구는 외부 저장소만 본다. "나"를 넣어 부르면 앱 DB의 내 일정은 조회되지 않는데
+    #   결과는 ok=true에 rows만 비어 "내 일정이 없다"와 구분되지 않는다(엣지 트레이스에서
+    #   실제로 이 경로를 탔다). rows는 그대로 두고 그 사실만 남기는지 본다.
+    for token in ("나", "내가"):
+        mine_ask = call(w5.extract_schedules_from_history, member_names=[token],
+                        date_from=JULY_PRACTICE_DATE_FROM, date_to=JULY_PRACTICE_DATE_TO)
+        check(f"C7d. extract에 '{token}'을 넣으면 내 일정을 못 본다는 표시가 붙음",
+              bool(mine_ask.get("mine_note")), str(sorted(mine_ask.keys())))
+    mixed_ask = call(w5.extract_schedules_from_history, member_names=["나", "철수"],
+                     date_from=JULY_PRACTICE_DATE_FROM, date_to=JULY_PRACTICE_DATE_TO)
+    check("C7e. 표시를 붙여도 남의 rows는 그대로 보존",
+          bool(mixed_ask.get("mine_note"))
+          and "철수" in {r.get("member_name") for r in mixed_ask["rows"]},
+          str(sorted({r.get("member_name") for r in mixed_ask["rows"]})))
     empty_ask = call(w5.extract_schedules_from_history, member_names=[],
                      date_from=JULY_PRACTICE_DATE_FROM, date_to=JULY_PRACTICE_DATE_TO)
     check("C8. extract member_names=[] → 0건", empty_ask["rows"] == [], str(len(empty_ask["rows"])))
