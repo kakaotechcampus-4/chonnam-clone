@@ -293,6 +293,8 @@ def _collect_member_schedules(
 ) -> dict[str, Any]:
     """내 일정과 외부 멤버 일정을 같은 row 구조로 합칩니다."""
 
+    personal_date_from = str(date_from).split("T", 1)[0].strip() if date_from else ""
+    personal_date_to = str(date_to).split("T", 1)[0].strip() if date_to else ""
     personal_rows = [
         {
             "member_name": "나",
@@ -303,8 +305,8 @@ def _collect_member_schedules(
             "notes": schedule.get("notes"),
         }
         for schedule in personal_schedules
-        if (not date_from or str(schedule.get("date") or "") >= date_from)
-        and (not date_to or str(schedule.get("date") or "") <= date_to)
+        if (not personal_date_from or str(schedule.get("date") or "") >= personal_date_from)
+        and (not personal_date_to or str(schedule.get("date") or "") <= personal_date_to)
     ]
     external_payload = json.loads(
         call_mcp_tool_sync(
@@ -322,6 +324,9 @@ def _collect_member_schedules(
         "ok": bool(external_payload.get("ok", True)),
         "tool_name": "collect_member_schedules",
         "rows": rows,
+        "searched_member_names": member_names,
+        "personal_schedule_count": len(personal_rows),
+        "external_schedule_count": len(external_rows),
         "schedule_summary": external_schedule_summary(rows),
     }
 
@@ -375,7 +380,6 @@ def create_shared_schedule(
 ) -> str:
     """외부 MCP 공유 일정 저장소에 일정을 등록하거나 갱신합니다."""
 
-    # TODO: call_mcp_tool_sync("create_shared_schedule", args)로 공유 일정 row를 생성/갱신하세요.
     return call_mcp_tool_sync(
         "create_shared_schedule",
         {
@@ -398,7 +402,6 @@ def delete_shared_schedule(
 ) -> str:
     """외부 MCP 공유 일정 저장소에서 일정을 삭제합니다."""
 
-    # TODO: call_mcp_tool_sync("delete_shared_schedule", args)로 공유 일정을 삭제하세요.
     return call_mcp_tool_sync(
         "delete_shared_schedule",
         {
@@ -475,6 +478,8 @@ def week05_prompt_parts() -> list[str]:
         "공유 일정을 새로 등록하거나 같은 schedule_id의 일정을 갱신해야 하면 create_shared_schedule을 사용한다. "
         "공유 일정을 삭제해야 하면 schedule_id 또는 source_conversation_id를 기준으로 delete_shared_schedule을 사용한다. "
         "나와 다른 구성원의 일정을 함께 확인하거나 비교해야 하면 collect_member_schedules를 사용한다. "
+        "collect_member_schedules의 rows가 비어 있으면 searched_member_names, personal_schedule_count, "
+        "external_schedule_count를 함께 확인해 누구를 검색했고 내 일정과 외부 일정이 각각 몇 건인지 설명한다. "
         "rows가 비어 있다는 사실만으로 특정 구성원이 존재하지 않는다고 판단하지 않는다. "
         "도구 결과에 없는 대화 내용이나 일정을 추측하지 말고, 구성원 이름이나 날짜 범위가 불명확하면 사용자에게 확인한다."
     ]

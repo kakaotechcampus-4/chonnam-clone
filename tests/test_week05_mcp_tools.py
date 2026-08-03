@@ -79,6 +79,28 @@ class Week05MCPWrapperTests(unittest.TestCase):
             },
         )
 
+    def test_extract_schedules_from_history_forwards_date_only_bounds(self) -> None:
+        expected = '{"ok": true, "rows": []}'
+
+        with patch.object(week05, "call_mcp_tool_sync", return_value=expected) as call_mcp:
+            actual = week05.extract_schedules_from_history.invoke(
+                {
+                    "member_names": ["영희"],
+                    "date_from": "2026-07-07",
+                    "date_to": "2026-07-10",
+                }
+            )
+
+        self.assertEqual(actual, expected)
+        call_mcp.assert_called_once_with(
+            "extract_schedules_from_history",
+            {
+                "member_names": ["영희"],
+                "date_from": "2026-07-07",
+                "date_to": "2026-07-10",
+            },
+        )
+
     def test_list_shared_schedules_forwards_all_filters(self) -> None:
         expected = '{"ok": true, "rows": []}'
 
@@ -102,6 +124,58 @@ class Week05MCPWrapperTests(unittest.TestCase):
                 "date_to": "2026-07-17",
                 "source_conversation_id": "ext_cs",
                 "limit": 10,
+            },
+        )
+
+    def test_create_shared_schedule_forwards_all_arguments(self) -> None:
+        expected = '{"ok": true, "shared_schedule": {}}'
+
+        with patch.object(week05, "call_mcp_tool_sync", return_value=expected) as call_mcp:
+            actual = week05.create_shared_schedule.invoke(
+                {
+                    "member_name": "철수",
+                    "title": "API 회의",
+                    "date": "2026-07-08",
+                    "start_time": "14:00",
+                    "end_time": "15:00",
+                    "notes": "회의실 A",
+                    "source_conversation_id": "ext_cs",
+                    "schedule_id": "shared_cs_api",
+                }
+            )
+
+        self.assertEqual(actual, expected)
+        call_mcp.assert_called_once_with(
+            "create_shared_schedule",
+            {
+                "member_name": "철수",
+                "title": "API 회의",
+                "date": "2026-07-08",
+                "start_time": "14:00",
+                "end_time": "15:00",
+                "notes": "회의실 A",
+                "source_conversation_id": "ext_cs",
+                "schedule_id": "shared_cs_api",
+            },
+        )
+
+    def test_delete_shared_schedule_forwards_identifiers(self) -> None:
+        expected = '{"ok": true, "deleted": []}'
+
+        with patch.object(week05, "call_mcp_tool_sync", return_value=expected) as call_mcp:
+            actual = week05.delete_shared_schedule.invoke(
+                {
+                    "schedule_id": "shared_cs_api",
+                    "source_conversation_id": "ext_cs",
+                }
+            )
+
+        self.assertEqual(actual, expected)
+        call_mcp.assert_called_once_with(
+            "delete_shared_schedule",
+            {
+                "schedule_id": "shared_cs_api",
+                "source_conversation_id": "ext_cs",
             },
         )
 
@@ -163,6 +237,9 @@ class Week05MCPWrapperTests(unittest.TestCase):
         self.assertEqual(len(actual["rows"]), 2)
         self.assertEqual(actual["rows"][0]["member_name"], "나")
         self.assertEqual(actual["rows"][1], external_row)
+        self.assertEqual(actual["searched_member_names"], ["영희"])
+        self.assertEqual(actual["personal_schedule_count"], 1)
+        self.assertEqual(actual["external_schedule_count"], 1)
         self.assertIn("개인 코칭", actual["schedule_summary"])
         self.assertIn("디자인 피드백", actual["schedule_summary"])
         call_mcp.assert_called_once_with(
@@ -174,6 +251,118 @@ class Week05MCPWrapperTests(unittest.TestCase):
             },
         )
 
+    def test_collect_member_schedules_reports_searched_members_when_rows_are_empty(self) -> None:
+        with (
+            patch.object(
+                week05,
+                "_personal_schedules_for_current_scope",
+                return_value=[],
+            ),
+            patch.object(
+                week05,
+                "call_mcp_tool_sync",
+                return_value=json.dumps({"ok": True, "rows": []}),
+            ),
+        ):
+            actual = json.loads(
+                week05.collect_member_schedules.invoke(
+                    {
+                        "member_names": ["철수"],
+                        "date_from": "2026-07-07",
+                        "date_to": "2026-07-10",
+                    }
+                )
+            )
+
+        self.assertEqual(actual["rows"], [])
+        self.assertEqual(actual["searched_member_names"], ["철수"])
+        self.assertEqual(actual["personal_schedule_count"], 0)
+        self.assertEqual(actual["external_schedule_count"], 0)
+
+    def test_collect_member_schedules_keeps_personal_rows_with_iso_datetime_bounds(self) -> None:
+        personal_schedule = {
+            "title": "개인 코칭",
+            "date": "2026-07-08",
+            "start_time": "10:00",
+            "end_time": "11:00",
+        }
+        external_row = {
+            "member_name": "영희",
+            "title": "디자인 피드백",
+            "date": "2026-07-08",
+            "start_time": "13:00",
+            "end_time": "14:00",
+            "notes": "",
+        }
+        mcp_payload = json.dumps({"ok": True, "rows": [external_row]}, ensure_ascii=False)
+
+        with (
+            patch.object(
+                week05,
+                "_personal_schedules_for_current_scope",
+                return_value=[personal_schedule],
+            ),
+            patch.object(week05, "call_mcp_tool_sync", return_value=mcp_payload) as call_mcp,
+        ):
+            actual = json.loads(
+                week05.collect_member_schedules.invoke(
+                    {
+                        "member_names": ["영희"],
+                        "date_from": "2026-07-07T00:00:00",
+                        "date_to": "2026-07-10T23:59:59",
+                    }
+                )
+            )
+
+        self.assertEqual(actual["rows"], [
+            {
+                "member_name": "나",
+                "title": "개인 코칭",
+                "date": "2026-07-08",
+                "start_time": "10:00",
+                "end_time": "11:00",
+                "notes": None,
+            },
+            external_row,
+        ])
+        call_mcp.assert_called_once_with(
+            "extract_schedules_from_history",
+            {
+                "member_names": ["영희"],
+                "date_from": "2026-07-07T00:00:00",
+                "date_to": "2026-07-10T23:59:59",
+            },
+        )
+
+    def test_collect_member_schedules_includes_personal_schedule_on_iso_datetime_start_date(self) -> None:
+        personal_schedule = {
+            "title": "시작일 개인 일정",
+            "date": "2026-07-07",
+            "start_time": "10:00",
+            "end_time": "11:00",
+        }
+        mcp_payload = json.dumps({"ok": True, "rows": []}, ensure_ascii=False)
+
+        with (
+            patch.object(
+                week05,
+                "_personal_schedules_for_current_scope",
+                return_value=[personal_schedule],
+            ),
+            patch.object(week05, "call_mcp_tool_sync", return_value=mcp_payload),
+        ):
+            actual = json.loads(
+                week05.collect_member_schedules.invoke(
+                    {
+                        "member_names": ["영희"],
+                        "date_from": "2026-07-07T00:00:00",
+                        "date_to": "2026-07-10T23:59:59",
+                    }
+                )
+            )
+
+        self.assertEqual([row["title"] for row in actual["rows"]], ["시작일 개인 일정"])
+
     def test_week05_tools_exposes_only_completed_week05_tools(self) -> None:
         tool_names = {item.name for item in week05.week05_tools()}
 
@@ -182,12 +371,12 @@ class Week05MCPWrapperTests(unittest.TestCase):
                 "search_previous_conversations",
                 "load_conversation_messages",
                 "extract_schedules_from_history",
+                "create_shared_schedule",
+                "delete_shared_schedule",
                 "list_shared_schedules",
                 "collect_member_schedules",
             }.issubset(tool_names)
         )
-        self.assertNotIn("create_shared_schedule", tool_names)
-        self.assertNotIn("delete_shared_schedule", tool_names)
 
 
 class Week05MCPIntegrationTests(unittest.TestCase):
