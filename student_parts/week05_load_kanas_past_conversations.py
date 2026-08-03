@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 from langchain.agents import create_agent
@@ -498,6 +499,107 @@ def _has_unknown_end_time(row: dict[str, Any]) -> bool:
     return str(row.get("end_time") or "").strip() in UNKNOWN_END_TIME_VALUES
 
 
+"""예외 원문을 반환값이 아니라 로그로 남기는 이유.
+
+1. 예외 메시지에는 실행 환경 정보가 섞여 나온다.
+   subprocess 기동 실패 메시지에는 실행 명령과 파일 경로가 들어가고, JSON 파싱
+   실패 메시지에는 응답 본문 일부가 들어간다. 이 값을 반환 payload에 담으면
+   LLM 컨텍스트를 거쳐 사용자 답변까지 전달될 수 있다.
+
+2. 그래서 두 경로를 나눈다.
+   반환 payload에는 이 파일에서 작성한 고정 문장과 예외 타입 이름만 담고,
+   예외 원문과 traceback은 logger로만 남긴다. 예외 타입 이름은 클래스 이름이라
+   경로나 명령을 포함하지 않는다.
+
+3. logger 설정은 이 파일에서 하지 않는다.
+   handler를 지정하지 않으면 표준 logging이 ERROR 이상을 stderr로 출력하므로,
+   실행 중에는 개발자가 원문을 확인할 수 있고 반환값에는 남지 않는다.
+"""
+_LOGGER = logging.getLogger(__name__)
+
+EXTERNAL_SCHEDULE_TOOL_NAME = "extract_schedules_from_history"
+
+# errors 항목의 stage 값입니다. 외부 장애와 응답 구조 불일치를 구분합니다.
+EXTERNAL_CALL_STAGE = "외부 조회 호출"
+EXTERNAL_PAYLOAD_STAGE = "외부 응답 구조"
+
+EXTERNAL_CALL_FAILURE_MESSAGE = "외부 일정 저장소를 조회하지 못했다. 서버 실행 또는 응답 해석 단계에서 중단됐다."
+EXTERNAL_PAYLOAD_FAILURE_MESSAGE = "외부 일정 저장소 응답에서 rows 목록을 읽지 못했다."
+
+
+def _fetch_external_schedule_rows(
+    *,
+    member_names: list[str],
+    date_from: str,
+    date_to: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    """외부 멤버 일정을 MCP로 조회하고 실패 사실을 함께 반환합니다."""
+
+    """실패 종류를 두 가지로 나눠 처리하는 이유와 처리 순서.
+
+    1. try 구간에는 프로세스 경계를 넘는 두 줄만 둔다.
+       MCP 호출과 JSON 파싱은 외부 프로세스의 상태에 따라 실패한다. 반면 응답에서
+       rows를 읽는 부분은 이 파일이 가정한 응답 구조가 맞는지 확인하는 작업이다.
+       두 부분을 같은 try에 두면 응답 구조 불일치가 외부 장애로 보고된다.
+
+    2. 응답 구조 확인은 예외가 아니라 타입 검사로 한다.
+       payload가 dict가 아니거나 rows가 list가 아닌 경우를 isinstance로 판정한다.
+       이 경로에서는 예외가 발생하지 않으므로 1번의 try 구간과 섞이지 않는다.
+
+    3. 두 실패를 stage 값으로 구분해 담는다.
+       EXTERNAL_CALL_STAGE는 외부 프로세스 쪽 실패이고, EXTERNAL_PAYLOAD_STAGE는
+       응답 구조가 이 파일의 가정과 다른 경우다. 원인이 다르므로 errors 항목에서도
+       구분해야 한다.
+
+    4. 처리 순서
+       (1) MCP를 호출하고 응답 문자열을 JSON으로 읽는다. 실패하면 빈 rows와
+           EXTERNAL_CALL_STAGE 항목을 반환한다.
+       (2) payload에서 rows를 읽는다. 구조가 다르면 빈 rows와
+           EXTERNAL_PAYLOAD_STAGE 항목을 반환한다.
+       (3) dict가 아닌 원소는 버린다. 뒤따르는 정렬과 요약이 dict를 전제한다.
+    """
+    try:
+        external_payload = json.loads(
+            call_mcp_tool_sync(
+                EXTERNAL_SCHEDULE_TOOL_NAME,
+                {
+                    "member_names": member_names,
+                    "date_from": date_from,
+                    "date_to": date_to,
+                },
+            )
+        )
+    except Exception as exc:
+        _LOGGER.exception("%s 호출 실패", EXTERNAL_SCHEDULE_TOOL_NAME)
+        return [], [
+            {
+                "tool": EXTERNAL_SCHEDULE_TOOL_NAME,
+                "stage": EXTERNAL_CALL_STAGE,
+                "error_type": type(exc).__name__,
+                "message": EXTERNAL_CALL_FAILURE_MESSAGE,
+            }
+        ]
+
+    payload_rows = external_payload.get("rows") if isinstance(external_payload, dict) else None
+    if not isinstance(payload_rows, list):
+        _LOGGER.error(
+            "%s 응답 구조가 예상과 다릅니다. payload_type=%s, rows_type=%s",
+            EXTERNAL_SCHEDULE_TOOL_NAME,
+            type(external_payload).__name__,
+            type(payload_rows).__name__,
+        )
+        return [], [
+            {
+                "tool": EXTERNAL_SCHEDULE_TOOL_NAME,
+                "stage": EXTERNAL_PAYLOAD_STAGE,
+                "error_type": type(external_payload).__name__,
+                "message": EXTERNAL_PAYLOAD_FAILURE_MESSAGE,
+            }
+        ]
+
+    return [row for row in payload_rows if isinstance(row, dict)], []
+
+
 def _collect_member_schedules(
     *,
     member_names: list[str],
@@ -593,13 +695,13 @@ def _collect_member_schedules(
        외부 row는 store가 이미 같은 필드로 반환하므로 그대로 사용한다.
        계산 순서를 이렇게 두면 외부 호출이 실패해도 personal_rows는 남는다.
 
-    5. 외부 호출 실패를 이 함수 안에서 처리한다.
+    5. 외부 조회와 실패 처리를 _fetch_external_schedule_rows로 분리한다.
        (1) 예외를 그대로 올리면 외부 멤버 조회 실패 하나가 내 일정 답변까지 막는다.
-           그래서 외부 호출 구간만 try로 감싸고, 실패해도 personal_rows로 답할 수
-           있게 한다.
+           그래서 조회 결과와 실패 목록을 함께 반환받고, 실패해도 personal_rows로
+           답할 수 있게 한다.
 
-       (2) 실패를 숨기지 않는다. 반환 payload의 errors 항목에 tool 이름과 예외
-           정보를 담고, WEEK05_SCHEDULE_COLLECTION_PROMPT가 errors가 비어 있지
+       (2) 실패를 숨기지 않는다. 반환 payload의 errors 항목에 tool 이름과 실패
+           단계를 담고, WEEK05_SCHEDULE_COLLECTION_PROMPT가 errors가 비어 있지
            않으면 실패 사실을 함께 알리도록 지시한다.
 
        (3) 잡는 예외 타입을 좁히지 않고 try 구간을 좁힌다.
@@ -607,8 +709,9 @@ def _collect_member_schedules(
            tool 이름 오류는 ValueError(fixed/mcp_client.py:113), subprocess 기동
            실패는 OSError 계열, adapter 내부 실패는 또 다른 타입으로 올라오고,
            _run_coroutine_sync가 별도 thread의 예외를 그대로 다시 발생시킨다.
-           타입으로 좁히면 통신 실패 일부가 빠지므로, try 안에 MCP 호출과 JSON
-           파싱 두 줄만 두어 구간으로 범위를 제한한다.
+           타입으로 좁히면 통신 실패 일부가 빠지므로 구간으로 범위를 제한한다.
+           try 안에 남은 것은 프로세스 경계를 넘는 두 줄뿐이고, 응답 구조 확인은
+           타입 검사로 분리했다. 근거는 _fetch_external_schedule_rows에 있다.
 
     6. 날짜, 시작 시간, 이름 순으로 정렬한다.
        외부 store의 조회 순서와 같은 기준으로 맞춰, 두 출처를 합친 뒤에도
@@ -634,26 +737,11 @@ def _collect_member_schedules(
     external_rows: list[dict[str, Any]] = []
     errors: list[dict[str, str]] = []
     if external_member_names:
-        try:
-            external_payload = json.loads(
-                call_mcp_tool_sync(
-                    "extract_schedules_from_history",
-                    {
-                        "member_names": external_member_names,
-                        "date_from": normalized_date_from,
-                        "date_to": normalized_date_to,
-                    },
-                )
-            )
-            external_rows = external_payload.get("rows") or []
-        except Exception as exc:
-            errors.append(
-                {
-                    "tool": "extract_schedules_from_history",
-                    "error_type": type(exc).__name__,
-                    "reason": str(exc),
-                }
-            )
+        external_rows, errors = _fetch_external_schedule_rows(
+            member_names=external_member_names,
+            date_from=normalized_date_from,
+            date_to=normalized_date_to,
+        )
 
     rows = [*personal_rows, *external_rows]
     rows.sort(
