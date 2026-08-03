@@ -11,6 +11,7 @@ from fixed.app_store import AppSQLiteStore
 from fixed.config import CONFIG
 from fixed.external_mcp import call_external_tool_payload
 from fixed.external_people_store import (
+    JULY_PRACTICE_MEMBER_NAMES,
     external_schedule_summary,
     normalize_external_member_names,
     normalize_external_schedule_date_bounds,
@@ -481,6 +482,8 @@ def week05_system_prompt() -> str:
 def week05_prompt_parts() -> list[str]:
     """1~5주차 system prompt 조각을 누적합니다."""
 
+    practice_members = ", ".join(JULY_PRACTICE_MEMBER_NAMES)
+
     return [
         *week04_prompt_parts(),
         (
@@ -489,6 +492,10 @@ def week05_prompt_parts() -> list[str]:
             "외부 멤버의 지난 대화는 search_previous_conversations로 찾고, 원문이 필요할 때만 load_conversation_messages를 사용한다. "
             "외부 멤버의 바쁜 시간은 extract_schedules_from_history로 확인한다. "
             "나와 외부 멤버 일정을 함께 봐야 하면 collect_member_schedules를 사용한다. "
+            f"사용자가 '다들'이라고 말하면 member_names에 '나'와 실습 멤버({practice_members})를 모두 넣고 collect_member_schedules를 사용한다. "
+            "collect_member_schedules를 호출할 때는 member_names, date_from, date_to를 반드시 채운다. "
+            "'이번 주'는 오늘이 속한 주의 월요일부터 일요일까지로 해석한다. "
+            "멤버나 날짜 범위를 정할 수 없으면 tool을 호출하지 말고 먼저 물어본다. "
             "공유 일정 저장소 자체를 확인할 때는 list_shared_schedules를 사용한다. "
             "답변은 tool 결과의 rows와 schedule_summary를 근거로 짧게 답하고, 결과가 없으면 추측하지 않는다."
         ),
