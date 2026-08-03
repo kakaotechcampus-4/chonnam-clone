@@ -12,6 +12,7 @@ from fixed.config import CONFIG
 from fixed.external_mcp import call_external_tool_payload
 from fixed.external_people_store import (
     external_schedule_summary,
+    normalize_external_schedule_date_bounds,
 )
 from fixed.llm import chat_model
 from fixed.mcp_client import (
@@ -293,8 +294,11 @@ def _collect_member_schedules(
 ) -> dict[str, Any]:
     """내 일정과 외부 멤버 일정을 같은 row 구조로 합칩니다."""
 
-    personal_date_from = str(date_from).split("T", 1)[0].strip() if date_from else ""
-    personal_date_to = str(date_to).split("T", 1)[0].strip() if date_to else ""
+    personal_date_from, personal_date_to = normalize_external_schedule_date_bounds(
+        member_names,
+        date_from,
+        date_to,
+    )
     personal_rows = [
         {
             "member_name": "나",
