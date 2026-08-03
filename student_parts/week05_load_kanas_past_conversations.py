@@ -57,7 +57,8 @@ WEEK05_SCHEDULE_COLLECTION_PROMPT = (
     "기간을 임의로 오늘 하루로 좁히면 등록된 row가 있어도 0건이 조회된다. "
     "여러 사람이 모두 가능한 최종 회의 시간을 확정하는 것은 이번 주차의 범위가 아니므로, "
     "모은 일정을 근거로 바쁜 시간과 비어 있는 시간을 설명하는 데까지만 답한다. "
-    "종료 시간이 '미정'인 일정은 겹침 여부를 판단하지 말고, "
+    "tool 결과의 unknown_end_time_count가 0보다 크면 종료 시간이 확정되지 않은 일정이 있다는 뜻이므로, "
+    "unknown_end_time_rows에 담긴 일정은 겹침 여부를 판단하지 말고 "
     "빈 시간대를 제안하기 전에 사용자에게 종료 시간을 먼저 확인한다. "
     "tool 결과에 errors 항목이 비어 있지 않으면 조회하지 못한 대상이 있다는 뜻이므로, "
     "확보한 rows로 답하되 어떤 조회가 실패했는지 함께 알린다."
@@ -476,6 +477,27 @@ def _personal_schedule_row(schedule: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# 종료 시간이 확정되지 않은 row의 end_time 값입니다.
+UNKNOWN_END_TIME_VALUES = ("", "미정")
+
+
+def _has_unknown_end_time(row: dict[str, Any]) -> bool:
+    """종료 시간이 확정되지 않은 row인지 판정합니다."""
+
+    """비교 대상을 값 하나가 아니라 집합으로 둔 이유.
+
+    1. "미정"이 들어오는 경로가 두 군데다.
+       fixed/external_people_store.py:261이 공유 저장소 등록 시점에 end_time을
+       "미정"으로 정규화하고, 이 파일의 _personal_schedule_row()도 내 일정 row에
+       같은 값을 넣는다.
+
+    2. 값 자체가 비어 있는 경우도 같이 처리한다.
+       MCP 조회 결과 row의 end_time이 빈 문자열이나 None으로 오면 종료 시간을
+       모르는 상태이므로 "미정"과 같게 판정해야 한다.
+    """
+    return str(row.get("end_time") or "").strip() in UNKNOWN_END_TIME_VALUES
+
+
 def _collect_member_schedules(
     *,
     member_names: list[str],
@@ -642,6 +664,24 @@ def _collect_member_schedules(
         )
     )
 
+    """종료 시간 미확정 일정을 payload 항목으로 따로 담는 이유.
+
+    1. 지시문 한 줄만으로는 전달이 보장되지 않는다.
+       지시문은 대화마다 한 번 들어가고 LLM이 참조하지 않을 수 있다. 반면 tool
+       결과는 답변을 만들기 위해 반드시 읽으므로, 판단에 필요한 사실은 지시문이
+       아니라 반환값에 담는 편이 확실하다.
+
+    2. 개수와 대상 row를 함께 담는다.
+       개수만 담으면 몇 건인지는 알아도 어느 일정인지 모른다. 사용자에게 종료
+       시간을 되물으려면 대상을 지목해야 하므로 해당 row 목록도 함께 담는다.
+
+    3. rows의 원소를 그대로 참조한다.
+       값을 복사하거나 필드를 변환하지 않는다. rows의 필드 구조는 외부 MCP row와
+       같게 유지해야 하므로 row 안에 판정 결과를 넣지 않고 payload 상위 항목으로
+       분리한다.
+    """
+    unknown_end_time_rows = [row for row in rows if _has_unknown_end_time(row)]
+
     return {
         "ok": True,
         "tool_name": "collect_member_schedules",
@@ -651,6 +691,8 @@ def _collect_member_schedules(
         "date_to": normalized_date_to,
         "personal_row_count": len(personal_rows),
         "external_row_count": len(external_rows),
+        "unknown_end_time_count": len(unknown_end_time_rows),
+        "unknown_end_time_rows": unknown_end_time_rows,
         "rows": rows,
         "schedule_summary": external_schedule_summary(rows),
         "errors": errors,
