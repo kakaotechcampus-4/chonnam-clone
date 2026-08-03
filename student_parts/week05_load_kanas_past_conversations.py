@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, NamedTuple
 
 from langchain.agents import create_agent
 from langchain_core.tools import tool
@@ -283,6 +283,117 @@ def json_payload(payload: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False)
 
 
+def _mcp_payload_or_error(tool_name: str, args: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
+    """MCP tool을 부르고 (payload, 실패 설명)을 돌려줍니다.
+
+    MCP는 subprocess로 뜨므로 실패할 수 있습니다. 예외를 그대로 올리면 같은 결과에 담을
+    다른 출처(내 일정)까지 못 쓰고, 조용히 빈 rows를 주면 '아무도 안 바쁘다'로 읽혀 더
+    위험하므로 실패를 표시해 돌려줍니다.
+
+    다만 "외부 호출이 실패한 것"과 "이 파일에 버그가 있는 것"은 다르게 다뤄야 합니다.
+    후자를 external_error에 담아 warning으로 내보내면, 버그가 '외부 시스템 탓'으로
+    위장돼 조용히 넘어갑니다. 그래서 (1) try 안에는 경계 호출 한 줄만 두어 내 코드가
+    예외를 낼 여지를 없애고, (2) 그래도 새어 들어올 수 있는 프로그래밍 오류는 다시
+    던져서 테스트·트레이스에서 바로 드러나게 합니다.
+
+    이 판정을 부르는 곳마다 따로 쓰면 두 사본이 갈라져 한쪽만 버그를 삼키게 되므로
+    (외부 멤버 일정 조회와 등록 멤버 조회가 둘 다 이 경계를 지납니다) 한곳에 둡니다.
+    """
+
+    try:
+        parsed = json.loads(call_mcp_tool_sync(tool_name, args))
+    except _INTERNAL_BUG_ERRORS:
+        # 오타·잘못된 이름 참조 같은 내 실수다. 외부 실패로 위장하지 않고 그대로 올린다.
+        raise
+    except Exception as exc:
+        # subprocess 기동 실패, 프로토콜 오류, JSON 파싱 실패 등 경계 너머의 실패.
+        return {}, f"{type(exc).__name__}: {exc}"
+
+    # 경계에서 온 값은 신뢰하지 않는다. 모양이 다르면 rows 없는 응답으로 취급한다.
+    if not isinstance(parsed, dict):
+        return {}, f"UnexpectedPayload: dict가 아닌 {type(parsed).__name__} 응답"
+    return parsed, None
+
+
+# 조회 대상을 어떻게 정했는지 결과에 남길 때 쓰는 값입니다. rows만 봐서는
+# "안 물어봐서 없는 것"과 "물었는데 일정이 없는 것"이 구분되지 않습니다.
+MEMBER_SCOPE_REQUESTED = "요청한 이름"
+MEMBER_SCOPE_ALL_REGISTERED = "공유 저장소 등록 멤버 전체"
+MEMBER_SCOPE_NONE_REQUESTED = "대상 없음"
+
+# 등록 멤버를 알아내려고 공유 저장소를 읽을 때의 최대 row 수입니다(store 허용 상한).
+REGISTERED_MEMBER_ROW_LIMIT = 200
+
+MEMBER_SCOPE_NONE_NOTE = (
+    "member_names가 빈 목록이라 조회 대상이 없습니다. rows가 비어 있는 것은 '아무도 바쁘지 않다'가 "
+    "아니라 아무도 조회하지 않았다는 뜻입니다. 특정 인물을 물었다면 그 이름을 넣고, 전체를 보려면 "
+    "member_names를 넘기지 않고 다시 호출하세요."
+)
+
+
+class MemberScope(NamedTuple):
+    """LLM이 넘긴 member_names를 실제 조회 대상으로 확정한 결과입니다."""
+
+    names: list[str]
+    reason: str
+    note: str | None = None
+    error: str | None = None
+
+
+def _registered_member_names(date_from: str, date_to: str) -> MemberScope:
+    """공유 일정 저장소에 등록된 멤버 이름을 조회 범위 안에서 모읍니다."""
+
+    payload, error = _mcp_payload_or_error("list_shared_schedules", {
+        "member_names": None,
+        "date_from": date_from,
+        "date_to": date_to,
+        "source_conversation_id": None,
+        "limit": REGISTERED_MEMBER_ROW_LIMIT,
+    })
+    rows = [row for row in (payload.get("rows") or []) if isinstance(row, dict)]
+
+    # 같은 사람의 일정이 여러 건이므로 이름은 중복 없이 순서만 유지합니다.
+    names: list[str] = []
+    for row in rows:
+        name = str(row.get("member_name") or "").strip()
+        if name and name not in names:
+            names.append(name)
+
+    # row 상한에 걸리면 뒤쪽 멤버가 잘려 조용히 빠질 수 있으므로 그 사실을 남깁니다.
+    note = None
+    if len(rows) >= REGISTERED_MEMBER_ROW_LIMIT:
+        note = (
+            f"공유 저장소 row를 {REGISTERED_MEMBER_ROW_LIMIT}건까지만 읽었으므로 등록 멤버가 더 있을 수 "
+            "있습니다. 빠진 사람이 의심되면 이름을 직접 넣어 다시 호출하세요."
+        )
+    return MemberScope(names=names, reason=MEMBER_SCOPE_ALL_REGISTERED, note=note, error=error)
+
+
+def _resolve_member_names(
+    member_names: list[str] | None,
+    date_from: str,
+    date_to: str,
+) -> MemberScope:
+    """member_names를 실제로 조회할 이름 목록으로 확정합니다.
+
+    "다들 언제 바쁜지 모아줘"처럼 이름이 나오지 않는 요청은 member_names를 넘기지 않는 것이
+    맞지만, MCP extract_schedules_from_history의 member_names는 필수 list라 None이나 생략은
+    경계에서 거부됩니다(store 쪽 "None이면 멤버 전체"는 이 경계를 넘어오지 못합니다).
+    그래서 '대상을 지정하지 않음'을 이 wrapper가 등록 멤버 이름 목록으로 풀어서 넘깁니다.
+
+    빈 목록은 전체로 넓히지 않습니다 — "철수 일정"을 물었는데 이름 전달만 실패한 경우까지
+    전체 조회로 바뀌면 묻지 않은 사람들의 일정을 답하게 됩니다. 이는 _collect_member_schedules
+    가 include_mine에서 "항상 포함"을 물린 것과 같은 이유입니다. 대신 아무도 조회하지 않았다는
+    사실을 note로 남겨 빈 rows가 '아무도 안 바쁘다'로 읽히지 않게 합니다.
+    """
+
+    if member_names is None:
+        return _registered_member_names(date_from, date_to)
+    if not [name for name in member_names if str(name).strip()]:
+        return MemberScope(names=[], reason=MEMBER_SCOPE_NONE_REQUESTED, note=MEMBER_SCOPE_NONE_NOTE)
+    return MemberScope(names=list(member_names), reason=MEMBER_SCOPE_REQUESTED)
+
+
 class SearchPreviousConversationsInput(BaseModel):
     """외부 이전 대화 검색 입력입니다."""
 
@@ -300,7 +411,10 @@ class LoadConversationMessagesInput(BaseModel):
 class ExtractSchedulesFromHistoryInput(BaseModel):
     """외부 멤버 일정 추출 입력입니다."""
 
-    member_names: list[str]
+    # 필수 필드로 두면 "다들 언제 바쁜지"처럼 이름이 없는 요청에서 LLM이 필드를 채울 수밖에 없어
+    # 없는 이름을 지어내거나 빈 배열('대상 없음')을 넣습니다. 선택 필드로 두어 '지정하지 않음'을
+    # 실제로 표현할 수 있게 하고, 그때의 뜻은 _resolve_member_names()에서 정의합니다.
+    member_names: list[str] | None = None
     date_from: str
     date_to: str
 
@@ -338,7 +452,9 @@ class ListSharedSchedulesInput(BaseModel):
 class CollectMemberSchedulesInput(BaseModel):
     """내 일정과 외부 멤버 busy-time 수집 입력입니다."""
 
-    member_names: list[str]
+    # ExtractSchedulesFromHistoryInput과 같은 이유로 선택 필드입니다.
+    # 넘기지 않으면 등록 멤버 전체 + "나"를 대상으로 봅니다(_collect_member_schedules 주석 참고).
+    member_names: list[str] | None = None
     date_from: str
     date_to: str
 
@@ -385,22 +501,33 @@ def _personal_schedules_in_window(
 
 def _collect_member_schedules(
     *,
-    member_names: list[str],
+    member_names: list[str] | None,
     date_from: str,
     date_to: str,
     personal_schedules: list[dict[str, Any]],
 ) -> dict[str, Any]:
     """내 일정과 외부 멤버 일정을 같은 row 구조로 합칩니다."""
 
+    bounded_date_from, bounded_date_to = normalize_external_schedule_date_bounds(
+        member_names, date_from, date_to
+    )
+    # 이름이 나오지 않는 요청("다들 언제 바쁜지 모아줘")을 여기서 조회 대상으로 확정합니다.
+    scope = _resolve_member_names(member_names, bounded_date_from, bounded_date_to)
+    requested_members = list(scope.names)
+    if scope.reason == MEMBER_SCOPE_ALL_REGISTERED:
+        # 전체를 물었으면 사용자 본인도 그 안에 있습니다. 아래 include_mine의 "묻지 않은 내 일정은
+        # 넣지 않는다"와 어긋나지 않습니다 — 특정 이름을 물은 게 아니라 전체를 물은 경우입니다.
+        # 공유 저장소에 내 일정이 동기화됐는지에 따라 포함 여부가 흔들리면 안 되므로
+        # 조회 결과에서 "나"를 찾는 대신 여기서 직접 넣습니다.
+        if PERSONAL_SHARED_MEMBER_NAME not in requested_members:
+            requested_members.insert(0, PERSONAL_SHARED_MEMBER_NAME)
+
     # 사용자를 가리키는 말은 공유 저장소의 "나"로 맞춥니다. 이 처리가 없으면 '저랑 철수 일정'처럼
     # 물었을 때 아래 include_mine 판정이 빗나가 내 일정이 조용히 빠집니다.
     normalized_members = [
         PERSONAL_SHARED_MEMBER_NAME if _is_self_reference(name) else name
-        for name in normalize_external_member_names(member_names)
+        for name in normalize_external_member_names(requested_members)
     ]
-    bounded_date_from, bounded_date_to = normalize_external_schedule_date_bounds(
-        member_names, date_from, date_to
-    )
     # 내 일정은 앱 DB에서 이미 읽으므로 외부 조회 대상에서는 "나"를 뺍니다. 공유 저장소로 동기화된
     # "나" 사본이 외부 일정으로 또 잡히면 같은 일정이 두 번 집계됩니다.
     external_members = [
@@ -445,62 +572,41 @@ def _collect_member_schedules(
             "notes": f"참석자: {', '.join(members)}" if members else None,
         })
 
-    # 외부 조회 대상이 없으면 MCP subprocess를 띄우지 않습니다.
-    # member_names를 None으로 넘기면 store가 멤버 전체를 반환하므로 빈 목록을 그대로 넘기지 않습니다.
-    external_error: str | None = None
-    if external_members:
-        # MCP는 subprocess로 뜨므로 실패할 수 있다. 예외를 그대로 올리면 내 일정까지 못 쓰고,
-        # 조용히 빈 rows를 주면 '아무도 안 바쁘다'로 읽혀 더 위험하므로 실패를 표시해 돌려준다.
-        #
-        # 다만 "외부 호출이 실패한 것"과 "이 함수에 버그가 있는 것"은 다르게 다뤄야 한다.
-        # 후자를 external_error에 담아 warning으로 내보내면, 버그가 '외부 시스템 탓'으로
-        # 위장돼 조용히 넘어간다. 그래서 (1) try 안에는 경계 호출 한 줄만 두어 내 코드가
-        # 예외를 낼 여지를 없애고, (2) 그래도 새어 들어올 수 있는 프로그래밍 오류는
-        # 다시 던져서 테스트·트레이스에서 바로 드러나게 한다.
-        payload: dict[str, Any] = {}
-        try:
-            parsed = json.loads(
-                call_mcp_tool_sync(
-                    "extract_schedules_from_history",
-                    {
-                        "member_names": external_members,
-                        "date_from": bounded_date_from,
-                        "date_to": bounded_date_to,
-                    },
-                )
-            )
-        except _INTERNAL_BUG_ERRORS:
-            # 오타·잘못된 이름 참조 같은 내 실수다. 외부 실패로 위장하지 않고 그대로 올린다.
-            raise
-        except Exception as exc:
-            # subprocess 기동 실패, 프로토콜 오류, JSON 파싱 실패 등 경계 너머의 실패.
-            external_error = f"{type(exc).__name__}: {exc}"
-        else:
-            # 경계에서 온 값은 신뢰하지 않는다. 모양이 다르면 rows 없는 응답으로 취급한다.
-            if isinstance(parsed, dict):
-                payload = parsed
-            else:
-                external_error = f"UnexpectedPayload: dict가 아닌 {type(parsed).__name__} 응답"
-
+    # 외부 조회 대상이 없으면 MCP subprocess를 띄우지 않습니다. 빈 목록을 그대로 넘겨도
+    # store가 '해당하는 사람이 없음'으로 읽어 어차피 0건이고, None으로 바꿔 넘기는 것도
+    # 답이 아닙니다 — MCP tool의 member_names는 필수 list라 경계에서 거부됩니다.
+    # 조회 대상을 알아내는 데 실패한 경우(scope.error)에도 누구에게 물어야 할지 모르므로 부르지 않습니다.
+    external_error: str | None = scope.error
+    external_rows: Any = None
+    if external_members and external_error is None:
+        payload, external_error = _mcp_payload_or_error("extract_schedules_from_history", {
+            "member_names": external_members,
+            "date_from": bounded_date_from,
+            "date_to": bounded_date_to,
+        })
         external_rows = payload.get("rows")
-        # 외부 row에서 busy-time 판단에 쓰는 필드만 내 row와 같은 순서로 남깁니다.
-        rows.extend(
-            {
-                "member_name": row.get("member_name"),
-                "title": row.get("title"),
-                "date": row.get("date"),
-                "start_time": row.get("start_time"),
-                "end_time": row.get("end_time"),
-                "notes": row.get("notes"),
-            }
-            for row in (external_rows if isinstance(external_rows, list) else [])
-            if isinstance(row, dict)
-        )
+
+    # 외부 row에서 busy-time 판단에 쓰는 필드만 내 row와 같은 순서로 남깁니다.
+    rows.extend(
+        {
+            "member_name": row.get("member_name"),
+            "title": row.get("title"),
+            "date": row.get("date"),
+            "start_time": row.get("start_time"),
+            "end_time": row.get("end_time"),
+            "notes": row.get("notes"),
+        }
+        for row in (external_rows if isinstance(external_rows, list) else [])
+        if isinstance(row, dict)
+    )
 
     result = {
         "ok": external_error is None,
         "tool_name": "collect_member_schedules",
+        # 실제로 조회한 대상과 그 대상을 정한 근거를 함께 남깁니다. LLM이 이름을 넘기지 않은
+        # 경우 rows만 봐서는 누구를 조회했는지 알 수 없어, 빠진 사람을 알아챌 수 없습니다.
         "member_names": normalized_members,
+        "member_scope": scope.reason,
         "date_from": bounded_date_from,
         "date_to": bounded_date_to,
         "rows": rows,
@@ -513,6 +619,8 @@ def _collect_member_schedules(
     # 이 기록이 없으면 규약 위반이 흔적조차 남기지 않습니다. 결과만 보면 정상이라
     # 트레이스를 뒤져도 못 찾고, Week 6 하위 agent도 rows가 완전한지 알 길이 없습니다.
     # 빠진 게 없으면(0건) 필드를 달지 않습니다 — 매번 붙는 잡음은 곧 무시됩니다.
+    if scope.note:
+        result["members_note"] = scope.note
     if not include_mine and mine_in_window:
         result["mine_excluded_count"] = len(mine_in_window)
         result["mine_excluded_note"] = (
@@ -523,9 +631,11 @@ def _collect_member_schedules(
     if external_error:
         result["external_error"] = external_error
         result["warning"] = (
+            # 조회 대상 목록 자체를 못 가져온 경우에는 이름을 적을 수 없으므로 문구를 나눕니다.
             f"외부 멤버({', '.join(external_members)}) 일정 조회가 실패했습니다. "
-            "rows에서 그 사람들의 일정이 빠져 있으니 한가하다고 판단하지 마세요."
-        )
+            if external_members
+            else "조회할 외부 멤버 목록을 가져오지 못했습니다. "
+        ) + "rows에서 그 사람들의 일정이 빠져 있으니 한가하다고 판단하지 마세요."
     return result
 
 
@@ -557,12 +667,40 @@ def load_conversation_messages(conversation_id: str) -> str:
 
 
 @tool(args_schema=ExtractSchedulesFromHistoryInput)
-def extract_schedules_from_history(member_names: list[str], date_from: str, date_to: str) -> str:
-    """외부 SQLite 이전 대화에서 멤버별 일정을 추출합니다."""
+def extract_schedules_from_history(
+    date_from: str,
+    date_to: str,
+    member_names: list[str] | None = None,
+) -> str:
+    """외부 SQLite 이전 대화에서 멤버별 일정을 추출합니다. member_names를 넘기지 않으면 공유 저장소에 등록된 멤버 전체를 조회합니다."""
+
+    # MCP tool의 member_names는 필수 list라 None을 그대로 넘기면 경계에서 거부됩니다.
+    # '대상을 지정하지 않음'은 여기서 등록 멤버 이름 목록으로 풀어 넘깁니다.
+    scope = _resolve_member_names(member_names, date_from, date_to)
+    if scope.reason == MEMBER_SCOPE_NONE_REQUESTED or scope.error:
+        # 대상이 없으면 MCP를 부를 이유가 없고, 목록을 못 가져왔으면 부를 수도 없습니다.
+        # 어느 쪽이든 빈 rows만 돌려주면 '아무도 안 바쁘다'로 읽히므로 이유를 함께 남깁니다.
+        payload: dict[str, Any] = {
+            "ok": scope.error is None,
+            "tool_name": "extract_schedules_from_history",
+            "member_names": scope.names,
+            "member_scope": scope.reason,
+            "rows": [],
+            "schedule_summary": external_schedule_summary([]),
+        }
+        if scope.note:
+            payload["members_note"] = scope.note
+        if scope.error:
+            payload["external_error"] = scope.error
+            payload["warning"] = (
+                "조회할 외부 멤버 목록을 가져오지 못해 일정을 확인하지 못했습니다. "
+                "rows가 비어 있는 것을 '아무도 안 바쁘다'로 읽지 마세요."
+            )
+        return json_payload(payload)
 
     # 날짜 형식 정리도 store 경계에서 한 번만 하므로 여기서 다시 손대지 않습니다.
     return call_mcp_tool_sync("extract_schedules_from_history", {
-        "member_names": member_names,
+        "member_names": scope.names,
         "date_from": date_from,
         "date_to": date_to,
     })
@@ -629,10 +767,15 @@ def list_shared_schedules(
 
 
 @tool(args_schema=CollectMemberSchedulesInput)
-def collect_member_schedules(member_names: list[str], date_from: str, date_to: str) -> str:
+def collect_member_schedules(
+    date_from: str,
+    date_to: str,
+    member_names: list[str] | None = None,
+) -> str:
     """내 일정과 다른 사람들의 일정을 MCP SQLite 기록에서 모읍니다.
 
     내 일정을 함께 모으려면 member_names에 "나"를 포함해 호출해야 합니다.
+    member_names를 넘기지 않으면 등록 멤버 전체와 내 일정을 모읍니다.
     """
 
     # 내 일정도 DB에서 조회 범위로 먼저 좁혀 읽습니다(limit에 늦은 날짜가 잘리는 것 방지).
@@ -709,8 +852,13 @@ def week05_prompt_parts() -> list[str]:
         ),
         (
             "멤버를 여러 명 물으면 한 사람씩 도구를 반복 호출하지 말고 member_names 배열에 이름을 모두 담아 "
-            "한 번만 호출한다. 반대로 member_names를 빈 배열로 넘기면 '해당하는 사람이 없음'이라는 뜻이 되어 "
-            "결과가 비므로, 대상을 지정하지 않을 때는 아예 넘기지 않는다."
+            "한 번만 호출한다. '다들', '팀 전체', '모두'처럼 이름을 지정하지 않는 요청이면 member_names를 "
+            "아예 넘기지 않는다 — 그러면 공유 저장소에 등록된 멤버 전체를 조회하고, 실제로 누구를 조회했는지는 "
+            "결과의 member_names에 담겨 온다. 반대로 빈 배열은 '해당하는 사람이 없음'이라는 뜻이어서 결과가 "
+            "비므로 쓰지 않는다.\n"
+            "결과의 member_scope는 조회 대상을 어떻게 정했는지 알려준다. '대상 없음'이면 아무도 조회하지 않은 "
+            "것이므로 rows가 비어 있어도 '아무도 바쁘지 않다'고 답하지 말고, 대상을 정해 다시 호출한다. "
+            "'공유 저장소 등록 멤버 전체'면 이름을 지정하지 않은 전체 조회이고, 이때는 \"나\"도 함께 포함된다."
         ),
         (
             "사용자가 자기 일정까지 함께 보려는 요청이면(예: '나랑 철수', '저랑 하린', '우리 둘이') "
