@@ -86,6 +86,23 @@ def run() -> int:
     busy_calls = many.args_of("collect_member_schedules") + many.args_of("extract_schedules_from_history")
     t.check("사람 수만큼 쪼개 부르지 않음 (1회 호출)", len(busy_calls) <= 1, f"{len(busy_calls)}회")
 
+    # ── 이름이 나오지 않는 요청 — member_names를 넘기지 않을 수 있어야 합니다.
+    #    필수 필드였을 때는 LLM이 뭐라도 채울 수밖에 없어, 이름을 지어내거나
+    #    빈 배열('대상 없음')을 넣어 결과가 조용히 비었습니다.
+    everyone = t.turn("전체조회", "다들 2026년 7월 7일부터 7월 10일까지 언제 바쁜지 모아줘.", BUSY_TOOLS)
+    all_args = everyone.args_of("collect_member_schedules") + everyone.args_of("extract_schedules_from_history")
+    t.check("대상을 지정하지 않으면 member_names를 넣지 않거나 이름을 담아 부름",
+            bool(all_args) and all(a.get("member_names") != [] for a in all_args),
+            str([a.get("member_names") for a in all_args]))
+    all_payloads = (everyone.payloads("collect_member_schedules")
+                    + everyone.payloads("extract_schedules_from_history"))
+    t.check("전체 조회 결과가 '대상 없음'으로 비지 않음",
+            bool(all_payloads) and all(p.get("member_scope") != "대상 없음" for p in all_payloads),
+            str([p.get("member_scope") for p in all_payloads]))
+    all_rows = everyone.rows("collect_member_schedules") + everyone.rows("extract_schedules_from_history")
+    all_names = {r.get("member_name") for r in all_rows}
+    t.check("여러 사람의 일정이 실제로 모임", len(all_names) >= 2, f"멤버={sorted(all_names)}")
+
     # "저"처럼 자신을 다르게 가리켰을 때도 내 일정이 함께 모이는지
     self_ref = t.turn("합치기", "저랑 하린이 2026년 7월 8일에 겹치는 시간 있는지 일정 모아줘.", BUSY_TOOLS)
     self_rows = self_ref.rows("collect_member_schedules")

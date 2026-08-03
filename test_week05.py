@@ -29,6 +29,10 @@ trace_week05_*.py가 LLM 라우팅(변동적)을 보는 반면, 이 대본은 We
   · 조사 붙은 자기 지칭 → B3b (LLM이 "내가"로 넘겨도 같은 사람으로 본다 — include_mine의 전제)
   · 오탐 방지 → B3c ("나은"·"제니" 같은 실제 이름은 자기 지칭이 아니다)
   · 외부 실패 vs 내 버그 구분 → B17 (내 코드의 버그는 external_error로 삼키지 않는다)
+  · member_names 선택 필드 → B19/C8c ("다들 언제 바쁜지"처럼 이름 없는 요청을 표현할 수 있어야 한다.
+    MCP tool의 member_names는 필수 list라 None을 그대로 넘기면 경계에서 거부되므로,
+    등록 멤버 이름으로 풀어서 넘긴다)
+                          → B20 (빈 목록은 전체로 넓히지 않고 '대상 없음'으로 남긴다)
   · end_time "미정" 통일 → B7 (병합 rows에 None과 "미정"이 섞이지 않는다)
   · 중복 제거 → A4 (week3 personal_create_schedule은 같은 id로 두 저장소에 쓴다)
 """
@@ -217,7 +221,7 @@ class FakeMCP:
                           ensure_ascii=False)
 
 
-def _collect(members: list[str], date_from: str, date_to: str,
+def _collect(members: list[str] | None, date_from: str, date_to: str,
              mine: list[dict[str, Any]], fake: FakeMCP) -> dict[str, Any]:
     original = w5.call_mcp_tool_sync
     w5.call_mcp_tool_sync = fake
@@ -406,6 +410,61 @@ def section_b() -> None:
     check("B18f. 내 일정 자체가 없어도 표시하지 않음",
           "mine_excluded_note" not in no_mine, str(sorted(no_mine.keys())))
 
+    # ★ "다들 언제 바쁜지 모아줘"처럼 이름이 안 나오는 요청 — member_names를 넘기지 않는 경로.
+    #   MCP tool의 member_names는 필수 list라 None을 그대로 넘길 수 없으므로,
+    #   공유 저장소에 등록된 멤버 이름으로 풀어서 넘겨야 한다.
+    everyone_mcp = FakeMCP()
+    everyone = _collect(None, "2026-07-09", "2026-07-09", MINE, everyone_mcp)
+    called = [name for name, _ in everyone_mcp.calls]
+    check("B19. 대상 미지정 → 등록 멤버를 먼저 조회",
+          called[:1] == ["list_shared_schedules"], str(called))
+    sent_all = next((a.get("member_names") for n, a in everyone_mcp.calls
+                     if n == "extract_schedules_from_history"), None)
+    check("B19b. 등록 멤버 이름으로 풀어서 외부 조회 (None을 그대로 넘기지 않음)",
+          sent_all == ["철수"], str(sent_all))
+    check("B19c. member_scope에 전체 조회 근거가 남음",
+          everyone.get("member_scope") == w5.MEMBER_SCOPE_ALL_REGISTERED,
+          str(everyone.get("member_scope")))
+    # 전체를 물었으면 나도 대상이다. 특정 이름을 물은 게 아니므로 "묻지 않은 내 일정"이 아니다.
+    check("B19d. 전체 조회에는 \"나\"도 포함됨",
+          "나" in names(everyone) and "mine_excluded_note" not in everyone, str(names(everyone)))
+    check("B19e. payload member_names에 실제 조회 대상이 남음",
+          everyone.get("member_names") == ["나", "철수"], str(everyone.get("member_names")))
+
+    # ★ 빈 목록은 전체로 넓히지 않는다 — "철수 일정"을 물었는데 이름 전달만 실패한 경우까지
+    #   전체 조회로 바뀌면 묻지 않은 사람들의 일정을 답하게 된다(include_mine과 같은 이유).
+    none_mcp = FakeMCP()
+    none_asked = _collect([], "2026-07-09", "2026-07-09", MINE, none_mcp)
+    check("B20. 빈 목록은 전체로 확대되지 않음 (MCP 호출 0회)", len(none_mcp.calls) == 0,
+          str([n for n, _ in none_mcp.calls]))
+    check("B20b. member_scope가 '대상 없음'",
+          none_asked.get("member_scope") == w5.MEMBER_SCOPE_NONE_REQUESTED,
+          str(none_asked.get("member_scope")))
+    check("B20c. 빈 rows를 '아무도 안 바쁘다'로 읽지 않도록 members_note를 남김",
+          bool(none_asked.get("members_note")), str(none_asked.get("members_note")))
+    blank_names = _collect(["  "], "2026-07-09", "2026-07-09", MINE, FakeMCP())
+    check("B20d. 공백만 있는 이름도 '대상 없음' (전체로 넓히지 않음)",
+          blank_names.get("member_scope") == w5.MEMBER_SCOPE_NONE_REQUESTED,
+          str(blank_names.get("member_scope")))
+
+    # 등록 멤버 목록 조회가 실패하면 누구에게 물어야 할지 모른다. 예외로 터뜨리지 않고
+    # 실패를 표시하되 내 일정은 지킨다(B16과 같은 원칙).
+    class NoMemberListMCP(FakeMCP):
+        def __call__(self, tool_name: str, args: dict[str, Any]) -> str:
+            self.calls.append((tool_name, args))
+            if tool_name == "list_shared_schedules":
+                raise RuntimeError("등록 멤버 조회 실패(모의)")
+            return json.dumps({"ok": True, "tool_name": tool_name, "rows": self.rows},
+                              ensure_ascii=False)
+
+    lost = _collect(None, "2026-07-09", "2026-07-09", MINE, NoMemberListMCP())
+    check("B21. 등록 멤버 조회 실패는 예외 대신 실패 표시",
+          lost.get("ok") is False and bool(lost.get("external_error")),
+          str(lost.get("external_error")))
+    check("B21b. 그때도 warning으로 '한가하다'고 읽히지 않게 안내", bool(lost.get("warning")),
+          str(lost.get("warning")))
+    check("B21c. 실패해도 내 일정은 보존", names(lost) == ["나"], str(names(lost)))
+
 
 # ── C. 위임 wrapper 계약 (실제 MCP) ──────────────────────────────────────────
 def section_c() -> None:
@@ -444,9 +503,38 @@ def section_c() -> None:
           bool(extracted["rows"]) and all(need <= set(r) for r in extracted["rows"]),
           str(sorted(extracted["rows"][0])) if extracted["rows"] else "rows 없음")
     check("C7b. extract가 schedule_summary 포함", isinstance(extracted.get("schedule_summary"), str))
-    check("C8. extract member_names=[] → 0건",
-          call(w5.extract_schedules_from_history, member_names=[],
-               date_from=JULY_PRACTICE_DATE_FROM, date_to=JULY_PRACTICE_DATE_TO)["rows"] == [])
+    empty_ask = call(w5.extract_schedules_from_history, member_names=[],
+                     date_from=JULY_PRACTICE_DATE_FROM, date_to=JULY_PRACTICE_DATE_TO)
+    check("C8. extract member_names=[] → 0건", empty_ask["rows"] == [], str(len(empty_ask["rows"])))
+    check("C8b. 그때 '대상 없음'과 안내가 남음",
+          empty_ask.get("member_scope") == w5.MEMBER_SCOPE_NONE_REQUESTED
+          and bool(empty_ask.get("members_note")), str(empty_ask.get("member_scope")))
+
+    # ★ "다들 언제 바쁜지" — member_names를 넘기지 않는 실제 경로.
+    #   MCP tool은 member_names가 필수 list라 None/생략을 거부하므로, wrapper가 이름으로 풀어야
+    #   여기서 rows가 나온다. (풀지 않고 그대로 넘기면 ToolException으로 실패한다)
+    everyone = call(w5.extract_schedules_from_history,
+                    date_from=JULY_PRACTICE_DATE_FROM, date_to=JULY_PRACTICE_DATE_TO)
+    everyone_names = {r.get("member_name") for r in everyone["rows"]}
+    check("C8c. extract 대상 미지정 → 등록 멤버 전체 rows", len(everyone_names) >= 2,
+          str(sorted(everyone_names)))
+    one_member = call(w5.extract_schedules_from_history, member_names=["철수"],
+                      date_from=JULY_PRACTICE_DATE_FROM, date_to=JULY_PRACTICE_DATE_TO)
+    check("C8d. 전체 조회가 한 명 조회보다 많은 rows", len(everyone["rows"]) > len(one_member["rows"]),
+          f"{len(everyone['rows'])} vs {len(one_member['rows'])}")
+
+    # collect 도 같은 경로를 지원해야 한다 (Week 6이 이 rows를 busy_rows로 쓰는 tool).
+    _clear_app_schedules()
+    PERSONAL_SCHEDULES.clear()
+    collected_all = call(w5.collect_member_schedules,
+                         date_from=JULY_PRACTICE_DATE_FROM, date_to=JULY_PRACTICE_DATE_TO)
+    check("C8e. collect 대상 미지정 → 전체 조회 근거와 여러 멤버 rows",
+          collected_all.get("member_scope") == w5.MEMBER_SCOPE_ALL_REGISTERED
+          and len({r.get("member_name") for r in collected_all["rows"]}) >= 2,
+          str(sorted({r.get("member_name") for r in collected_all["rows"]})))
+    check("C8f. 그때 \"나\"가 조회 대상에 들어감",
+          "나" in (collected_all.get("member_names") or []),
+          str(collected_all.get("member_names")))
 
     default_list = call(w5.list_shared_schedules, member_names=None, date_from=None,
                         date_to=None, source_conversation_id=None, limit=50)
@@ -517,6 +605,15 @@ def section_d() -> None:
           all(getattr(t, "args_schema", None) is not None
               for t in tools if getattr(t, "name", "") in week5_names))
 
+    # ★ 프롬프트가 "대상을 지정하지 않을 때는 아예 넘기지 않는다"고 지시하므로,
+    #   스키마에서도 실제로 생략할 수 있어야 한다(필수 필드면 LLM이 지킬 방법이 없다).
+    for schema_cls in (w5.ExtractSchedulesFromHistoryInput, w5.CollectMemberSchedulesInput):
+        required = schema_cls.model_json_schema().get("required", [])
+        check(f"D4b. {schema_cls.__name__}.member_names가 선택 필드",
+              "member_names" not in required, str(required))
+        check(f"D4c. {schema_cls.__name__}의 날짜 범위는 여전히 필수",
+              {"date_from", "date_to"} <= set(required), str(required))
+
     parts = w5.week05_prompt_parts()
     base = week04_prompt_parts()
     check("D5. Week4 prompt 조각을 그대로 누적", parts[:len(base)] == base)
@@ -526,6 +623,9 @@ def section_d() -> None:
     system_prompt = w5.week05_system_prompt()
     check("D8. system prompt에 공유 일정 구분 안내가 들어감",
           "create_shared_schedule" in system_prompt and "collect_member_schedules" in system_prompt)
+    check("D9. prompt가 '대상 미지정'과 member_scope 읽는 법을 함께 안내",
+          "member_scope" in system_prompt and w5.MEMBER_SCOPE_NONE_REQUESTED in system_prompt,
+          "member_scope 안내 없음")
 
 
 def run() -> int:
