@@ -242,6 +242,7 @@ def week02_prompt_parts() -> list[str]:
         "kind는 personal_schedule, group_schedule, todo, reminder, unknown 중 하나로 고른다.",
         "날짜는 확실할 때만 YYYY-MM-DD 형식으로, 시간은 확실할 때만 HH:MM 형식으로 채운다.",
         "참석자나 관련 멤버를 알 수 없으면 members는 빈 목록으로 둔다.",
+        "group_schedule의 members에는 실제 참석자 전원을 넣고, 사용자가 참석하면 '나'를 포함하며 참석하지 않으면 포함하지 않는다.",
         "Week 1 tool JSON을 받은 경우에는 tool을 다시 호출하지 말고 payload를 읽어서 structured_response를 만든다.",
         "Week 2에서는 SQLite 저장, RAG 검색, 외부 멤버 일정 조율을 하지 않는다.",
     ]

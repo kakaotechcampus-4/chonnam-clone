@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import gc
 import json
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import call, patch
 
+from fixed.app_store import AppSQLiteStore
 from fixed.mcp_client import call_local_mcp_tool_sync
 from student_parts import week05_load_kanas_past_conversations as week05
 
@@ -334,6 +336,111 @@ class Week05MCPWrapperTests(unittest.TestCase):
                 ),
             ],
         )
+
+    def test_collect_member_schedules_excludes_non_attendee_group_schedule(self) -> None:
+        tomorrow = "2026-08-05"
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = AppSQLiteStore(Path(directory) / "app.sqlite3")
+            with patch(
+                "fixed.app_store.sync_group_schedule_to_shared",
+                return_value={"ok": True},
+            ):
+                store.save_structured_request(
+                    {
+                        "kind": "group_schedule",
+                        "title": "철수와 영희 회의",
+                        "date": tomorrow,
+                        "start_time": "10:00",
+                        "end_time": "11:00",
+                        "members": ["철수", "영희"],
+                        "original_text": "내일 10시에 철수랑 영희 회의 잡아줘",
+                    }
+                )
+
+            stored_schedule = store.list_schedules(limit=10)[0]
+            self.assertEqual(stored_schedule["request_kind"], "group_schedule")
+            self.assertEqual(stored_schedule["attendees"], ["철수", "영희"])
+            self.assertNotIn("나", stored_schedule["attendees"])
+
+            with (
+                patch.object(week05, "AppSQLiteStore", return_value=store),
+                patch.object(week05, "PERSONAL_SCHEDULES", []),
+                patch.object(
+                    week05,
+                    "call_mcp_tool_sync",
+                    return_value=json.dumps({"ok": True, "rows": []}),
+                ),
+            ):
+                actual = json.loads(
+                    week05.collect_member_schedules.invoke(
+                        {
+                            "member_names": ["철수", "영희"],
+                            "date_from": tomorrow,
+                            "date_to": tomorrow,
+                        }
+                    )
+                )
+
+            del stored_schedule
+            del store
+            gc.collect()
+
+        self.assertEqual(actual["personal_schedule_count"], 0)
+        self.assertEqual(actual["rows"], [])
+
+    def test_collect_member_schedules_includes_group_schedule_when_current_user_attends(self) -> None:
+        tomorrow = "2026-08-05"
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = AppSQLiteStore(Path(directory) / "app.sqlite3")
+            with patch(
+                "fixed.app_store.sync_group_schedule_to_shared",
+                return_value={"ok": True},
+            ):
+                store.save_structured_request(
+                    {
+                        "kind": "group_schedule",
+                        "title": "나와 철수와 영희 회의",
+                        "date": tomorrow,
+                        "start_time": "10:00",
+                        "end_time": "11:00",
+                        "members": ["나", "철수", "영희"],
+                        "original_text": "내일 10시에 철수랑 영희랑 회의 잡아줘. 나도 참석해.",
+                    }
+                )
+
+            stored_schedule = store.list_schedules(limit=10)[0]
+            self.assertEqual(stored_schedule["request_kind"], "group_schedule")
+            self.assertIn("나", stored_schedule["attendees"])
+
+            with (
+                patch.object(week05, "AppSQLiteStore", return_value=store),
+                patch.object(week05, "PERSONAL_SCHEDULES", []),
+                patch.object(
+                    week05,
+                    "call_mcp_tool_sync",
+                    return_value=json.dumps({"ok": True, "rows": []}),
+                ),
+            ):
+                actual = json.loads(
+                    week05.collect_member_schedules.invoke(
+                        {
+                            "member_names": ["철수", "영희"],
+                            "date_from": tomorrow,
+                            "date_to": tomorrow,
+                        }
+                    )
+                )
+
+            del stored_schedule
+            del store
+            gc.collect()
+
+        self.assertEqual(actual["personal_schedule_count"], 1)
+        self.assertEqual(len(actual["rows"]), 1)
+        self.assertEqual(actual["rows"][0]["member_name"], "나")
+        self.assertEqual(actual["rows"][0]["title"], "나와 철수와 영희 회의")
 
     def test_collect_member_schedules_keeps_personal_rows_with_iso_datetime_bounds(self) -> None:
         personal_schedule = {

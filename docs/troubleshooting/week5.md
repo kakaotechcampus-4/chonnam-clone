@@ -29,3 +29,9 @@
 - 증상: `member_names=["철수"]`와 `member_names=[" 철수 "]`로 같은 일정 범위를 조회하면 rows와 일정 수는 같아도 `searched_member_names`와 MCP 전달 인자가 달라졌다. `test_collect_member_schedules_normalizes_member_name_whitespace_consistently`가 수정 전 이 차이로 실패했다.
 - 원인: `student_parts/week05_load_kanas_past_conversations.py:288`의 `_collect_member_schedules()`가 입력받은 `member_names`를 공용 규칙으로 정규화하지 않고 외부 일정 조회와 반환 메타데이터에 그대로 사용했다.
 - 해결: `normalize_external_member_names()`로 만든 `normalized_member_names`를 날짜 helper, 외부 일정 조회 인자, `searched_member_names`에 함께 사용했다. 공백이 있는 이름과 없는 이름의 결과 및 MCP 호출 인자가 동일한지 검증하는 회귀 테스트를 추가했고, `tests.test_week05_mcp_tools` 14개가 모두 통과했다.
+
+## 본인이 참석하지 않는 그룹 회의가 `collect_member_schedules`에서 내 일정으로 계산됨
+
+- 증상: 2026-08-04에 `내일 10시에 철수랑 영희 회의 잡아줘`라는 요청을 `members=["철수", "영희"]`인 그룹 일정으로 저장한 뒤 2026-08-05를 조회하면, 본인이 참석자에 없는데도 `personal_schedule_count=1`이고 해당 row의 `member_name`이 `"나"`로 반환된다.
+- 원인: 수정 전 `_personal_schedules_for_current_scope()`가 AppSQLiteStore의 개인·그룹 일정을 참석 여부와 관계없이 모두 반환하고, `_collect_member_schedules()`가 이 일정들을 전부 `member_name="나"`로 변환했다.
+- 해결: `student_parts/week05_load_kanas_past_conversations.py:190`에 `_is_current_user_busy_schedule()`을 추가해 개인 일정과 `"나"`가 참석자인 그룹 일정만 내 busy-time으로 선택했다. Week 2 구조화 프롬프트에도 사용자 참석 여부에 따른 `members` 규칙을 명시하고, 미참석 일정 제외 및 참석 일정 포함 테스트를 각각 추가했으며 Week 5 테스트 16개가 모두 통과했다.

@@ -11,6 +11,7 @@ from fixed.app_store import AppSQLiteStore
 from fixed.config import CONFIG
 from fixed.external_mcp import call_external_tool_payload
 from fixed.external_people_store import (
+    PERSONAL_SHARED_MEMBER_NAME,
     external_schedule_summary,
     normalize_external_member_names,
     normalize_external_schedule_date_bounds,
@@ -186,6 +187,18 @@ def _schedule_scope(schedule: dict[str, Any]) -> str:
     return str(schedule.get("session_id") or DEFAULT_SESSION_SCOPE)
 
 
+def _is_current_user_busy_schedule(schedule: dict[str, Any]) -> bool:
+    """개인 일정과 본인이 참석하는 그룹 일정만 내 busy-time으로 취급합니다."""
+
+    request_kind = schedule.get("request_kind")
+    if request_kind == "personal_schedule":
+        return True
+    if request_kind == "group_schedule":
+        attendees = normalize_external_member_names(schedule.get("attendees") or [])
+        return PERSONAL_SHARED_MEMBER_NAME in attendees
+    return False
+
+
 def _personal_schedules_for_current_scope() -> list[dict[str, Any]]:
     """SQLite 저장 일정과 현재 대화의 임시 일정만 group 조율 후보로 사용합니다."""
 
@@ -195,6 +208,11 @@ def _personal_schedules_for_current_scope() -> list[dict[str, Any]]:
         for schedule in stored_schedules
         if schedule.get("schedule_id") is not None
     }
+    busy_stored_schedules = [
+        schedule
+        for schedule in stored_schedules
+        if _is_current_user_busy_schedule(schedule)
+    ]
 
     session_id = current_session_scope()
     temporary_schedules = [
@@ -204,7 +222,7 @@ def _personal_schedules_for_current_scope() -> list[dict[str, Any]]:
         and schedule.get("id") is not None
         and str(schedule["id"]) not in stored_ids
     ]
-    return [*stored_schedules, *temporary_schedules]
+    return [*busy_stored_schedules, *temporary_schedules]
 
 def json_payload(payload: dict[str, Any]) -> str:
     """도구 반환용 dict를 한글이 깨지지 않는 JSON 문자열로 변환합니다."""
