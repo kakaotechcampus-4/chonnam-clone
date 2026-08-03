@@ -317,6 +317,8 @@ def _collect_member_schedules(
 
     for schedule in personal_schedules:
         request= _structured_request_from_schedule_row(schedule)
+        if schedule.get("request_kind") == "group_schedule" and PERSONAL_SHARED_MEMBER_NAME not in (request.members or []):
+            continue
         if request.date is None or not (date_from_normalized <= request.date <= date_to_normalized):
             continue
         rows.append(
@@ -330,10 +332,11 @@ def _collect_member_schedules(
             }
         )
 
+    external_member_names= [name for name in member_names if name != PERSONAL_SHARED_MEMBER_NAME]
     external_payload= json.loads(
         call_mcp_tool_sync(
             "extract_schedules_from_history",
-            {"member_names":member_names, "date_from":date_from, "date_to":date_to}
+            {"member_names":external_member_names, "date_from":date_from, "date_to":date_to}
         )
     )
     for row in external_payload.get("rows",[]):
@@ -347,7 +350,7 @@ def _collect_member_schedules(
                 "notes": row.get("notes"),
             }
         )
-    queried_members = normalize_external_member_names(member_names)
+    queried_members = list(dict.fromkeys( [PERSONAL_SHARED_MEMBER_NAME] + normalize_external_member_names(external_member_names)))
 
     return {"rows": rows, "queried_members":queried_members, "schedule_summary": external_schedule_summary(rows)}
 
