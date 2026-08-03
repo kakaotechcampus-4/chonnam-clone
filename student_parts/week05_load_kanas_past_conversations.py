@@ -237,9 +237,6 @@ load_langchain_mcp_tools_sync = load_local_mcp_tools_sync
 """
 APP_SCHEDULE_FETCH_LIMIT = 200
 
-# date, start_time, title이 모두 비어 있는 일정의 내용 키입니다.
-EMPTY_CONTENT_KEY = ("", "", "")
-
 
 def _schedule_scope(schedule: dict[str, Any]) -> str:
     return str(schedule.get("session_id") or DEFAULT_SESSION_SCOPE)
@@ -248,50 +245,24 @@ def _schedule_scope(schedule: dict[str, Any]) -> str:
 def _schedule_identifier(schedule: dict[str, Any]) -> str:
     """앱 일정 row와 임시 일정 row에서 중복 판정용 식별자를 읽습니다."""
 
-    """식별자 키가 두 개인 이유.
+    """식별자 키가 두 개인 이유와, 이 비교만으로 중복 판정이 끝나는 근거.
 
     1. 저장 위치에 따라 키 이름이 다르다.
        앱 SQLite 일정 row는 schedule_id(예: sch_0d7edca91b)를 가지고,
        Week 1 임시 일정 row는 id(예: personal_ab12cd34ef)를 가진다.
 
-    2. 두 값이 같아지는 경로가 있다.
-       Week 3 저장 tool에 source_schedule_id를 넘기면 fixed/app_store.py:353의
-       schedule_id = source_schedule_id or new_id("sch")에 의해 앱 일정 row의
-       schedule_id가 임시 일정 id("personal_...")를 그대로 물려받는다.
-       이 경로로 저장된 일정은 이 함수의 식별자 비교만으로 중복이 판정된다.
+    2. 임시 일정이 앱 SQLite에 저장되는 경로는 하나뿐이다.
+       student_parts/week03_build_nanas_logbook.py:576의 personal_create_schedule이
+       :547의 structured_request_from_week01_schedule로 source_schedule_id에
+       임시 일정 id를 넣어 저장하고, fixed/app_store.py:353의
+       schedule_id = source_schedule_id or new_id("sch")가 그 값을 그대로 쓴다.
 
-    3. 그 경로를 거치지 않으면 식별자가 달라진다.
-       source_schedule_id 없이 저장하면 앱 일정 id가 "sch_" 접두어로 새로 발급되어
-       임시 일정 id와 겹치지 않는다. 이 경우(내용은 같고 id는 다른 경우)는
-       _schedule_content_key()의 내용 기반 비교로 판정한다.
+    3. 그래서 이미 저장된 임시 일정은 항상 식별자가 일치한다.
+       임시 일정을 저장하면서 id를 새로 발급하는 경로는 없으므로, 내용이 같고
+       id만 다른 저장 row는 임시 일정에서 온 row가 아니다. 내용 기반 비교를
+       추가하면 별개 일정을 근거 없이 제외할 수 있어 두지 않는다.
     """
     return str(schedule.get("schedule_id") or schedule.get("id") or "")
-
-
-def _schedule_content_key(schedule: dict[str, Any]) -> tuple[str, str, str]:
-    """내용이 같은 일정을 판정하기 위한 복합 키를 만듭니다."""
-
-    """식별자 비교에 더해 내용 비교를 두는 이유.
-
-    1. 식별자 비교가 닿지 않는 경로가 있다.
-       _schedule_identifier()의 3번 항목대로, source_schedule_id 없이 저장된 일정은
-       임시 일정과 id가 다르다. 사용자가 Week 1 tool로 임시 일정을 만들고 같은
-       대화에서 Week 3 tool로 다시 저장하면 내용이 같은 row가 두 번 들어간다.
-
-    2. 키는 date, start_time, title 세 값으로 만든다.
-       일정 조율의 판단 근거가 되는 값이고, 세 값이 모두 같으면 같은 일정으로
-       처리해도 바쁜 시간 계산 결과가 달라지지 않는다.
-       각 값은 앞뒤 공백을 제거해 비교한다.
-
-    3. 이 비교는 임시 일정에만 적용한다.
-       저장 일정끼리의 중복 제거는 Week 3 저장 tool의 범위이므로 여기서 하지 않는다.
-       앱 SQLite에 같은 내용의 저장 row가 여러 건 있으면 그대로 rows에 들어간다.
-    """
-    return (
-        str(schedule.get("date") or "").strip(),
-        str(schedule.get("start_time") or "").strip(),
-        str(schedule.get("title") or "").strip(),
-    )
 
 
 def _personal_schedules_for_current_scope() -> list[dict[str, Any]]:
@@ -309,32 +280,18 @@ def _personal_schedules_for_current_scope() -> list[dict[str, Any]]:
        전부 조회된다. 반면 임시 일정은 다른 대화에서 만든 값이 섞이면 안 되므로
        current_session_scope()와 같은 범위만 남긴다.
 
-    3. 중복 판정을 식별자와 내용 두 기준으로 한다.
-       식별자 비교는 Week 3 저장 tool에 source_schedule_id를 넘긴 경로를 잡고,
-       내용 비교는 그 경로를 거치지 않아 id가 새로 발급된 경우를 잡는다.
-       두 기준의 근거는 각각 _schedule_identifier()와 _schedule_content_key()에 있다.
+    3. 중복 판정은 식별자 비교 하나로 한다.
+       임시 일정이 앱 SQLite에 저장되는 경로에서 저장 row가 임시 일정 id를 그대로
+       물려받는다. 근거는 _schedule_identifier()의 2번, 3번 항목에 있다.
 
     4. 처리 순서
        (1) 앱 SQLite에서 저장된 일정을 조회한다.
-       (2) 조회된 일정의 식별자 집합과 내용 키 집합을 만든다.
-       (3) 임시 일정 중 현재 대화 범위이고 두 집합 어디에도 없는 항목만 고른다.
+       (2) 조회된 일정의 식별자 집합을 만든다.
+       (3) 임시 일정 중 현재 대화 범위이고 그 집합에 없는 항목만 고른다.
        (4) 저장 일정 뒤에 임시 일정을 이어 붙여 반환한다.
     """
     saved_schedules = AppSQLiteStore(CONFIG.app_db_path).list_schedules(limit=APP_SCHEDULE_FETCH_LIMIT)
     saved_identifiers = {_schedule_identifier(schedule) for schedule in saved_schedules}
-
-    """내용 키 집합에서 EMPTY_CONTENT_KEY를 제외하는 이유.
-
-    date, start_time, title이 모두 비어 있는 저장 row가 하나라도 있으면
-    ("", "", "") 키가 집합에 들어가고, 같은 조건의 임시 일정이 전부 중복으로
-    판정된다. 세 값이 모두 비어 있으면 같은 일정인지 확인할 수 없으므로
-    이 키는 비교 대상에서 제외한다.
-    """
-    saved_content_keys = {
-        _schedule_content_key(schedule)
-        for schedule in saved_schedules
-        if _schedule_content_key(schedule) != EMPTY_CONTENT_KEY
-    }
 
     current_scope = current_session_scope()
     temporary_schedules = [
@@ -342,7 +299,6 @@ def _personal_schedules_for_current_scope() -> list[dict[str, Any]]:
         for schedule in PERSONAL_SCHEDULES
         if _schedule_scope(schedule) == current_scope
         and _schedule_identifier(schedule) not in saved_identifiers
-        and _schedule_content_key(schedule) not in saved_content_keys
     ]
     return [*saved_schedules, *temporary_schedules]
 
