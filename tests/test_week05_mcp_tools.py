@@ -4,7 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 from fixed.mcp_client import call_local_mcp_tool_sync
 from student_parts import week05_load_kanas_past_conversations as week05
@@ -278,6 +278,62 @@ class Week05MCPWrapperTests(unittest.TestCase):
         self.assertEqual(actual["searched_member_names"], ["철수"])
         self.assertEqual(actual["personal_schedule_count"], 0)
         self.assertEqual(actual["external_schedule_count"], 0)
+
+    def test_collect_member_schedules_normalizes_member_name_whitespace_consistently(self) -> None:
+        with (
+            patch.object(
+                week05,
+                "_personal_schedules_for_current_scope",
+                return_value=[],
+            ),
+            patch.object(
+                week05,
+                "call_mcp_tool_sync",
+                return_value=json.dumps({"ok": True, "rows": []}),
+            ) as call_mcp,
+        ):
+            without_spaces = json.loads(
+                week05.collect_member_schedules.invoke(
+                    {
+                        "member_names": ["철수"],
+                        "date_from": "2026-07-07",
+                        "date_to": "2026-07-10",
+                    }
+                )
+            )
+            with_spaces = json.loads(
+                week05.collect_member_schedules.invoke(
+                    {
+                        "member_names": [" 철수 "],
+                        "date_from": "2026-07-07",
+                        "date_to": "2026-07-10",
+                    }
+                )
+            )
+
+        self.assertEqual(with_spaces, without_spaces)
+        self.assertEqual(with_spaces["searched_member_names"], ["철수"])
+        self.assertEqual(
+            call_mcp.call_args_list,
+            [
+                call(
+                    "extract_schedules_from_history",
+                    {
+                        "member_names": ["철수"],
+                        "date_from": "2026-07-07",
+                        "date_to": "2026-07-10",
+                    },
+                ),
+                call(
+                    "extract_schedules_from_history",
+                    {
+                        "member_names": ["철수"],
+                        "date_from": "2026-07-07",
+                        "date_to": "2026-07-10",
+                    },
+                ),
+            ],
+        )
 
     def test_collect_member_schedules_keeps_personal_rows_with_iso_datetime_bounds(self) -> None:
         personal_schedule = {

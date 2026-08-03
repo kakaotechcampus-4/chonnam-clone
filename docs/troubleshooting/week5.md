@@ -23,3 +23,9 @@
 - 증상: `fixed/external_people_store.py:361-374`의 `list_shared_schedules()`가 멤버 이름 alias/공백 제거와 ISO datetime 날짜 분리를 직접 구현해, 공용 정규화 규칙이 바뀌면 공유 일정 조회만 다른 규칙을 적용할 수 있다.
 - 원인: 같은 파일에 있는 `normalize_external_member_names()`와 `normalize_external_schedule_date_bounds()`를 호출하지 않고 두 규칙을 메서드 내부에 중복 작성했다.
 - 해결: 보류. Week 5 wrapper는 원본 멤버 이름을 MCP에 전달하는 현재 책임을 유지해야 하며, `fixed/`는 학생 구현 대상이 아니다. 강사 코드 수정 범위가 허용될 때 `list_shared_schedules()`가 두 공용 helper를 사용하도록 바꾸고 alias·공백·ISO datetime 필터 테스트로 검증한다.
+
+## `collect_member_schedules`의 멤버 이름 공백 유무에 따라 검색 메타데이터가 달라짐
+
+- 증상: `member_names=["철수"]`와 `member_names=[" 철수 "]`로 같은 일정 범위를 조회하면 rows와 일정 수는 같아도 `searched_member_names`와 MCP 전달 인자가 달라졌다. `test_collect_member_schedules_normalizes_member_name_whitespace_consistently`가 수정 전 이 차이로 실패했다.
+- 원인: `student_parts/week05_load_kanas_past_conversations.py:288`의 `_collect_member_schedules()`가 입력받은 `member_names`를 공용 규칙으로 정규화하지 않고 외부 일정 조회와 반환 메타데이터에 그대로 사용했다.
+- 해결: `normalize_external_member_names()`로 만든 `normalized_member_names`를 날짜 helper, 외부 일정 조회 인자, `searched_member_names`에 함께 사용했다. 공백이 있는 이름과 없는 이름의 결과 및 MCP 호출 인자가 동일한지 검증하는 회귀 테스트를 추가했고, `tests.test_week05_mcp_tools` 14개가 모두 통과했다.
