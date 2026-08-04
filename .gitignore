@@ -24,3 +24,6 @@ dist/
 
 # Keep later-week student files local until their assignment is published.
 student_parts/week06_kanamate_decides_schedule.py
+
+# 측정 대본이 남기는 실행별 원자료 (요약은 표준출력에, 수치는 대본 docstring에 기록)
+trace_week05_mine_inclusion_results.json
