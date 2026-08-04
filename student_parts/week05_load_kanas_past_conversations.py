@@ -234,7 +234,10 @@ class CreateSharedScheduleInput(BaseModel):
     end_time: str = Field(default="미정", description="종료 시각 (HH:MM). 모르면 '미정'")
     notes: str | None = None
     source_conversation_id: str | None = None
-    schedule_id: str | None = Field(default=None, description="같은 값을 다시 넣으면 기존 공유 일정을 갱신합니다.")
+    schedule_id: str | None = Field(
+        default=None,
+        description="생략하면 새 일정으로 등록됩니다. 기존 일정을 갱신하려면 list_shared_schedules 결과나 이전 create_shared_schedule 응답에서 받은 schedule_id 값을 그대로 넣습니다."
+    )
 
 
 class DeleteSharedScheduleInput(BaseModel):
