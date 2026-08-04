@@ -315,6 +315,8 @@ def _collect_member_schedules(
     return {
         "rows": personal_rows + busy_rows,
         "schedule_summary": external_schedule_summary(personal_rows + busy_rows),
+        "queried_members": normalize_external_member_names(member_names),
+
     }
 
 
