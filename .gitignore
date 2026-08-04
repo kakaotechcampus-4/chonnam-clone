@@ -21,6 +21,7 @@ venv/
 .venv/
 node_modules/
 dist/
+<<<<<<< HEAD
 
 # Keep later-week student files local until their assignment is published.
 student_parts/week06_kanamate_decides_schedule.py
@@ -28,3 +29,5 @@ CLAUDE.md
 
 # Playwright MCP 임시 스냅샷/로그
 .playwright-mcp/
+=======
+>>>>>>> 3c9b5f6d994727f7e160a4b1833db52207702787
