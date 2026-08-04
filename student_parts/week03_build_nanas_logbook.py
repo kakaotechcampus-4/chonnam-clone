@@ -14,6 +14,7 @@ from student_parts.prompts.common import (
     CHAT_MEMORY_PROMPT,
     NANA_IDENTITY_PROMPT,
     NO_GUESSING_PROMPT,
+    SCHEDULE_END_TIME_CLARIFICATION_PROMPT,
     date_time_prompt,
     join_system_prompt,
 )
@@ -396,14 +397,20 @@ def structured_request_from_week01_schedule(
 
 @tool("personal_create_schedule")
 def personal_create_schedule(
-    title: str,
-    date: str,
-    start_time: str,
-    end_time: str = "미정",
+    title: str | None = None,
+    date: str | None = None,
+    start_time: str | None = None,
+    end_time: str | None = None,
+    end_date: str | None = None,
     attendees: list[str] | None = None,
     original_text: str = "",
 ) -> str:
-    """Nana의 개인 일정을 생성하고 Week 3+ 앱 SQLite DB에도 저장합니다."""
+    """Nana의 개인 일정을 생성하고 Week 3+ 앱 SQLite DB에도 저장합니다.
+
+    종료 시각은 반드시 명시적으로 전달합니다. 사용자가 실제 종료 시각을 답했다면 HH:MM을,
+    종료 시간 없음·미정·하루 종일이라고 확인했다면 ``미정``을 전달합니다. 직전 대화에서
+    종료 시각을 질문한 뒤 사용자가 짧게 "없어"라고 답한 경우에도 앞선 일정 정보와 합쳐 호출합니다.
+    """
 
     week1_result = json.loads(
         week01_personal_create_schedule.invoke(
@@ -412,12 +419,13 @@ def personal_create_schedule(
                 "date": date,
                 "start_time": start_time,
                 "end_time": end_time,
+                "end_date": end_date,
                 "attendees": attendees,
             }
         )
     )
-    if not week1_result.get("ok"):
-        return json_payload(tool_result("personal_create_schedule", ok=False, **week1_result))
+    if week1_result.get("status") == "needs_clarification":
+        return json_payload(week1_result)
 
     save_input = structured_request_from_week01_schedule(
         week1_result["created_schedule"],
@@ -611,6 +619,7 @@ def week03_prompt_parts() -> list[str]:
         date_time_prompt(),
         NO_GUESSING_PROMPT,
         CHAT_MEMORY_PROMPT,
+        SCHEDULE_END_TIME_CLARIFICATION_PROMPT,
         WEEK02_CLASSIFICATION_PROMPT,
         WEEK02_PERSONAL_CREATE_TOOL_PROMPT,
         WEEK02_TOOL_PAYLOAD_MAPPING_PROMPT,

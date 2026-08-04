@@ -10,6 +10,14 @@ class ScheduleValidation(TypedDict):
     invalid_fields: dict[str, str]
 
 
+class ScheduleInputValidationError(ValueError):
+    """제공된 일정 값의 형식이나 범위가 잘못된 경우 발생합니다."""
+
+    def __init__(self, invalid_fields: dict[str, str]) -> None:
+        self.invalid_fields = dict(invalid_fields)
+        super().__init__(f"일정 입력값이 유효하지 않습니다: {self.invalid_fields}")
+
+
 FIELD_LABELS = {
     "title": "일정 제목",
     "date": "날짜",
@@ -40,47 +48,53 @@ def is_valid_time(value: str) -> bool:
 
 
 def validate_schedule_input(
-    title: str,
-    date: str,
-    start_time: str,
-    end_time: str = "미정",
+    title: str | None,
+    date: str | None,
+    start_time: str | None,
+    end_time: str | None = None,
     end_date: str | None = None,
 ) -> ScheduleValidation:
     """일정 생성 입력의 누락값, 형식, 시간 순서를 공통 규칙으로 검사합니다."""
 
-    required_fields = {"title": title, "date": date, "start_time": start_time}
-    missing_fields = [name for name, value in required_fields.items() if not value.strip()]
-    format_rules = {
-        "date": (date, is_valid_date, "YYYY-MM-DD 형식의 실제 날짜여야 합니다."),
-        "start_time": (start_time, is_valid_time, "HH:MM 형식의 실제 시간이어야 합니다."),
+    required_fields = {
+        "title": title,
+        "date": date,
+        "start_time": start_time,
+        "end_time": end_time,
     }
-    invalid_fields = {
-        name: error
-        for name, (value, validator, error) in format_rules.items()
-        if name not in missing_fields and not validator(value)
-    }
+    missing_fields = [
+        name
+        for name, value in required_fields.items()
+        if value is None or not value.strip()
+    ]
+    invalid_fields: dict[str, str] = {}
 
-    if end_time != "미정" and not is_valid_time(end_time):
+    if date and not is_valid_date(date):
+        invalid_fields["date"] = "YYYY-MM-DD 형식의 실제 날짜여야 합니다."
+    if start_time and not is_valid_time(start_time):
+        invalid_fields["start_time"] = "HH:MM 형식의 실제 시간이어야 합니다."
+    if end_time and end_time != "미정" and not is_valid_time(end_time):
         invalid_fields["end_time"] = "HH:MM 형식의 실제 시간이거나 '미정'이어야 합니다."
-    if end_date is not None and not is_valid_date(end_date):
+    if end_date and not is_valid_date(end_date):
         invalid_fields["end_date"] = "YYYY-MM-DD 형식의 실제 날짜여야 합니다."
 
-    times_are_valid = not any(
-        name in missing_fields or name in invalid_fields
-        for name in ("date", "start_time", "end_time", "end_date")
+    times_are_present_and_valid = (
+        date is not None
+        and start_time is not None
+        and end_time is not None
+        and end_time != "미정"
+        and not invalid_fields
     )
-    if times_are_valid and end_time != "미정":
-        normalized_end_date = end_date or date
-        start_at = datetime.strptime(f"{date} {start_time}", "%Y-%m-%d %H:%M")
-        end_at = datetime.strptime(f"{normalized_end_date} {end_time}", "%Y-%m-%d %H:%M")
-        if end_at <= start_at:
-            if end_date is None and end_time <= start_time:
-                invalid_fields["end_date"] = (
-                    "종료 시각이 시작 시각보다 빠르거나 같습니다. "
-                    "자정을 넘기는 일정인지 종료 날짜를 확인해 주세요."
-                )
-            else:
+    if times_are_present_and_valid:
+        if end_date is None and end_time <= start_time:
+            missing_fields.append("end_date")
+        elif end_date is not None:
+            start_at = datetime.strptime(f"{date} {start_time}", "%Y-%m-%d %H:%M")
+            end_at = datetime.strptime(f"{end_date} {end_time}", "%Y-%m-%d %H:%M")
+            if end_at <= start_at:
                 invalid_fields["end_date"] = "종료 일시는 시작 일시보다 늦어야 합니다."
+
+    missing_fields = list(dict.fromkeys(missing_fields))
 
     return {
         "valid": not missing_fields and not invalid_fields,
@@ -90,10 +104,9 @@ def validate_schedule_input(
 
 
 def clarification_question(validation: ScheduleValidation, title: str | None = None) -> str | None:
-    """공통 검증 결과를 사용자가 한 번에 답할 수 있는 질문으로 바꿉니다."""
+    """누락된 일정 정보를 사용자가 한 번에 답할 수 있는 질문으로 바꿉니다."""
 
     fields = list(validation["missing_fields"])
-    fields.extend(name for name in validation["invalid_fields"] if name not in fields)
     if not fields:
         return None
     if fields == ["start_time"] and title:

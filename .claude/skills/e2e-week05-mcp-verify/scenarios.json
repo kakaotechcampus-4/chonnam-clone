@@ -1,0 +1,427 @@
+[
+  {
+    "id": "general-external-schedule-lookup",
+    "description": "외부 멤버의 busy-time 조회는 search_previous_conversations를 먼저, extract_schedules_from_history를 그다음 호출해야 한다.",
+    "week": 5,
+    "turns": [
+      {
+        "message": "철수와 영희의 2026년 7월 7일부터 17일까지 바쁜 일정을 알려줘.",
+        "expect_tool_called": ["search_previous_conversations", "extract_schedules_from_history"],
+        "expect_tool_calls_exact": [
+          "search_previous_conversations",
+          "extract_schedules_from_history"
+        ],
+        "expect_tool_call_arguments": [
+          {
+            "tool_name": "search_previous_conversations",
+            "arguments": {"member_names": ["철수", "영희"]}
+          },
+          {
+            "tool_name": "extract_schedules_from_history",
+            "arguments": {
+              "member_names": ["철수", "영희"],
+              "date_from": "2026-07-07",
+              "date_to": "2026-07-17"
+            }
+          }
+        ],
+        "expect_tool_result_row_keys": [
+          {
+            "tool_name": "extract_schedules_from_history",
+            "keys": [
+              "member_name",
+              "title",
+              "date",
+              "start_time",
+              "end_time",
+              "notes",
+              "source_conversation_id"
+            ]
+          }
+        ],
+        "expect_tool_result_members": [
+          {
+            "tool_name": "extract_schedules_from_history",
+            "members": ["철수", "영희"]
+          }
+        ],
+        "expect_answer_contains_all": ["철수", "영희"]
+      }
+    ]
+  },
+  {
+    "id": "schedule-lookup-with-source-evidence",
+    "description": "원문 근거를 요청하면 search -> extract -> load 순서를 지키고, load 결과의 sender/content/created_at이 보존돼야 한다.",
+    "week": 5,
+    "turns": [
+      {
+        "message": "철수의 2026년 7월 9일 일정과 그 일정이 언급된 원문 대화도 같이 보여줘.",
+        "expect_tool_called": [
+          "search_previous_conversations",
+          "extract_schedules_from_history",
+          "load_conversation_messages"
+        ],
+        "expect_tool_calls_exact": [
+          "search_previous_conversations",
+          "extract_schedules_from_history",
+          "load_conversation_messages"
+        ],
+        "expect_tool_call_arguments": [
+          {
+            "tool_name": "search_previous_conversations",
+            "arguments": {"member_names": ["철수"]}
+          },
+          {
+            "tool_name": "extract_schedules_from_history",
+            "arguments": {
+              "member_names": ["철수"],
+              "date_from": "2026-07-09",
+              "date_to": "2026-07-09"
+            }
+          }
+        ],
+        "expect_load_uses_extract_source_id": true,
+        "expect_tool_result_row_keys": [
+          {
+            "tool_name": "load_conversation_messages",
+            "keys": ["sender", "content", "created_at"]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "no-match-external-search",
+    "description": "검색 결과가 없는 멤버를 물으면 임의로 conversation_id를 만들어 load하거나 일정을 지어내지 않아야 한다.",
+    "week": 5,
+    "turns": [
+      {
+        "message": "민수의 2026년 7월 7일부터 17일까지 바쁜 일정 있으면 알려줘.",
+        "expect_tool_called": [
+          "search_previous_conversations",
+          "extract_schedules_from_history"
+        ],
+        "expect_tool_calls_exact": [
+          "search_previous_conversations",
+          "extract_schedules_from_history"
+        ],
+        "expect_no_tool_called": [
+          "load_conversation_messages",
+          "collect_member_schedules"
+        ],
+        "expect_tool_call_arguments": [
+          {
+            "tool_name": "search_previous_conversations",
+            "arguments": {"member_names": ["민수"]}
+          },
+          {
+            "tool_name": "extract_schedules_from_history",
+            "arguments": {
+              "member_names": ["민수"],
+              "date_from": "2026-07-07",
+              "date_to": "2026-07-17"
+            }
+          }
+        ],
+        "expect_tool_result_rows_empty": [
+          "search_previous_conversations",
+          "extract_schedules_from_history"
+        ],
+        "expect_answer_contains_any": [
+          "없",
+          "검색되지",
+          "확인되지",
+          "찾을 수 없",
+          "찾지 못",
+          "존재하지"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "integrate-personal-and-external-schedules",
+    "description": "내 일정과 외부 멤버 busy-time을 함께 확인하는 요청은 collect_member_schedules 하나로 처리하고, 같은 조회를 extract_schedules_from_history로 중복 호출하지 않아야 한다.",
+    "week": 5,
+    "turns": [
+      {
+        "message": "2026년 7월 8일 15시부터 16시까지 헬스장 가는 개인 일정 잡아줘.",
+        "expect_tool_calls_exact": [
+          "extract_schedule_request",
+          "personal_create_schedule"
+        ]
+      },
+      {
+        "message": "나랑 철수 일정을 2026년 7월 7일부터 17일까지 같이 모아서 언제 겹치는지 확인하게 정리해줘.",
+        "expect_tool_called": ["collect_member_schedules"],
+        "expect_tool_calls_exact": ["collect_member_schedules"],
+        "expect_tool_call_arguments": [
+          {
+            "tool_name": "collect_member_schedules",
+            "arguments": {
+              "date_from": "2026-07-07",
+              "date_to": "2026-07-17"
+            }
+          }
+        ],
+        "expect_collect_member_schedules_rows": {
+          "must_include_members": ["나", "철수"],
+          "required_row_fields": ["member_name", "title", "date", "start_time", "end_time", "notes"],
+          "external_rows_require_source_conversation_id": true
+        }
+      }
+    ]
+  },
+  {
+    "id": "external-only-with-personal-negation",
+    "description": "'내 일정은 제외'라는 부정 표현이 있어도 외부 멤버 일정만 요청하면 collect나 개인 조회 tool을 선택하지 않아야 한다.",
+    "week": 5,
+    "turns": [
+      {
+        "message": "내 일정은 빼고 철수와 영희의 2026년 7월 7일부터 17일까지 외부 일정만 알려줘.",
+        "expect_tool_calls_exact": [
+          "search_previous_conversations",
+          "extract_schedules_from_history"
+        ],
+        "expect_tool_call_arguments": [
+          {
+            "tool_name": "search_previous_conversations",
+            "arguments": {"member_names": ["철수", "영희"]}
+          },
+          {
+            "tool_name": "extract_schedules_from_history",
+            "arguments": {
+              "member_names": ["철수", "영희"],
+              "date_from": "2026-07-07",
+              "date_to": "2026-07-17"
+            }
+          }
+        ],
+        "expect_tool_result_members": [
+          {
+            "tool_name": "extract_schedules_from_history",
+            "members": ["철수", "영희"]
+          }
+        ],
+        "expect_answer_contains_all": ["철수", "영희"]
+      }
+    ]
+  },
+  {
+    "id": "personal-saved-schedule-stays-in-app",
+    "description": "내 앱에 저장된 개인 일정 조회는 외부 Week 05 tool이 아니라 personal_list_saved_schedules를 사용해야 한다.",
+    "week": 5,
+    "turns": [
+      {
+        "message": "2026년 7월 8일 15시부터 16시까지 헬스장 가는 개인 일정 잡아줘.",
+        "expect_tool_calls_exact": [
+          "extract_schedule_request",
+          "personal_create_schedule"
+        ]
+      },
+      {
+        "message": "내 앱에 저장된 2026년 7월 8일 개인 일정만 보여줘.",
+        "expect_tool_calls_exact": ["personal_list_saved_schedules"],
+        "expect_tool_call_arguments": [
+          {
+            "tool_name": "personal_list_saved_schedules",
+            "arguments": {
+              "date_from": "2026-07-08",
+              "date_to": "2026-07-08"
+            }
+          }
+        ],
+        "expect_answer_contains_all": ["헬스장"]
+      }
+    ]
+  },
+  {
+    "id": "registered-shared-schedule-uses-shared-store",
+    "description": "과거 대화 추출이 아니라 공유 일정 저장소의 확정 일정을 요청하면 list_shared_schedules만 사용해야 한다.",
+    "week": 5,
+    "turns": [
+      {
+        "message": "과거 대화에서 찾는 게 아니라 외부 MCP 공유 일정 저장소에 이미 등록된 철수의 2026년 7월 7일부터 17일까지 일정을 보여줘.",
+        "expect_tool_calls_exact": ["list_shared_schedules"],
+        "expect_tool_call_arguments": [
+          {
+            "tool_name": "list_shared_schedules",
+            "arguments": {
+              "member_names": ["철수"],
+              "date_from": "2026-07-07",
+              "date_to": "2026-07-17"
+            }
+          }
+        ],
+        "expect_tool_result_row_keys": [
+          {
+            "tool_name": "list_shared_schedules",
+            "keys": [
+              "member_name",
+              "title",
+              "date",
+              "start_time",
+              "end_time",
+              "notes",
+              "source_conversation_id"
+            ]
+          }
+        ],
+        "expect_tool_result_members": [
+          {
+            "tool_name": "list_shared_schedules",
+            "members": ["철수"]
+          }
+        ],
+        "expect_answer_contains_all": ["철수"]
+      }
+    ]
+  },
+  {
+    "id": "missing-date-range-external-lookup",
+    "description": "외부 멤버 일정 조회 요청에 날짜 범위가 없으면 임의로 날짜를 추측해 tool을 호출하지 않고 먼저 되물어야 한다.",
+    "week": 5,
+    "turns": [
+      {
+        "message": "철수 일정 좀 알려줘.",
+        "expect_tool_calls_exact": [],
+        "expect_no_tool_called": [
+          "search_previous_conversations",
+          "extract_schedules_from_history",
+          "load_conversation_messages",
+          "collect_member_schedules",
+          "list_shared_schedules"
+        ],
+        "expect_answer_contains_any": ["언제", "날짜", "기간", "부터", "며칠"]
+      }
+    ]
+  },
+  {
+    "id": "missing-member-name-external-lookup",
+    "description": "누구의 일정인지 멤버 이름이 없으면 임의로 멤버를 추측해 tool을 호출하지 않고 먼저 되물어야 한다.",
+    "week": 5,
+    "turns": [
+      {
+        "message": "2026년 7월 7일부터 17일까지 그 사람 바쁜 일정 좀 알려줘.",
+        "expect_tool_calls_exact": [],
+        "expect_no_tool_called": [
+          "search_previous_conversations",
+          "extract_schedules_from_history",
+          "load_conversation_messages",
+          "collect_member_schedules",
+          "list_shared_schedules"
+        ],
+        "expect_answer_contains_any": ["누구", "이름", "누구의", "어떤 분", "멤버"]
+      }
+    ]
+  },
+  {
+    "id": "missing-date-range-then-followup-provides-it",
+    "description": "날짜 없이 물은 뒤 다음 turn에서 날짜를 알려주면 그때는 정상적으로 search->extract 순서를 따라야 한다.",
+    "week": 5,
+    "turns": [
+      {
+        "message": "영희 일정 좀 알려줘.",
+        "expect_tool_calls_exact": [],
+        "expect_no_tool_called": [
+          "search_previous_conversations",
+          "extract_schedules_from_history",
+          "collect_member_schedules"
+        ]
+      },
+      {
+        "message": "2026년 7월 7일부터 17일까지야.",
+        "expect_tool_called": ["search_previous_conversations", "extract_schedules_from_history"],
+        "expect_tool_calls_exact": [
+          "search_previous_conversations",
+          "extract_schedules_from_history"
+        ],
+        "expect_tool_call_arguments": [
+          {
+            "tool_name": "extract_schedules_from_history",
+            "arguments": {
+              "member_names": ["영희"],
+              "date_from": "2026-07-07",
+              "date_to": "2026-07-17"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "mixed-schedule-paraphrase-uses-collector",
+    "description": "'내 캘린더도 포함'이라는 다른 표현의 혼합 요청도 collect_member_schedules 하나로 처리해야 한다.",
+    "week": 5,
+    "turns": [
+      {
+        "message": "2026년 7월 8일 15시부터 16시까지 헬스장 가는 개인 일정 잡아줘.",
+        "expect_tool_calls_exact": [
+          "extract_schedule_request",
+          "personal_create_schedule"
+        ]
+      },
+      {
+        "message": "내 캘린더도 포함해서 철수와 2026년 7월 7일부터 17일까지 일정을 한 번에 모아줘.",
+        "expect_tool_calls_exact": ["collect_member_schedules"],
+        "expect_tool_call_arguments": [
+          {
+            "tool_name": "collect_member_schedules",
+            "arguments": {
+              "date_from": "2026-07-07",
+              "date_to": "2026-07-17"
+            }
+          }
+        ],
+        "expect_collect_member_schedules_rows": {
+          "must_include_members": ["나", "철수"],
+          "required_row_fields": ["member_name", "title", "date", "start_time", "end_time", "notes"],
+          "external_rows_require_source_conversation_id": true
+        }
+      }
+    ]
+  },
+  {
+    "id": "unknown-personal-end-time-is-collected-as-undecided",
+    "description": "종료 시각이 누락되면 반드시 재질문하고, 사용자가 종료 시간 없음을 확인한 뒤에만 '미정'으로 저장·수집해야 한다.",
+    "week": 5,
+    "turns": [
+      {
+        "message": "2026년 7월 9일 오전 10시에 집중 작업 개인 일정을 잡아줘.",
+        "expect_tool_calls_exact": [],
+        "expect_answer_contains_any": ["종료", "몇 시까지", "끝나는"]
+      },
+      {
+        "message": "종료 시간은 따로 없어.",
+        "expect_tool_called": ["personal_create_schedule"]
+      },
+      {
+        "message": "방금 만든 내 일정과 철수의 2026년 7월 9일 일정을 같이 모아줘.",
+        "expect_tool_called": ["collect_member_schedules"],
+        "expect_tool_call_arguments": [
+          {
+            "tool_name": "collect_member_schedules",
+            "arguments": {
+              "member_names": ["철수"],
+              "date_from": "2026-07-09",
+              "date_to": "2026-07-09"
+            }
+          }
+        ],
+        "expect_collect_member_schedules_rows": {
+          "must_include_members": ["나", "철수"],
+          "required_row_fields": ["member_name", "title", "date", "start_time", "end_time", "notes"],
+          "external_rows_require_source_conversation_id": true,
+          "rows_must_include": [
+            {
+              "member_name": "나",
+              "title": "집중 작업",
+              "date": "2026-07-09",
+              "start_time": "10:00",
+              "end_time": "미정"
+            }
+          ]
+        }
+      }
+    ]
+  }
+]

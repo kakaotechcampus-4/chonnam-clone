@@ -25,6 +25,7 @@ from student_parts.prompts.common import (
     CHAT_MEMORY_PROMPT,
     NANA_IDENTITY_PROMPT,
     NO_GUESSING_PROMPT,
+    SCHEDULE_END_TIME_CLARIFICATION_PROMPT,
     date_time_prompt,
     join_system_prompt,
 )
@@ -35,6 +36,7 @@ from student_parts.prompts.week01 import (
     WEEK01_TOOL_SELECTION_PROMPT,
 )
 from student_parts.schedule_clarification import (
+    ScheduleInputValidationError,
     is_valid_date as _is_valid_date,
     is_valid_time as _is_valid_time,
     validate_schedule_input as _validate_schedule_input,
@@ -69,10 +71,10 @@ def _current_session_schedules() -> list[dict[str, Any]]:
 
 @tool
 def personal_create_schedule(
-    title: str,
-    date: str,
-    start_time: str,
-    end_time: str = "미정",
+    title: str | None = None,
+    date: str | None = None,
+    start_time: str | None = None,
+    end_time: str | None = None,
     end_date: str | None = None,
     attendees: list[str] | None = None,
 ) -> str:
@@ -80,21 +82,36 @@ def personal_create_schedule(
 
     사용자가 일정을 만들거나 등록해 달라고 요청할 때 사용합니다.
     date와 end_date는 YYYY-MM-DD, 시간은 HH:MM 형식으로 전달합니다.
+    사용자가 종료 시각 없음이나 하루 종일을 명시한 경우에만 end_time에 "미정"을 전달합니다.
     end_date를 생략하면 date와 같은 날로 처리합니다.
     """
 
     validation = _validate_schedule_input(title, date, start_time, end_time, end_date)
-    if not validation["valid"]:
+    if validation["invalid_fields"]:
+        raise ScheduleInputValidationError(validation["invalid_fields"])
+    if validation["missing_fields"]:
         return _json(
             {
                 "ok": False,
+                "status": "needs_clarification",
                 "tool_name": "personal_create_schedule",
-                "error": "invalid_input",
+                "error": "insufficient_information",
                 "missing_fields": validation["missing_fields"],
-                "invalid_fields": validation["invalid_fields"],
+                "known_values": {
+                    "title": title,
+                    "date": date,
+                    "start_time": start_time,
+                    "end_time": end_time,
+                    "end_date": end_date,
+                    "attendees": list(attendees or []),
+                },
             }
         )
 
+    assert title is not None
+    assert date is not None
+    assert start_time is not None
+    assert end_time is not None
     schedule = {
         "id": _new_personal_id(),
         "title": title.strip(),
@@ -110,6 +127,7 @@ def personal_create_schedule(
     return _json(
         {
             "ok": True,
+            "status": "complete",
             "tool_name": "personal_create_schedule",
             "created_schedule": schedule,
         }
@@ -185,6 +203,7 @@ def week01_prompt_parts() -> list[str]:
         date_time_prompt(),
         NO_GUESSING_PROMPT,
         CHAT_MEMORY_PROMPT,
+        SCHEDULE_END_TIME_CLARIFICATION_PROMPT,
         WEEK01_TOOL_SELECTION_PROMPT,
         WEEK01_OVERNIGHT_SCHEDULE_PROMPT,
         WEEK01_DELETE_SCHEDULE_PROMPT,

@@ -65,6 +65,29 @@
     ]
   },
   {
+    "id": "clarify-missing-end-time-then-save",
+    "description": "종료 시간이 빠진 일정은 저장하지 않고 재질문하며, 후속 답변을 받으면 기존 정보와 합쳐 저장해야 한다.",
+    "week": 3,
+    "turns": [
+      {
+        "message": "내일 오후 3시에 치과 일정 잡아줘",
+        "expect_no_tool_called": ["save_structured_request", "personal_create_schedule"],
+        "expect_answer_contains_any": ["종료", "끝", "몇 시", "?"]
+      },
+      {
+        "message": "오후 4시에 끝나",
+        "expect_tool_called": ["personal_create_schedule"],
+        "expect_answer_not_contains": ["언제인가요", "몇 시인가요"]
+      }
+    ],
+    "db_check": {
+      "kind": "personal_schedule",
+      "title_contains": "치과",
+      "date_offset_days": 1,
+      "start_time": "15:00"
+    }
+  },
+  {
     "id": "no-tool-call-for-unrelated-chat",
     "description": "일정과 무관한 잡담에는 저장/조회/수정/삭제 tool을 호출하지 않아야 한다.",
     "week": 3,

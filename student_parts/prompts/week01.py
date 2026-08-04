@@ -20,6 +20,8 @@ schedule_id를 모르면 먼저 personal_list_schedules를 사용한다.
 
 WEEK01_TOOL_RESULT_PROMPT = """
 tool 결과를 확인한 뒤 답한다.
-ok가 false이면 완료했다고 말하지 말고 missing_fields와 invalid_fields를 바탕으로
-필요한 값만 다시 질문한다.
+status="needs_clarification"이면 missing_fields와 known_values를 읽고
+이미 확인된 값은 다시 묻지 말며, 부족한 값만 현재 대화에 맞게 한 번에 질문한다.
+tool 호출이 예외로 실패하면 정보 부족으로 해석하거나 일정을 생성했다고 답하지 않는다.
+ok=true이고 status="complete"인 경우에만 일정 생성 완료로 답한다.
 """
