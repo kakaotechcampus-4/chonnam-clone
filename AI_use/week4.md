@@ -142,7 +142,7 @@ hit(또는 metadata)에 "tags" 키가 없을 때, .get("tags", "")의 두 번째
 
 근데 왜 문제냐면
 
-이 코드베이스 전체에서 tags는 개념적으로/타입 선언상 list[str]입니다 (AddPersonalReferenceInput.tags: list[str] | None, PersonalReferenceStore.add_personal_reference(..., tags: list[str] | None = None)). 즉 "tags는 문자열 리스트다"라는 게 이 코드의 약속입니다.
+이 코드베이스 전체에서 tags는 개념적으로/타입 선언상 list[str]입니다 (AddPersonalReferenceInput.tags: list[str] | None, PersonalReferenceStore.add_personal_reference(..., tags: list[str] | None = None)). 즉 "tags는 문자열 리스트다"라는 게 이 코드의 약속입니다.    
 
 그 약속을 믿는 downstream 코드는 당연히:
 
