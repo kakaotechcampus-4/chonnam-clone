@@ -302,6 +302,9 @@ def _collect_member_schedules(
 
     personal_rows = []
     for row in personal_schedules:
+        attendees = row.get("attendees") or row.get("members") or []
+        if row.get("request_kind") == "group_schedule" and attendees and "나" not in attendees:
+            continue
         structured = _structured_request_from_schedule_row(row)
         if not structured.date:
             continue
