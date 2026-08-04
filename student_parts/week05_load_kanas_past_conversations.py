@@ -31,6 +31,9 @@ from student_parts.week04_retrieve_nanas_memory import week04_prompt_parts, week
 
 
 _WEEK05_AGENT: Any | None = None
+# 공유 일정 저장소가 한 번에 200건까지만 돌려준다. 이 값을 그보다 크게 잡으면 아래 "꽉 찼다" 판정이
+# 영원히 안 걸려서 누락 경고가 조용히 사라진다.
+_ROSTER_LIMIT = 200
 
 
 # [5주차 수강생 구현 가이드]
@@ -286,15 +289,18 @@ def _structured_request_from_schedule_row(row: dict[str, Any]) -> StructuredRequ
     )
 
 
-def _external_member_roster(date_from: str, date_to: str) -> list[str]:
+def _external_member_roster(date_from: str, date_to: str) -> tuple[list[str], bool]:
     """조회 구간에 일정이 있는 외부 멤버 이름을 등장 순서대로 모읍니다."""
 
-    # 명단만 여기서 얻고 일정 조회는 extract가 계속 맡는다(가이드 :96).
-    # 200은 store 상한이다 — 더 긴 구간은 날짜 빠른 순으로 잘려 뒤쪽 멤버가 명단에서 빠진다.
+    # 여기서는 이름 명단만 얻는다. 일정 자체는 extract_schedules_from_history가 계속 맡는다
+    # (이 파일 맨 위 구현 가이드 :96).
+    # 저장소는 날짜가 이른 것부터 줄 세운 뒤 앞에서 200건만 잘라 준다. 그래서 구간이 길면 뒤쪽 날짜에만
+    # 나오는 사람이 명단에서 통째로 빠진다. 전체가 몇 건이었는지는 안 알려주므로, 200건을 꽉 채워 왔으면
+    # 뒤가 더 있었다고 보고 두 번째 반환값으로 알린다.
     payload = json.loads(
         call_mcp_tool_sync(
             "list_shared_schedules",
-            {"date_from": date_from, "date_to": date_to, "limit": 200},
+            {"date_from": date_from, "date_to": date_to, "limit": _ROSTER_LIMIT},
         )
     )
     rows = payload.get("rows") or []
@@ -302,7 +308,7 @@ def _external_member_roster(date_from: str, date_to: str) -> list[str]:
     for name in normalize_external_member_names([row.get("member_name") for row in rows]):
         if name != PERSONAL_SHARED_MEMBER_NAME and name not in roster:
             roster.append(name)
-    return roster
+    return roster, len(rows) >= _ROSTER_LIMIT
 
 
 def _collect_member_schedules(
@@ -321,10 +327,12 @@ def _collect_member_schedules(
     # 미기동·타임아웃·JSON 파손은 전부 "외부 조회 실패"라는 같은 처분을 받는다. 좁혀 잡으면
     # 새 실패 유형이 다시 채팅 턴을 죽인다 — 명단 조회가 이 안에 있는 것도 같은 이유다.
     external_members: list[str] = []
+    roster_payload: dict[str, Any] | None = None
     try:
         if not member_names:
             # 비어 있으면 전원. 지목했다가 필터로 비는 경우(["나"])는 아래로 가서 안 넓어진다.
-            external_members = _external_member_roster(normalized_from, normalized_to)
+            external_members, limit_reached = _external_member_roster(normalized_from, normalized_to)
+            # limit_reached는 이름을 안 준 이 경우에만 생긴다. 아래에서 읽을 때 같은 조건을 다시 본다.
         else:
             # 정규화 뒤에 거른다 — 공백·별칭으로 "나"가 되는 이름을 놓치면 내 일정이 두 번 온다.
             external_members = [
@@ -346,6 +354,15 @@ def _collect_member_schedules(
         # or []인 것은 키가 null로 실려 오면 .get이 [] 대신 None을 주기 때문이다.
         external_ok = external_payload.get("ok", False)
         external_rows = external_payload.get("rows") or []
+        if not member_names and external_ok:
+            roster_payload = {
+                "limit_reached": limit_reached,
+                "limit": _ROSTER_LIMIT,
+            }
+            if limit_reached:
+                roster_payload["notice"] = (
+                    f"명단 조회는 {_ROSTER_LIMIT}건까지만 읽어 일부 멤버가 빠졌을 수 있습니다."
+                )
     except Exception:
         external_ok = False
         external_rows = []
@@ -371,7 +388,7 @@ def _collect_member_schedules(
         )
 
     rows = [*my_rows, *external_rows]
-    return {
+    payload = {
         # 실패하면 rows에 내 일정만 남는다. ok=True로 고정하면 "다 모았다"로 새어 나간다.
         "ok": external_ok,
         "tool_name": "collect_member_schedules",
@@ -384,6 +401,9 @@ def _collect_member_schedules(
         "rows": rows,
         "schedule_summary": external_schedule_summary(rows),
     }
+    if roster_payload is not None:
+        payload["roster"] = roster_payload
+    return payload
 
 
 @tool(args_schema=SearchPreviousConversationsInput)
@@ -545,6 +565,7 @@ def week05_prompt_parts() -> list[str]:
         "- 내 일정과 외부 멤버 일정이 같은 rows로 함께 나와야 하면 collect_member_schedules를 쓴다. "
         "이 도구가 내 일정을 앱 저장소에서 직접 읽어 합쳐 주므로, member_names에는 외부 멤버 "
         "이름만 넣고 \"나\"는 넣지 않는다.\n"
+        "- collect_member_schedules 결과의 roster.limit_reached가 true이면 최종 답변에 명단 조회 상한 때문에 일부 멤버가 빠졌을 수 있다는 주의 문장을 반드시 한 줄 적는다.\n"
         "- \"다들\"·\"모두\"·\"팀원들\"처럼 전원을 가리키는 요청이면 member_names를 비운다.\n"
         "- 공유 일정 저장소에 어떤 row가 등록돼 있는지 자체를 확인할 때는 list_shared_schedules를 쓴다. "
         "이 도구의 member_names는 위와 반대로 \"나\"를 포함한다 — 내 일정도 \"나\" row로 이 저장소에 "
