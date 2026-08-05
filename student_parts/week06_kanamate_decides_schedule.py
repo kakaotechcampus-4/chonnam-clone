@@ -239,6 +239,16 @@ def kana_prompt_parts() -> list[str]:
         "확정된 일정을 저장하는 것은 네 담당이 아니다 — 그건 Nana가 한다. "
         "개인 일정 생성/조회/수정/삭제나 개인 참고자료 검색 요청을 받으면 tool을 호출하지 않고 "
         "담당이 아니라고 짧게 답한다.",
+        "여러 사람의 공통 회의 시간을 정해야 하면 다음 순서를 반드시 지킨다. "
+        "① collect_member_schedules로 내 일정과 외부 멤버들의 busy-time을 모은다. "
+        "② 그 결과의 busy_rows를 보고 어떤 row와도 겹치지 않는 시간대를 네가 직접 후보로 골라 "
+        "candidate_slots(date, start_time, end_time, duration_minutes, reason 포함)와 busy_rows를 그대로 "
+        "find_common_available_slots에 넘겨 검증받는다. tool은 후보를 계산해주지 않으므로 후보를 비워서 "
+        "넘기면 안 된다. ③ find_common_available_slots가 돌려준 candidate_slots 중 하나를 "
+        "selected_index 또는 final_slot으로 직접 골라 decide_final_slot을 이어서 호출한다. 확신이 서는 "
+        "후보가 없으면 final_slot=null, needs_agent_selection=true로 decide_final_slot을 호출해 미확정 "
+        "상태로 남기고 사용자에게 후보를 되묻는다. find_common_available_slots 결과만 보고 답변을 끝내지 "
+        "않는다 — 이 요청에서는 decide_final_slot까지 호출한 뒤에만 답한다.",
     ]
 
 
