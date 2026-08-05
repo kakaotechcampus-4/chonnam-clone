@@ -190,6 +190,7 @@ def _schedule_scope(schedule: dict[str, Any]) -> str:
 # course 실습 규모 기준 넉넉한 상한. 저장된 일정이 이보다 많아지면 오래된 것부터 잘릴 수 있다.
 _PERSONAL_SCHEDULE_LOOKUP_LIMIT = 200
 
+
 def _is_iso_date_string(value: str) -> bool:
     """날짜 범위 비교(문자열 <, >)가 안전한 YYYY-MM-DD 형식인지 확인합니다."""
 
@@ -392,8 +393,17 @@ def create_shared_schedule(
 ) -> str:
     """외부 MCP 공유 일정 저장소에 일정을 등록하거나 갱신합니다."""
 
-    # TODO: call_mcp_tool_sync("create_shared_schedule", args)로 공유 일정 row를 생성/갱신하세요.
-    ...
+    args = {
+        "member_name": member_name,
+        "title": title,
+        "date": date,
+        "start_time": start_time,
+        "end_time": end_time,
+        "notes": notes,
+        "source_conversation_id": source_conversation_id,
+        "schedule_id": schedule_id,
+    }
+    return call_mcp_tool_sync("create_shared_schedule", args)
 
 
 @tool(args_schema=DeleteSharedScheduleInput)
@@ -403,8 +413,8 @@ def delete_shared_schedule(
 ) -> str:
     """외부 MCP 공유 일정 저장소에서 일정을 삭제합니다."""
 
-    # TODO: call_mcp_tool_sync("delete_shared_schedule", args)로 공유 일정을 삭제하세요.
-    ...
+    args = {"schedule_id": schedule_id, "source_conversation_id": source_conversation_id}
+    return call_mcp_tool_sync("delete_shared_schedule", args)
 
 
 @tool(args_schema=ListSharedSchedulesInput)
