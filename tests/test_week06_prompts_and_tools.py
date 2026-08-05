@@ -51,6 +51,8 @@ class Week06PromptTest(unittest.TestCase):
         self.assertIn("개인 일정 생성·조회·수정·삭제", prompt)
         self.assertIn("외부 멤버의 일정 조회와 그룹 공통 시간 결정은 담당하지 않는다", prompt)
         self.assertIn("Kana 담당", prompt)
+        self.assertIn("mutation tool의 결과를 받기 전", prompt)
+        self.assertIn("workflow를 끝내지 않는다", prompt)
 
     def test_kana_prompt_is_self_contained_and_requires_full_decision_flow(self):
         prompt = kana_system_prompt()
@@ -79,6 +81,16 @@ class Week06ToolBoundaryTest(unittest.TestCase):
             [tool_name(item) for item in week04_tools()],
         )
         self.assertNotIn("find_common_available_slots", agent_tool_names("nana_agent"))
+
+    def test_nana_mutation_tool_descriptions_define_workflow_boundaries(self):
+        tools = {tool_name(item): item for item in week04_tools()}
+
+        self.assertIn("mutation workflow의 첫 단계", tools["extract_schedule_request"].description)
+        self.assertIn("최종 mutation tool", tools["personal_create_schedule"].description)
+        self.assertIn("최종 mutation tool", tools["save_structured_request"].description)
+        self.assertIn("선행 tool", tools["personal_list_saved_schedules"].description)
+        self.assertIn("결과를 받기 전", tools["personal_update_saved_schedule"].description)
+        self.assertIn("결과를 받기 전", tools["personal_delete_saved_schedules"].description)
 
     def test_kana_has_required_tools_but_not_personal_mutations_or_compat_tool(self):
         names = [tool_name(item) for item in kana_tools()]
@@ -150,6 +162,10 @@ class Week06SchemaAndDescriptionTest(unittest.TestCase):
         with self.assertRaises(ValidationError):
             AgentQueryInput()
         self.assertEqual(AgentQueryInput(query="내 일정").query, "내 일정")
+        self.assertIn(
+            "완결된 요청",
+            AgentQueryInput.model_fields["query"].description,
+        )
         with self.assertRaises(ValidationError):
             ProposeGroupScheduleInput(member_names=["철수"])
 

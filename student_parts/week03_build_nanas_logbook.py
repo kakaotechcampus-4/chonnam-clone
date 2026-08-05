@@ -405,8 +405,10 @@ def personal_create_schedule(
     attendees: list[str] | None = None,
     original_text: str = "",
 ) -> str:
-    """Nana의 개인 일정을 생성하고 Week 3+ 앱 SQLite DB에도 저장합니다.
+    """Nana의 개인 일정 생성 workflow를 완료하는 최종 mutation tool입니다.
 
+    extract_schedule_request로 사용자 원문을 구조화한 뒤 호출하고, 이 tool의 성공 결과를
+    받기 전에는 일정이 생성·저장됐다고 최종 답변하지 않습니다.
     종료 시각은 반드시 명시적으로 전달합니다. 사용자가 실제 종료 시각을 답했다면 HH:MM을,
     종료 시간 없음·미정·하루 종일이라고 확인했다면 ``미정``을 전달합니다. 직전 대화에서
     종료 시각을 질문한 뒤 사용자가 짧게 "없어"라고 답한 경우에도 앞선 일정 정보와 합쳐 호출합니다.
@@ -456,7 +458,11 @@ def save_structured_request(
     original_text: str = "",
     source_schedule_id: str | None = None,
 ) -> str:
-    """Week 2 structured_request 필드를 검증한 뒤 SQLite에 저장합니다."""
+    """todo/reminder 등 구조화 요청을 실제 SQLite에 저장하는 최종 mutation tool입니다.
+
+    extract_schedule_request 결과를 인자에 그대로 옮겨 호출하고, 이 tool의 성공 결과를
+    받기 전에는 저장됐다고 최종 답변하지 않습니다.
+    """
 
     request = SaveStructuredRequestInput(
         kind=kind,
@@ -501,7 +507,12 @@ def personal_list_saved_schedules(
     date_from: str | None = None,
     date_to: str | None = None,
 ) -> str:
-    """앱 DB에 저장된 일정 목록을 날짜/종류 필터로 반환합니다. Nana가 조회/수정/삭제 후보를 볼 때 사용합니다."""
+    """앱 DB 일정과 수정·삭제 후보의 실제 schedule_id를 조회하는 선행 tool입니다.
+
+    수정 요청에서 후보가 있으면 personal_update_saved_schedule, 삭제 요청에서 후보가
+    있으면 personal_delete_saved_schedules를 이어서 호출합니다. 후보가 없을 때만
+    mutation tool을 호출하지 않고 대상이 없다고 답합니다.
+    """
 
     effective_kind = kind or "personal_schedule"
     schedules = _store().list_schedules(limit=limit, kind=effective_kind, date_from=date_from, date_to=date_to)
@@ -540,7 +551,11 @@ def personal_update_saved_schedule(
     end_time: str | None = None,
     attendees: list[str] | None = None,
 ) -> str:
-    """앱 DB에 저장된 내 일정 원본을 수정하고 공유 일정 복사본을 같은 값으로 갱신합니다."""
+    """조회로 확인한 schedule_id의 일정을 수정하는 최종 mutation tool입니다.
+
+    personal_list_saved_schedules로 실제 후보를 먼저 확인하고, 이 tool 결과를 받기 전에는
+    수정이 완료됐다고 최종 답변하지 않습니다.
+    """
 
     result = _store().update_schedule(
         schedule_id,
@@ -573,7 +588,11 @@ def personal_delete_saved_schedules(
     time_unspecified: bool = False,
     delete_all: bool = False,
 ) -> str:
-    """Nana가 고른 일정 ID나 날짜/제목/시간 필터로 저장 일정을 삭제합니다."""
+    """조회로 확인한 일정을 삭제하는 최종 mutation tool입니다.
+
+    personal_list_saved_schedules로 실제 후보를 먼저 확인하고, 이 tool 결과를 받기 전에는
+    삭제가 완료됐다고 최종 답변하지 않습니다.
+    """
 
     result = _delete_saved_schedules(
         store=_store(),

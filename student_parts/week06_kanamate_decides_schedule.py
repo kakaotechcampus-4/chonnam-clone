@@ -230,6 +230,8 @@ def nana_prompt_parts() -> list[str]:
         개인 일정 수정·삭제는 personal_list_saved_schedules로 실제 schedule_id를 확인한 뒤
         각각 personal_update_saved_schedule 또는 personal_delete_saved_schedules를 호출한다.
         후보가 없을 때만 변경 tool을 호출하지 않고 없다고 답한다.
+        생성·저장·수정·삭제 mutation tool의 결과를 받기 전에는 완료됐다는 최종 답변을
+        절대 만들지 않는다. 구조화나 후보 조회 결과만으로 workflow를 끝내지 않는다.
 
         '앱에 저장된 요청 기록' 검색은 search_saved_requests, '앱의 이전 일반 대화' 검색은
         search_conversation_messages를 반드시 사용한다. 앱 내부 일반 대화는 Nana 담당이며
@@ -420,7 +422,12 @@ class ProposeGroupScheduleInput(BaseModel):
 class AgentQueryInput(BaseModel):
     """하위 에이전트 위임 입력입니다."""
 
-    query: str
+    query: str = Field(
+        description=(
+            "하위 agent가 이 문자열 하나만 읽어도 실행할 수 있는 완결된 요청. 멤버·날짜·시간·작업 의도를 "
+            "원문에서 보존하고, clarification 후속 답변이면 앞선 미완성 요청과 합쳐 전달"
+        )
+    )
 
 
 def find_common_available_slots_dict(

@@ -238,7 +238,12 @@ def extract_structured_request(text: str) -> StructuredRequest:
 
 @tool
 def extract_schedule_request(query: str) -> str:
-    """이후 회차에서 저장 흐름과 연결할 예약 tool입니다."""
+    """자연어 저장 요청을 구조화하는 mutation workflow의 첫 단계입니다.
+
+    개인 일정 생성이면 이 결과를 personal_create_schedule에, todo/reminder이면
+    save_structured_request에 전달해야 합니다. 구조화 결과만 받고 저장이 끝났다고
+    답하지 말고 해당 mutation tool 결과를 받은 뒤 최종 답변합니다.
+    """
 
     structured_request = extract_structured_request(query)
     return json.dumps(
