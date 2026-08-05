@@ -77,6 +77,70 @@
           "save_structured_request"
         ],
         "expect_inner_not_contains": ["add_personal_reference", "kana_agent"]
+      },
+      {
+        "message": "2026년 8월 11일 오전 9시에 주간 회의 준비를 알림으로 저장해줘.",
+        "expected_agent": "nana_agent",
+        "expect_query_contains": ["2026", "주간 회의 준비", "알림"],
+        "expect_inner_order": [
+          "extract_schedule_request",
+          "save_structured_request"
+        ],
+        "expect_inner_not_contains": ["add_personal_reference", "kana_agent"]
+      }
+    ]
+  },
+  {
+    "id": "saved-record-rag-routing",
+    "turns": [
+      {
+        "message": "2026년 8월 12일까지 E2E 회귀 테스트를 할 일로 저장해줘.",
+        "expected_agent": "nana_agent",
+        "expect_query_contains": ["2026", "E2E 회귀 테스트", "할 일"],
+        "expect_inner_order": [
+          "extract_schedule_request",
+          "save_structured_request"
+        ]
+      },
+      {
+        "message": "앱에 저장된 요청 기록에서 E2E 회귀 테스트를 검색해줘.",
+        "expected_agent": "nana_agent",
+        "expect_query_contains": ["저장된", "E2E 회귀 테스트", "검색"],
+        "expect_inner_contains": ["search_saved_requests"],
+        "expect_inner_not_contains": [
+          "search_personal_references",
+          "search_conversation_messages",
+          "kana_agent"
+        ],
+        "expect_answer_contains_all": ["E2E 회귀 테스트"]
+      }
+    ]
+  },
+  {
+    "id": "conversation-rag-routing",
+    "seed_conversation_title": "프로젝트 암호 기록",
+    "seed_conversation_messages": [
+      {
+        "role": "user",
+        "content": "이번 프로젝트의 대화 전용 암호는 파랑새-726입니다."
+      },
+      {
+        "role": "assistant",
+        "content": "프로젝트 대화 내용을 확인했습니다."
+      }
+    ],
+    "turns": [
+      {
+        "message": "앱의 이전 일반 대화에서 프로젝트 대화 전용 암호를 찾아줘.",
+        "expected_agent": "nana_agent",
+        "expect_query_contains": ["이전", "일반 대화", "암호"],
+        "expect_inner_contains": ["search_conversation_messages"],
+        "expect_inner_not_contains": [
+          "search_personal_references",
+          "search_saved_requests",
+          "kana_agent"
+        ],
+        "expect_answer_contains_all": ["파랑새-726"]
       }
     ]
   },
@@ -201,11 +265,13 @@
           "decide_final_slot"
         ],
         "expect_busy_rows_from": "collect_member_schedules",
+        "expect_find_members_exact": ["나", "철수"],
         "expect_candidate_contract": true,
         "expect_decide_uses_validated_candidates": true,
         "expect_final_payload": {
           "state": "confirmed",
           "require_evidence": true,
+          "members_exact": ["나", "철수"],
           "answer_matches": true
         },
         "expect_inner_not_contains": [
@@ -231,11 +297,13 @@
         ],
         "expect_inner_not_contains": ["collect_member_schedules"],
         "expect_busy_rows_from": "extract_schedules_from_history",
+        "expect_find_members_exact": ["철수", "영희"],
         "expect_candidate_contract": true,
         "expect_decide_uses_validated_candidates": true,
         "expect_final_payload": {
           "state": "confirmed",
           "require_evidence": true,
+          "members_exact": ["철수", "영희"],
           "answer_matches": true
         }
       }
@@ -271,10 +339,44 @@
           }
         ],
         "expect_busy_rows_from": "collect_member_schedules",
+        "expect_find_members_exact": ["나", "영희"],
         "expect_candidate_contract": true,
         "expect_decide_uses_validated_candidates": true,
         "expect_final_payload": {
           "state": "confirmed",
+          "require_evidence": true,
+          "members_exact": ["나", "영희"],
+          "answer_matches": true
+        }
+      }
+    ]
+  },
+  {
+    "id": "group-iso-datetime-bounds-normalized",
+    "turns": [
+      {
+        "message": "나와 철수가 2026-07-07T09:00:00+09:00부터 2026-07-17T18:00:00+09:00까지 업무시간 중 60분 회의할 최종 시간을 정해줘.",
+        "expected_agent": "kana_agent",
+        "expect_query_contains": [
+          "나",
+          "철수",
+          "2026-07-07T09:00:00+09:00",
+          "2026-07-17T18:00:00+09:00"
+        ],
+        "expect_inner_order": [
+          "collect_member_schedules",
+          "find_common_available_slots",
+          "decide_final_slot"
+        ],
+        "expect_busy_rows_from": "collect_member_schedules",
+        "expect_find_members_exact": ["나", "철수"],
+        "expect_candidate_contract": true,
+        "expect_decide_uses_validated_candidates": true,
+        "expect_find_result_dates": true,
+        "expect_final_payload": {
+          "state": "confirmed",
+          "require_evidence": true,
+          "members_exact": ["나", "철수"],
           "answer_matches": true
         }
       }
@@ -292,12 +394,29 @@
           "find_common_available_slots",
           "decide_final_slot"
         ],
+        "expect_tool_arguments": [
+          {
+            "tool_name": "find_common_available_slots",
+            "arguments": {
+              "date_from": "2026-07-07",
+              "date_to": "2026-07-07",
+              "duration_minutes": 60,
+              "workday_start": "10:00",
+              "workday_end": "11:00"
+            }
+          }
+        ],
         "expect_busy_rows_from": "collect_member_schedules",
+        "expect_find_members_exact": ["나", "철수"],
         "expect_candidate_contract": true,
         "expect_decide_uses_validated_candidates": true,
         "expect_final_payload": {
-          "state": "pending"
-        }
+          "state": "pending",
+          "require_evidence": true,
+          "members_exact": ["나", "철수"]
+        },
+        "expect_answer_contains_any": ["없", "찾지 못", "확정할 수", "어렵"],
+        "expect_no_final_slot_in_answer": true
       }
     ]
   },

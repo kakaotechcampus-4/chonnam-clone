@@ -5,10 +5,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
-from datetime import timedelta
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,13 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 WRAPPER_NAMES = {"nana_agent", "kana_agent"}
+FINAL_SLOT_PATTERN = re.compile(
+    r"^(?P<date>\d{4}-\d{2}-\d{2}) "
+    r"(?P<start>\d{2}:\d{2})-(?P<end>\d{2}:\d{2})$"
+)
+FINAL_SLOT_IN_TEXT_PATTERN = re.compile(
+    r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}-\d{2}:\d{2}"
+)
 
 
 def resolve_runtime_value(value: Any) -> Any:
@@ -145,6 +153,46 @@ def check_wrapper_contract(
             "Supervisor wrapper 호출은 담당 하나를 정확히 한 번이어야 함: "
             f"actual={[event.get('tool_name') for event in wrapper_calls]}"
         )
+    wrapper_content = wrapper_result_content(outer_events, expected_agent)
+    if not isinstance(wrapper_content, dict):
+        failures.append(f"{expected_agent} wrapper 결과가 JSON object가 아님")
+    else:
+        required_keys = {"selected_agent", "answer", "trace", "inner_tool_names"}
+        if expected_agent == "kana_agent":
+            required_keys.update({"final_slot_payload", "final_decision_payload"})
+        missing_keys = sorted(required_keys - wrapper_content.keys())
+        if missing_keys:
+            failures.append(f"{expected_agent} wrapper 필수 key 누락: {missing_keys}")
+        if wrapper_content.get("selected_agent") != expected_agent:
+            failures.append(
+                f"wrapper selected_agent 불일치: expected={expected_agent}, "
+                f"actual={wrapper_content.get('selected_agent')!r}"
+            )
+        if not isinstance(wrapper_content.get("answer"), str):
+            failures.append("wrapper answer가 문자열이 아님")
+        if expected_agent == "kana_agent":
+            for key in ("final_slot_payload", "final_decision_payload"):
+                if trace.get(key) != wrapper_content.get(key):
+                    failures.append(
+                        f"Supervisor trace {key}가 Kana wrapper 결과와 다름: "
+                        f"wrapper={wrapper_content.get(key)!r}, trace={trace.get(key)!r}"
+                    )
+        wrapper_trace = wrapper_content.get("trace")
+        if not isinstance(wrapper_trace, list):
+            failures.append("wrapper trace가 list가 아님")
+        else:
+            expected_inner_names = tool_names(wrapper_trace)
+            if wrapper_content.get("inner_tool_names") != expected_inner_names:
+                failures.append(
+                    "wrapper inner_tool_names가 trace tool_call 순서와 다름: "
+                    f"expected={expected_inner_names}, "
+                    f"actual={wrapper_content.get('inner_tool_names')!r}"
+                )
+            if trace.get("inner_tool_names") != expected_inner_names:
+                failures.append(
+                    "Supervisor trace inner_tool_names가 wrapper trace와 다름: "
+                    f"expected={expected_inner_names}, actual={trace.get('inner_tool_names')!r}"
+                )
     if wrapper_calls:
         arguments = wrapper_calls[0].get("arguments")
         query = arguments.get("query") if isinstance(arguments, dict) else None
@@ -216,11 +264,36 @@ def check_busy_rows_forwarding(
     find_arguments = find_calls[-1].get("arguments")
     forwarded_rows = find_arguments.get("busy_rows") if isinstance(find_arguments, dict) else None
     if source_rows != forwarded_rows:
-        return [
+        failures = [
             f"{source_name} rows가 find busy_rows로 보존되지 않음: "
             f"source={source_rows!r}, forwarded={forwarded_rows!r}"
         ]
-    return []
+    else:
+        failures = []
+    find_results = tool_results(inner_events, "find_common_available_slots")
+    if find_results:
+        find_content = find_results[-1].get("content")
+        find_rows = find_content.get("busy_rows") if isinstance(find_content, dict) else None
+        if source_rows != find_rows:
+            failures.append(
+                f"{source_name} rows가 find 결과 근거에 보존되지 않음: "
+                f"source={source_rows!r}, result={find_rows!r}"
+            )
+
+    decide_calls = tool_calls(inner_events, "decide_final_slot")
+    if decide_calls:
+        decide_arguments = decide_calls[-1].get("arguments")
+        decide_rows = (
+            decide_arguments.get("busy_rows")
+            if isinstance(decide_arguments, dict)
+            else None
+        )
+        if source_rows != decide_rows:
+            failures.append(
+                f"{source_name} rows가 decide busy_rows로 보존되지 않음: "
+                f"source={source_rows!r}, forwarded={decide_rows!r}"
+            )
+    return failures
 
 
 def check_load_source_id(turn: dict[str, Any], inner_events: list[dict[str, Any]]) -> list[str]:
@@ -285,10 +358,72 @@ def check_candidate_contract(turn: dict[str, Any], inner_events: list[dict[str, 
         return [f"candidate_slots가 list가 아님: {candidates!r}"]
     required_keys = {"date", "start_time", "end_time", "duration_minutes", "reason"}
     failures: list[str] = []
+    final_state = (turn.get("expect_final_payload") or {}).get("state")
+    requested_duration = arguments.get("duration_minutes", 60) if isinstance(arguments, dict) else 60
+    if final_state == "confirmed" and not candidates:
+        failures.append("확정 시나리오의 candidate_slots가 비어 있음")
     for candidate in candidates:
         if not isinstance(candidate, dict) or not required_keys.issubset(candidate):
             failures.append(f"후보 필드 계약 위반: {candidate!r}")
+            continue
+        slot_text = (
+            f"{candidate['date']} {candidate['start_time']}-{candidate['end_time']}"
+        )
+        if FINAL_SLOT_PATTERN.fullmatch(slot_text) is None:
+            failures.append(f"후보 날짜/시간 형식 위반: {candidate!r}")
+            continue
+        try:
+            date.fromisoformat(candidate["date"])
+            start_minutes = parse_hhmm(candidate["start_time"])
+            end_minutes = parse_hhmm(candidate["end_time"])
+        except (TypeError, ValueError):
+            failures.append(f"후보 날짜/시간 값이 유효하지 않음: {candidate!r}")
+            continue
+        if not isinstance(candidate.get("duration_minutes"), int):
+            failures.append(f"후보 duration_minutes가 정수가 아님: {candidate!r}")
+        elif candidate["duration_minutes"] != end_minutes - start_minutes:
+            failures.append(f"후보 duration_minutes가 시작·종료 시각과 다름: {candidate!r}")
+        elif candidate["duration_minutes"] < requested_duration:
+            failures.append(
+                f"후보가 요청 회의 길이보다 짧음: requested={requested_duration}, candidate={candidate!r}"
+            )
+        if not isinstance(candidate.get("reason"), str) or not candidate["reason"].strip():
+            failures.append(f"후보 reason이 비어 있음: {candidate!r}")
     return failures
+
+
+def parse_hhmm(value: str) -> int:
+    hour_text, minute_text = value.split(":", 1)
+    hour = int(hour_text)
+    minute = int(minute_text)
+    if not 0 <= hour <= 23 or not 0 <= minute <= 59:
+        raise ValueError(value)
+    return hour * 60 + minute
+
+
+def slot_to_text(slot: Any) -> str | None:
+    if not isinstance(slot, dict):
+        return None
+    date = slot.get("date")
+    start = slot.get("start_time")
+    end = slot.get("end_time")
+    if not all(isinstance(value, str) and value for value in (date, start, end)):
+        return None
+    return f"{date} {start}-{end}"
+
+
+def selected_candidate(payload: dict[str, Any]) -> dict[str, Any] | None:
+    candidates = payload.get("candidate_slots")
+    if not isinstance(candidates, list):
+        return None
+    selected_slot = payload.get("selected_slot")
+    if isinstance(selected_slot, dict):
+        return selected_slot
+    selected_index = payload.get("selected_index")
+    if isinstance(selected_index, int) and 0 <= selected_index < len(candidates):
+        candidate = candidates[selected_index]
+        return candidate if isinstance(candidate, dict) else None
+    return None
 
 
 def check_final_payload(turn: dict[str, Any], result: Any, trace: dict[str, Any]) -> list[str]:
@@ -306,12 +441,40 @@ def check_final_payload(turn: dict[str, Any], result: Any, trace: dict[str, Any]
 
     state = expectation.get("state")
     if state == "confirmed":
-        if not payload.get("final_slot"):
+        final_slot = payload.get("final_slot")
+        if not final_slot:
             failures.append(f"확정 시 final_slot이 필요함: {payload}")
+        elif not isinstance(final_slot, str) or FINAL_SLOT_PATTERN.fullmatch(final_slot) is None:
+            failures.append(f"final_slot 형식이 YYYY-MM-DD HH:MM-HH:MM이 아님: {final_slot!r}")
+        else:
+            match = FINAL_SLOT_PATTERN.fullmatch(final_slot)
+            assert match is not None
+            try:
+                date.fromisoformat(match.group("date"))
+                if parse_hhmm(match.group("end")) <= parse_hhmm(match.group("start")):
+                    raise ValueError(final_slot)
+            except ValueError:
+                failures.append(f"final_slot 날짜/시간 값이 유효하지 않음: {final_slot!r}")
         if payload.get("needs_agent_selection") is not False:
             failures.append(f"확정 시 needs_agent_selection=false여야 함: {payload}")
-        if "selected_index" not in payload and "selected_slot" not in payload:
-            failures.append(f"확정 시 selected_index 또는 selected_slot이 필요함: {payload}")
+        selected = selected_candidate(payload)
+        if selected is None:
+            failures.append(f"확정 시 유효한 selected_index 또는 selected_slot이 필요함: {payload}")
+        elif selected not in (payload.get("candidate_slots") or []):
+            failures.append(f"selected_slot이 검증된 후보에 포함되지 않음: {payload}")
+        elif final_slot and slot_to_text(selected) != final_slot:
+            failures.append(
+                "final_slot이 선택된 후보와 일치하지 않음: "
+                f"selected={selected!r}, final_slot={final_slot!r}"
+            )
+        expected_candidate_texts = [
+            slot_to_text(candidate) for candidate in payload.get("candidate_slots") or []
+        ]
+        if payload.get("candidates") != expected_candidate_texts:
+            failures.append(
+                "candidates 요약이 candidate_slots와 일치하지 않음: "
+                f"expected={expected_candidate_texts!r}, actual={payload.get('candidates')!r}"
+            )
     if state == "pending":
         if payload.get("final_slot") is not None:
             failures.append(f"미확정 시 final_slot은 null이어야 함: {payload}")
@@ -321,6 +484,13 @@ def check_final_payload(turn: dict[str, Any], result: Any, trace: dict[str, Any]
         for key in ("members", "busy_rows", "candidate_slots"):
             if key not in payload:
                 failures.append(f"최종 payload 근거 key 누락: {key}, payload={payload}")
+    expected_members = expectation.get("members_exact")
+    if expected_members is not None:
+        actual_members = payload.get("members")
+        if not isinstance(actual_members, list) or sorted(actual_members) != sorted(expected_members):
+            failures.append(
+                f"최종 payload members 불일치: expected={expected_members}, actual={actual_members}"
+            )
     if expectation.get("answer_matches") and payload.get("final_slot"):
         if payload["final_slot"] not in result.answer:
             failures.append(
@@ -338,7 +508,61 @@ def check_answer(turn: dict[str, Any], answer: str) -> list[str]:
     any_values = turn.get("expect_answer_contains_any", [])
     if any_values and not any(text in answer for text in any_values):
         failures.append(f"답변에 기대 문구 중 하나도 없음: {any_values}, answer={answer!r}")
+    for text in turn.get("expect_answer_not_contains", []):
+        if text in answer:
+            failures.append(f"답변에 금지 문구가 포함됨: {text!r}, answer={answer!r}")
+    if turn.get("expect_no_final_slot_in_answer") and FINAL_SLOT_IN_TEXT_PATTERN.search(answer):
+        failures.append(f"미확정 답변에 최종 시간 형식이 포함됨: answer={answer!r}")
     return failures
+
+
+def check_find_result_dates(turn: dict[str, Any], inner_events: list[dict[str, Any]]) -> list[str]:
+    check_dates = turn.get("expect_find_result_dates")
+    expected_members = turn.get("expect_find_members_exact")
+    if not check_dates and expected_members is None:
+        return []
+    results = tool_results(inner_events, "find_common_available_slots")
+    if not results:
+        return ["find 결과가 없어 정규화된 날짜 범위를 확인할 수 없음"]
+    content = results[-1].get("content")
+    if not isinstance(content, dict):
+        return [f"find 결과가 JSON object가 아님: {content!r}"]
+    failures: list[str] = []
+    if expected_members is not None:
+        actual_members = content.get("members")
+        if not isinstance(actual_members, list) or sorted(actual_members) != sorted(expected_members):
+            failures.append(
+                f"find 결과 members 불일치: expected={expected_members}, actual={actual_members}"
+            )
+    candidates = content.get("candidate_slots")
+    if check_dates:
+        for candidate in candidates or []:
+            candidate_date = candidate.get("date") if isinstance(candidate, dict) else None
+            if not isinstance(candidate_date, str) or "T" in candidate_date:
+                failures.append(f"후보 날짜가 YYYY-MM-DD로 정규화되지 않음: {candidate!r}")
+    return failures
+
+
+def check_final_evidence_matches_source(
+    turn: dict[str, Any],
+    inner_events: list[dict[str, Any]],
+    trace: dict[str, Any],
+) -> list[str]:
+    source_name = turn.get("expect_busy_rows_from")
+    if not source_name:
+        return []
+    source_results = tool_results(inner_events, source_name)
+    payload = trace.get("final_slot_payload")
+    if not source_results or not isinstance(payload, dict):
+        return []
+    source_content = source_results[-1].get("content")
+    source_rows = source_content.get("rows") if isinstance(source_content, dict) else None
+    if payload.get("busy_rows") != source_rows:
+        return [
+            f"{source_name} rows가 final_slot_payload 근거에 보존되지 않음: "
+            f"source={source_rows!r}, payload={payload.get('busy_rows')!r}"
+        ]
+    return []
 
 
 def check_turn(turn: dict[str, Any], result: Any) -> list[str]:
@@ -353,7 +577,9 @@ def check_turn(turn: dict[str, Any], result: Any) -> list[str]:
     failures.extend(check_load_source_id(turn, inner_events))
     failures.extend(check_candidate_contract(turn, inner_events))
     failures.extend(check_decide_uses_validated_candidates(turn, inner_events))
+    failures.extend(check_find_result_dates(turn, inner_events))
     failures.extend(check_final_payload(turn, result, trace))
+    failures.extend(check_final_evidence_matches_source(turn, inner_events, trace))
     failures.extend(check_answer(turn, result.answer or ""))
     if trace.get("error"):
         failures.append(f"Agent 실행 오류: {trace['error']}")
@@ -374,6 +600,25 @@ def selected_scenarios(
     return selected
 
 
+def seed_conversation_messages(scenario: dict[str, Any]) -> None:
+    rows = scenario.get("seed_conversation_messages") or []
+    if not rows:
+        return
+    from fixed.app_store import AppSQLiteStore
+    from fixed.config import CONFIG
+
+    store = AppSQLiteStore(CONFIG.app_db_path)
+    conversation = store.create_conversation(
+        str(scenario.get("seed_conversation_title") or "Week 6 E2E 이전 대화")
+    )
+    for row in rows:
+        store.append_message(
+            conversation["conversation_id"],
+            str(row.get("role") or "user"),
+            str(row.get("content") or ""),
+        )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--scenarios", type=Path, default=SCRIPT_DIR / "scenarios.json")
@@ -390,6 +635,7 @@ def main() -> int:
         all_scenarios = json.loads(args.scenarios.read_text(encoding="utf-8"))
         scenarios = selected_scenarios(all_scenarios, args.scenario)
         for scenario in scenarios:
+            seed_conversation_messages(scenario)
             history: list[dict[str, str]] = []
             turns = scenario.get("turns") or [{**scenario, "message": scenario["message"]}]
             for turn_index, turn in enumerate(turns, start=1):
