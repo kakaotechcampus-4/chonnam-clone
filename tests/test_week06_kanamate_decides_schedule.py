@@ -4,6 +4,8 @@ import json
 import unittest
 from unittest.mock import Mock, patch
 
+from langchain_core.messages import AIMessage, ToolMessage
+
 import student_parts.week06_kanamate_decides_schedule as week06
 
 
@@ -288,6 +290,174 @@ class FinalSlotDecisionTests(unittest.TestCase):
         self.assertTrue(payload["needs_agent_selection"])
         self.assertEqual(payload["candidates"], [])
         self.assertIn("찾지 못했습니다", payload["reason"])
+
+
+class AgentFake:
+    def __init__(self, result: dict[str, object] | None = None, error: Exception | None = None) -> None:
+        self.result = result or {"messages": [AIMessage(content="완료했습니다.")]}
+        self.error = error
+        self.invoke_calls: list[dict[str, object]] = []
+
+    def invoke(self, arguments: dict[str, object]) -> dict[str, object]:
+        self.invoke_calls.append(arguments)
+        if self.error is not None:
+            raise self.error
+        return self.result
+
+
+class SubAgentTests(unittest.TestCase):
+    def test_prompts_define_distinct_roles_and_intent_based_routing(self) -> None:
+        nana_prompt = week06.nana_system_prompt()
+        kana_prompt = week06.kana_system_prompt()
+
+        self.assertIn("개인 일정의 생성·조회·수정·삭제", nana_prompt)
+        self.assertIn("참석자가 있어도 날짜와 시간이 이미 정해져", nana_prompt)
+        self.assertIn("여러 사람의 가능 시간 탐색", nana_prompt)
+        self.assertIn("외부 구성원의 과거 대화와 일정", kana_prompt)
+        self.assertIn("collect_member_schedules를 한 번 호출", kana_prompt)
+        self.assertIn("find_common_available_slots", kana_prompt)
+        self.assertIn("decide_final_slot", kana_prompt)
+        self.assertIn(week06.current_app_date_iso(), kana_prompt)
+
+    def test_role_tool_lists_do_not_leak_between_nana_and_kana(self) -> None:
+        nana_names = set(week06.agent_tool_names("nana_agent"))
+        kana_names = set(week06.agent_tool_names("kana_agent"))
+
+        self.assertIn("personal_list_saved_schedules", nana_names)
+        self.assertIn("search_conversation_messages", nana_names)
+        self.assertNotIn("collect_member_schedules", nana_names)
+        self.assertIn("collect_member_schedules", kana_names)
+        self.assertIn("find_common_available_slots", kana_names)
+        self.assertIn("decide_final_slot", kana_names)
+        self.assertNotIn("personal_list_saved_schedules", kana_names)
+        self.assertNotIn("propose_group_schedule", kana_names)
+
+    def test_nana_agent_is_cached_and_returns_inner_trace(self) -> None:
+        result = {
+            "messages": [
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "personal_list_saved_schedules",
+                            "args": {"date_from": "2026-08-06"},
+                            "id": "nana-call-1",
+                        }
+                    ],
+                ),
+                ToolMessage(
+                    content=json.dumps({"ok": True, "schedules": []}, ensure_ascii=False),
+                    tool_call_id="nana-call-1",
+                    name="personal_list_saved_schedules",
+                ),
+                AIMessage(content="저장된 일정이 없습니다."),
+            ]
+        }
+        fake_agent = AgentFake(result)
+        fake_model = object()
+        previous_agent = week06._NANA_SUBAGENT
+        week06._NANA_SUBAGENT = None
+        try:
+            with (
+                patch.object(week06, "chat_model", return_value=fake_model) as model,
+                patch.object(week06, "create_agent", return_value=fake_agent) as create,
+            ):
+                first = json.loads(week06.nana_agent.invoke({"query": "내 일정 보여줘"}))
+                second = json.loads(week06.nana_agent.invoke({"query": "다시 보여줘"}))
+        finally:
+            week06._NANA_SUBAGENT = previous_agent
+
+        model.assert_called_once_with()
+        create.assert_called_once()
+        self.assertIs(create.call_args.kwargs["model"], fake_model)
+        self.assertEqual(
+            [tool.name for tool in create.call_args.kwargs["tools"]],
+            [tool.name for tool in week06.week04_tools()],
+        )
+        self.assertIn("개인 일정의 생성·조회·수정·삭제", create.call_args.kwargs["system_prompt"])
+        self.assertEqual(first["selected_agent"], "nana_agent")
+        self.assertEqual(first["inner_tool_names"], ["personal_list_saved_schedules"])
+        self.assertEqual(first["answer"], "저장된 일정이 없습니다.")
+        self.assertEqual(first["trace"][1]["content"], {"ok": True, "schedules": []})
+        self.assertEqual(second["selected_agent"], "nana_agent")
+        self.assertEqual(len(fake_agent.invoke_calls), 2)
+
+    def test_kana_agent_lifts_final_payload_and_is_cached(self) -> None:
+        final_payload = {
+            "final_slot": "2026-08-06 14:00-15:00",
+            "reason": "모두 가능함",
+            "candidates": ["2026-08-06 14:00-15:00"],
+            "needs_agent_selection": False,
+        }
+        result = {
+            "messages": [
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "collect_member_schedules",
+                            "args": {
+                                "member_names": ["철수"],
+                                "date_from": "2026-08-06",
+                                "date_to": "2026-08-06",
+                            },
+                            "id": "kana-call-1",
+                        }
+                    ],
+                ),
+                ToolMessage(
+                    content='{"ok": true, "rows": []}',
+                    tool_call_id="kana-call-1",
+                    name="collect_member_schedules",
+                ),
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "decide_final_slot",
+                            "args": {"selected_index": 0},
+                            "id": "kana-call-2",
+                        }
+                    ],
+                ),
+                ToolMessage(
+                    content=json.dumps(final_payload, ensure_ascii=False),
+                    tool_call_id="kana-call-2",
+                    name="decide_final_slot",
+                ),
+                AIMessage(content="8월 6일 오후 2시로 결정했습니다."),
+            ]
+        }
+        fake_agent = AgentFake(result)
+        previous_agent = week06._KANA_SUBAGENT
+        week06._KANA_SUBAGENT = None
+        try:
+            with patch.object(week06, "create_agent", return_value=fake_agent) as create:
+                first = json.loads(week06.kana_agent.invoke({"query": "철수와 시간 맞춰줘"}))
+                second = json.loads(week06.kana_agent.invoke({"query": "결과 다시 알려줘"}))
+        finally:
+            week06._KANA_SUBAGENT = previous_agent
+
+        create.assert_called_once()
+        self.assertEqual(first["selected_agent"], "kana_agent")
+        self.assertEqual(
+            first["inner_tool_names"],
+            ["collect_member_schedules", "decide_final_slot"],
+        )
+        self.assertEqual(first["final_slot_payload"], final_payload)
+        self.assertIsNone(first["final_decision_payload"])
+        self.assertEqual(first["answer"], "8월 6일 오후 2시로 결정했습니다.")
+        self.assertEqual(second["selected_agent"], "kana_agent")
+        self.assertEqual(len(fake_agent.invoke_calls), 2)
+
+    def test_subagent_runtime_errors_are_not_converted_to_success_json(self) -> None:
+        previous_agent = week06._KANA_SUBAGENT
+        week06._KANA_SUBAGENT = AgentFake(error=RuntimeError("MCP unavailable"))
+        try:
+            with self.assertRaisesRegex(RuntimeError, "MCP unavailable"):
+                week06.kana_agent.invoke({"query": "철수 일정 찾아줘"})
+        finally:
+            week06._KANA_SUBAGENT = previous_agent
 
 
 if __name__ == "__main__":
