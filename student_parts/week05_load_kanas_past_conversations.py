@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import date, timedelta
 from typing import Any
 
 from langchain.agents import create_agent
@@ -276,16 +277,41 @@ class CollectMemberSchedulesInput(BaseModel):
 
 
 def _structured_request_from_schedule_row(row: dict[str, Any]) -> StructuredRequest:
-    """앱 일정 row를 Week 2 StructuredRequest 기준으로 읽습니다."""
+    """앱 일정 row를 Week 2 StructuredRequest 기준으로 읽습니다.
+
+    SQLite row는 `request_kind`로 개인/그룹을 구분합니다. Week 1 임시 일정 row에는
+    이 값이 없으므로 개인 일정으로 봅니다.
+    """
 
     return StructuredRequest(
-        kind="personal_schedule",
+        kind=(
+            "group_schedule"
+            if row.get("request_kind") == "group_schedule"
+            else "personal_schedule"
+        ),
         title=row.get("title"),
         date=row.get("date"),
         start_time=row.get("start_time"),
         end_time=row.get("end_time"),
         members=row.get("attendees") or row.get("members") or [],
         original_text=str(row.get("title") or ""),
+    )
+
+
+def _my_schedule_notes(request: StructuredRequest) -> str:
+    """내 일정 row가 개인 일정인지, 참석자가 있는 그룹 일정인지 설명합니다."""
+
+    if request.kind != "group_schedule":
+        return "Nana 개인 일정"
+    members = [
+        str(member).strip()
+        for member in (request.members or [])
+        if str(member).strip()
+    ]
+    return (
+        f"Nana 그룹 일정 · 참석자: {', '.join(members)}"
+        if members
+        else "Nana 그룹 일정"
     )
 
 
@@ -297,18 +323,39 @@ def _external_member_roster(date_from: str, date_to: str) -> tuple[list[str], bo
     # 저장소는 날짜가 이른 것부터 줄 세운 뒤 앞에서 200건만 잘라 준다. 그래서 구간이 길면 뒤쪽 날짜에만
     # 나오는 사람이 명단에서 통째로 빠진다. 전체가 몇 건이었는지는 안 알려주므로, 200건을 꽉 채워 왔으면
     # 뒤가 더 있었다고 보고 두 번째 반환값으로 알린다.
-    payload = json.loads(
-        call_mcp_tool_sync(
-            "list_shared_schedules",
-            {"date_from": date_from, "date_to": date_to, "limit": _ROSTER_LIMIT},
+    def _lookup_range(start: date, end: date) -> tuple[list[dict[str, Any]], bool]:
+        if start > end:
+            return [], False
+
+        payload = json.loads(
+            call_mcp_tool_sync(
+                "list_shared_schedules",
+                {
+                    "date_from": start.isoformat(),
+                    "date_to": end.isoformat(),
+                    "limit": _ROSTER_LIMIT,
+                },
+            )
         )
-    )
-    rows = payload.get("rows") or []
+        rows = payload.get("rows") or []
+        if len(rows) < _ROSTER_LIMIT or start == end:
+            return rows, len(rows) >= _ROSTER_LIMIT
+
+        midpoint = start + (end - start) // 2
+        left_rows, left_limit_reached = _lookup_range(start, midpoint)
+        right_rows, right_limit_reached = _lookup_range(
+            midpoint + timedelta(days=1), end
+        )
+        return [*left_rows, *right_rows], left_limit_reached or right_limit_reached
+
+    start_date = date.fromisoformat(date_from)
+    end_date = date.fromisoformat(date_to)
+    rows, limit_reached = _lookup_range(start_date, end_date)
     roster: list[str] = []
     for name in normalize_external_member_names([row.get("member_name") for row in rows]):
         if name != PERSONAL_SHARED_MEMBER_NAME and name not in roster:
             roster.append(name)
-    return roster, len(rows) >= _ROSTER_LIMIT
+    return roster, limit_reached
 
 
 def _collect_member_schedules(
@@ -361,7 +408,7 @@ def _collect_member_schedules(
             }
             if limit_reached:
                 roster_payload["notice"] = (
-                    f"명단 조회는 {_ROSTER_LIMIT}건까지만 읽어 일부 멤버가 빠졌을 수 있습니다."
+                    f"명단 조회가 하루 {_ROSTER_LIMIT}건 상한에 닿아, 일부 구성원이 이번 조회 전체에서 빠졌을 수 있습니다."
                 )
     except Exception:
         external_ok = False
@@ -383,7 +430,7 @@ def _collect_member_schedules(
                 "date": request.date,
                 "start_time": request.start_time,
                 "end_time": request.end_time or "미정",
-                "notes": "",
+                "notes": _my_schedule_notes(request),
             }
         )
 
@@ -403,6 +450,11 @@ def _collect_member_schedules(
     }
     if roster_payload is not None:
         payload["roster"] = roster_payload
+    if not external_ok:
+        payload["external_lookup"] = {
+            "ok": False,
+            "notice": "외부 일정 조회에 실패해, 외부 구성원의 일정이 빠진 채로 계산됐습니다.",
+        }
     return payload
 
 
