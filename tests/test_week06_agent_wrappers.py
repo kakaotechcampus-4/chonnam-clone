@@ -219,6 +219,147 @@ class Week06AgentWrapperTest(unittest.TestCase):
             week06._nana_mutation_retry_plan("내일 3시에 회의 등록해줘.")
         )
 
+    def test_nana_read_retry_does_not_replace_reference_save(self):
+        self.assertIsNone(
+            week06._nana_read_retry_tool(
+                "식별 코드는 W6-0640이라고 개인 참고자료에 기억해줘."
+            )
+        )
+        self.assertEqual(
+            week06._nana_read_retry_tool("개인 참고자료에서 식별 코드를 찾아줘."),
+            "search_personal_references",
+        )
+
+    @patch.object(week06, "extract_final_text", return_value="파랑새-726")
+    @patch.object(week06, "extract_agent_events")
+    @patch.object(week06, "chat_model", return_value="model")
+    @patch.object(week06, "create_agent")
+    def test_nana_agent_corrects_wrong_read_source_once(
+        self,
+        create_agent,
+        _chat_model,
+        extract_events,
+        _extract_text,
+    ):
+        subagent = Mock()
+        subagent.invoke.side_effect = [{"attempt": 1}, {"attempt": 2}]
+        create_agent.return_value = subagent
+        extract_events.side_effect = [
+            [{"event": "tool_call", "tool_name": "search_personal_references"}],
+            [{"event": "tool_call", "tool_name": "search_conversation_messages"}],
+        ]
+
+        payload = json.loads(
+            week06.nana_agent.invoke(
+                {"query": "앱의 이전 일반 대화에서 프로젝트 대화 전용 암호를 찾아줘."}
+            )
+        )
+
+        self.assertEqual(payload["retry_count"], 1)
+        self.assertEqual(payload["inner_tool_names"], ["search_conversation_messages"])
+        self.assertEqual(
+            payload["attempted_inner_tool_names"],
+            ["search_personal_references", "search_conversation_messages"],
+        )
+        self.assertIn(
+            "search_conversation_messages을 정확히 한 번",
+            subagent.invoke.call_args_list[1].args[0]["messages"][0]["content"],
+        )
+
+    def test_retry_instructions_preserve_remaining_step_evidence_and_time_window(self):
+        events = [
+            {"event": "tool_call", "tool_name": "extract_schedule_request"},
+            {
+                "event": "tool_result",
+                "tool_name": "extract_schedule_request",
+                "content": {"ok": True, "structured_request": {"title": "회의"}},
+            },
+        ]
+        remaining = week06._remaining_sequence(
+            ("extract_schedule_request", "personal_create_schedule"), events
+        )
+        nana_instruction = week06._nana_retry_instruction("원문", remaining, events)
+        kana_instruction = week06._kana_retry_instruction(
+            "나와 철수가 2026년 7월 7일 10시부터 11시 사이에 회의할 최종 시간을 정해줘.",
+            "decide_final_slot",
+            events,
+        )
+
+        self.assertEqual(remaining, ("personal_create_schedule",))
+        self.assertIn('"title": "회의"', nana_instruction)
+        self.assertIn("남은 필수 단계는 personal_create_schedule", nana_instruction)
+        self.assertIn("workday_start=10:00", kana_instruction)
+        self.assertIn("workday_end=11:00", kana_instruction)
+        self.assertIsNone(
+            week06._explicit_time_window(
+                "2026-07-07T09:00:00+09:00부터 2026-07-17T18:00:00+09:00까지"
+            )
+        )
+
+    def test_kana_decision_retry_reason_checks_evidence_and_explicit_window(self):
+        rows = [{"member_name": "철수", "date": "2026-07-07"}]
+        candidates = [
+            {
+                "date": "2026-07-07",
+                "start_time": "10:00",
+                "end_time": "11:00",
+                "duration_minutes": 60,
+                "reason": "가능",
+            }
+        ]
+        find_result = {
+            "members": ["나", "철수"],
+            "busy_rows": rows,
+            "candidate_slots": candidates,
+        }
+        base_events = [
+            {
+                "event": "tool_call",
+                "tool_name": "find_common_available_slots",
+                "arguments": {"workday_start": "10:00", "workday_end": "11:00"},
+            },
+            {
+                "event": "tool_result",
+                "tool_name": "find_common_available_slots",
+                "content": find_result,
+            },
+        ]
+        query = "나와 철수가 2026년 7월 7일 10시부터 11시 사이에 회의할 최종 시간을 정해줘."
+        missing_evidence = [
+            *base_events,
+            {
+                "event": "tool_result",
+                "tool_name": "decide_final_slot",
+                "content": {"members": ["철수"], "candidate_slots": candidates},
+            },
+        ]
+        valid = [
+            *base_events,
+            {
+                "event": "tool_result",
+                "tool_name": "decide_final_slot",
+                "content": find_result,
+            },
+        ]
+        wrong_window = [
+            {
+                **base_events[0],
+                "arguments": {"workday_start": "09:00", "workday_end": "18:00"},
+            },
+            *base_events[1:],
+            valid[-1],
+        ]
+
+        self.assertIn(
+            "members",
+            week06._kana_decision_retry_reason(query, missing_evidence),
+        )
+        self.assertIsNone(week06._kana_decision_retry_reason(query, valid))
+        self.assertEqual(
+            week06._kana_decision_retry_reason(query, wrong_window),
+            "사용자 명시 허용 시간 범위 불일치",
+        )
+
     @patch.object(week06, "extract_final_text", return_value="최종 시간을 정했습니다.")
     @patch.object(week06, "extract_agent_events")
     @patch.object(week06, "chat_model", return_value="model")
