@@ -393,7 +393,7 @@
       {
         "message": "나와 철수가 2026년 7월 7일 10시부터 11시 사이에 60분 회의할 최종 시간을 정해줘.",
         "expected_agent": "kana_agent",
-        "expect_query_contains": ["나", "철수", "2026", "10시", "11시"],
+        "expect_query_contains": ["나", "철수", "2026", "10:00", "11:00"],
         "expect_inner_order": [
           "collect_member_schedules",
           "find_common_available_slots",
@@ -485,7 +485,7 @@
       {
         "message": "철수의 내일 바쁜 일정을 알려줘.",
         "expected_agent": "kana_agent",
-        "expect_query_contains": ["철수", "내일"],
+        "expect_query_contains": ["철수", "$APP_TOMORROW"],
         "expect_inner_exact": [
           "search_previous_conversations",
           "extract_schedules_from_history"

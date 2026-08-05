@@ -695,6 +695,22 @@ def main() -> int:
                 turn_failures = check_turn(turn, result)
                 status = "PASS" if not turn_failures else "FAIL"
                 print(f"[{status}] {scenario['id']} turn={turn_index}")
+                if turn_failures:
+                    wrapper_content = wrapper_result_content(
+                        result.trace.get("events") or [],
+                        turn["expected_agent"],
+                    )
+                    if isinstance(wrapper_content, dict) and "retry_count" in wrapper_content:
+                        print(
+                            "  - [진단] 하위 agent retry_count="
+                            f"{wrapper_content['retry_count']}"
+                        )
+                    supervisor_retry_count = result.trace.get("supervisor_retry_count")
+                    if supervisor_retry_count is not None:
+                        print(
+                            "  - [진단] supervisor_retry_count="
+                            f"{supervisor_retry_count}"
+                        )
                 for failure in turn_failures:
                     print(f"  - {failure}")
                 failures.extend(
