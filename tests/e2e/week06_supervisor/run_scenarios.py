@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""실제 Week 6 Supervisor와 Nana/Kana의 위임 및 내부 tool 순서를 검증합니다."""
+"""실제 Week 6 Supervisor와 Nana/Kana의 위임·인자·trace·최종 결정을 검증합니다."""
 
 import argparse
 import json
@@ -8,6 +8,7 @@ import os
 import shutil
 import sys
 import tempfile
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -17,8 +18,29 @@ REPO_ROOT = SCRIPT_DIR.parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+WRAPPER_NAMES = {"nana_agent", "kana_agent"}
+
+
+def resolve_runtime_value(value: Any) -> Any:
+    """시나리오의 앱 기준 날짜 placeholder를 실행 시점 값으로 바꿉니다."""
+
+    if isinstance(value, list):
+        return [resolve_runtime_value(item) for item in value]
+    if isinstance(value, dict):
+        return {key: resolve_runtime_value(item) for key, item in value.items()}
+    if isinstance(value, str) and value in {"$APP_TODAY", "$APP_TOMORROW"}:
+        from fixed.runtime_clock import current_app_date
+
+        day = current_app_date()
+        if value == "$APP_TOMORROW":
+            day += timedelta(days=1)
+        return day.isoformat()
+    return value
+
 
 def configure_isolated_runtime() -> Path:
+    """Agent import 전에 앱 DB, Chroma, 외부 DB를 실행별 임시 경로로 격리합니다."""
+
     runtime_dir = Path(tempfile.mkdtemp(prefix="kanana_week06_e2e_"))
     external_db_path = runtime_dir / "external.sqlite3"
     os.environ["KANANA_EXTERNAL_DB_PATH"] = str(external_db_path)
@@ -31,6 +53,31 @@ def configure_isolated_runtime() -> Path:
     return runtime_dir
 
 
+def tool_calls(events: list[dict[str, Any]], name: str | None = None) -> list[dict[str, Any]]:
+    return [
+        event
+        for event in events
+        if event.get("event") == "tool_call"
+        and (name is None or event.get("tool_name") == name)
+    ]
+
+
+def tool_results(events: list[dict[str, Any]], name: str) -> list[dict[str, Any]]:
+    return [
+        event
+        for event in events
+        if event.get("event") == "tool_result" and event.get("tool_name") == name
+    ]
+
+
+def tool_names(events: list[dict[str, Any]]) -> list[str]:
+    return [
+        str(event["tool_name"])
+        for event in tool_calls(events)
+        if event.get("tool_name")
+    ]
+
+
 def ordered(required: list[str], actual: list[str]) -> bool:
     position = -1
     for name in required:
@@ -41,55 +88,296 @@ def ordered(required: list[str], actual: list[str]) -> bool:
     return True
 
 
-def check_scenario(scenario: dict[str, Any], result: Any) -> list[str]:
+def wrapper_result_content(
+    outer_events: list[dict[str, Any]],
+    expected_agent: str,
+) -> dict[str, Any] | None:
+    results = tool_results(outer_events, expected_agent)
+    if not results:
+        return None
+    content = results[-1].get("content")
+    return content if isinstance(content, dict) else None
+
+
+def inner_events_from(
+    outer_events: list[dict[str, Any]],
+    expected_agent: str,
+) -> list[dict[str, Any]]:
+    content = wrapper_result_content(outer_events, expected_agent)
+    if not content:
+        return []
+    trace = content.get("trace")
+    return trace if isinstance(trace, list) else []
+
+
+def partial_dict_matches(actual: Any, expected: dict[str, Any]) -> bool:
+    if not isinstance(actual, dict):
+        return False
+    for key, raw_value in expected.items():
+        value = resolve_runtime_value(raw_value)
+        actual_value = actual.get(key)
+        if key == "member_names" and isinstance(value, list) and isinstance(actual_value, list):
+            if sorted(str(item) for item in actual_value) != sorted(str(item) for item in value):
+                return False
+        elif actual_value != value:
+            return False
+    return True
+
+
+def check_wrapper_contract(
+    turn: dict[str, Any],
+    trace: dict[str, Any],
+    outer_events: list[dict[str, Any]],
+) -> list[str]:
     failures: list[str] = []
-    trace = result.trace if isinstance(result.trace, dict) else {}
+    expected_agent = turn["expected_agent"]
     selected_agent = trace.get("supervisor_selected_agent")
-    inner_names = trace.get("inner_tool_names") or []
-    events = trace.get("events") or []
     wrapper_calls = [
-        event.get("tool_name")
-        for event in events
-        if event.get("event") == "tool_call"
-        and event.get("tool_name") in {"nana_agent", "kana_agent"}
+        event for event in tool_calls(outer_events) if event.get("tool_name") in WRAPPER_NAMES
     ]
 
-    expected_agent = scenario["expected_agent"]
     if selected_agent != expected_agent:
         failures.append(
             f"선택 agent 불일치: expected={expected_agent}, actual={selected_agent}"
         )
-    if wrapper_calls != [expected_agent]:
+    if [event.get("tool_name") for event in wrapper_calls] != [expected_agent]:
         failures.append(
-            f"Supervisor wrapper 호출은 정확히 하나여야 함: actual={wrapper_calls}"
+            "Supervisor wrapper 호출은 담당 하나를 정확히 한 번이어야 함: "
+            f"actual={[event.get('tool_name') for event in wrapper_calls]}"
         )
-    for name in scenario.get("expected_inner_contains", []):
-        if name not in inner_names:
-            failures.append(f"필수 내부 tool 누락: {name}, actual={inner_names}")
-    expected_order = scenario.get("expected_inner_order", [])
-    if expected_order and not ordered(expected_order, inner_names):
+    if wrapper_calls:
+        arguments = wrapper_calls[0].get("arguments")
+        query = arguments.get("query") if isinstance(arguments, dict) else None
+        if not isinstance(query, str) or not query.strip():
+            failures.append(f"wrapper query가 비어 있거나 문자열이 아님: {query!r}")
+        else:
+            for text in turn.get("expect_query_contains", []):
+                text = str(resolve_runtime_value(text))
+                if text not in query:
+                    failures.append(f"wrapper query에 필수 문구가 없음: {text!r}, query={query!r}")
+            for text in turn.get("expect_query_not_contains", []):
+                text = str(resolve_runtime_value(text))
+                if text in query:
+                    failures.append(f"wrapper query에 추측한 문구가 포함됨: {text!r}, query={query!r}")
+    return failures
+
+
+def check_inner_tools(turn: dict[str, Any], inner_events: list[dict[str, Any]]) -> list[str]:
+    failures: list[str] = []
+    actual_names = tool_names(inner_events)
+
+    if "expect_inner_exact" in turn and actual_names != turn["expect_inner_exact"]:
         failures.append(
-            f"내부 tool 순서 불일치: expected={expected_order}, actual={inner_names}"
+            f"내부 tool 전체 불일치: expected={turn['expect_inner_exact']}, actual={actual_names}"
         )
-    if scenario.get("expect_final_slot_payload"):
-        final_payload = trace.get("final_slot_payload")
-        if not isinstance(final_payload, dict):
-            failures.append(f"final_slot_payload 누락: {final_payload!r}")
-        elif not {"final_slot", "reason", "candidates"}.issubset(final_payload):
-            failures.append(f"최종 payload 필수 key 누락: {final_payload}")
-        elif final_payload.get("final_slot") and final_payload["final_slot"] not in result.answer:
+    expected_order = turn.get("expect_inner_order", [])
+    if expected_order and not ordered(expected_order, actual_names):
+        failures.append(
+            f"내부 tool 순서 불일치: expected={expected_order}, actual={actual_names}"
+        )
+    for name in turn.get("expect_inner_contains", []):
+        if name not in actual_names:
+            failures.append(f"필수 내부 tool 누락: {name}, actual={actual_names}")
+    for name in turn.get("expect_inner_not_contains", []):
+        if name in actual_names:
+            failures.append(f"금지 내부 tool 호출: {name}, actual={actual_names}")
+
+    for spec in turn.get("expect_tool_arguments", []):
+        calls = tool_calls(inner_events, spec["tool_name"])
+        occurrence = int(spec.get("occurrence", 0))
+        if occurrence >= len(calls):
             failures.append(
-                "최종 답변이 final_slot_payload.final_slot과 일치하지 않음: "
-                f"slot={final_payload['final_slot']!r}, answer={result.answer!r}"
+                f"{spec['tool_name']} {occurrence + 1}번째 호출 인자를 확인할 수 없음"
             )
+            continue
+        arguments = calls[occurrence].get("arguments")
+        if not partial_dict_matches(arguments, spec.get("arguments", {})):
+            failures.append(
+                f"{spec['tool_name']} 인자 불일치: expected subset={spec.get('arguments', {})}, "
+                f"actual={arguments}"
+            )
+    return failures
+
+
+def check_busy_rows_forwarding(
+    turn: dict[str, Any],
+    inner_events: list[dict[str, Any]],
+) -> list[str]:
+    source_name = turn.get("expect_busy_rows_from")
+    if not source_name:
+        return []
+    source_results = tool_results(inner_events, source_name)
+    find_calls = tool_calls(inner_events, "find_common_available_slots")
+    if not source_results or not find_calls:
+        return [f"busy_rows 전달 검증에 필요한 {source_name} 결과 또는 find 호출이 없음"]
+
+    source_content = source_results[-1].get("content")
+    source_rows = source_content.get("rows") if isinstance(source_content, dict) else None
+    find_arguments = find_calls[-1].get("arguments")
+    forwarded_rows = find_arguments.get("busy_rows") if isinstance(find_arguments, dict) else None
+    if source_rows != forwarded_rows:
+        return [
+            f"{source_name} rows가 find busy_rows로 보존되지 않음: "
+            f"source={source_rows!r}, forwarded={forwarded_rows!r}"
+        ]
+    return []
+
+
+def check_load_source_id(turn: dict[str, Any], inner_events: list[dict[str, Any]]) -> list[str]:
+    if not turn.get("expect_load_uses_extract_source_id"):
+        return []
+    extract_results = tool_results(inner_events, "extract_schedules_from_history")
+    load_calls = tool_calls(inner_events, "load_conversation_messages")
+    if not extract_results or not load_calls:
+        return ["extract 결과 또는 load 호출이 없어 source_conversation_id를 검증할 수 없음"]
+    extract_content = extract_results[-1].get("content")
+    rows = extract_content.get("rows") if isinstance(extract_content, dict) else None
+    source_ids = {
+        row.get("source_conversation_id")
+        for row in rows or []
+        if isinstance(row, dict) and row.get("source_conversation_id")
+    }
+    load_arguments = load_calls[-1].get("arguments")
+    conversation_id = (
+        load_arguments.get("conversation_id") if isinstance(load_arguments, dict) else None
+    )
+    if conversation_id not in source_ids:
+        return [
+            "load conversation_id가 extract source_conversation_id에서 오지 않음: "
+            f"load={conversation_id!r}, sources={sorted(source_ids)}"
+        ]
+    return []
+
+
+def check_decide_uses_validated_candidates(
+    turn: dict[str, Any],
+    inner_events: list[dict[str, Any]],
+) -> list[str]:
+    if not turn.get("expect_decide_uses_validated_candidates"):
+        return []
+    find_results = tool_results(inner_events, "find_common_available_slots")
+    decide_calls = tool_calls(inner_events, "decide_final_slot")
+    if not find_results or not decide_calls:
+        return ["find 결과 또는 decide 호출이 없어 검증 후보 전달을 확인할 수 없음"]
+    find_content = find_results[-1].get("content")
+    validated = find_content.get("candidate_slots") if isinstance(find_content, dict) else None
+    decide_arguments = decide_calls[-1].get("arguments")
+    decided_candidates = (
+        decide_arguments.get("candidate_slots") if isinstance(decide_arguments, dict) else None
+    )
+    if validated != decided_candidates:
+        return [
+            "검증된 candidate_slots가 decide에 그대로 전달되지 않음: "
+            f"validated={validated!r}, decided={decided_candidates!r}"
+        ]
+    return []
+
+
+def check_candidate_contract(turn: dict[str, Any], inner_events: list[dict[str, Any]]) -> list[str]:
+    if not turn.get("expect_candidate_contract"):
+        return []
+    calls = tool_calls(inner_events, "find_common_available_slots")
+    if not calls:
+        return ["find_common_available_slots 호출이 없어 후보 계약을 확인할 수 없음"]
+    arguments = calls[-1].get("arguments")
+    candidates = arguments.get("candidate_slots") if isinstance(arguments, dict) else None
+    if not isinstance(candidates, list):
+        return [f"candidate_slots가 list가 아님: {candidates!r}"]
+    required_keys = {"date", "start_time", "end_time", "duration_minutes", "reason"}
+    failures: list[str] = []
+    for candidate in candidates:
+        if not isinstance(candidate, dict) or not required_keys.issubset(candidate):
+            failures.append(f"후보 필드 계약 위반: {candidate!r}")
+    return failures
+
+
+def check_final_payload(turn: dict[str, Any], result: Any, trace: dict[str, Any]) -> list[str]:
+    expectation = turn.get("expect_final_payload")
+    if not expectation:
+        return []
+    payload = trace.get("final_slot_payload")
+    if not isinstance(payload, dict):
+        return [f"final_slot_payload 누락: {payload!r}"]
+    failures: list[str] = []
+    required_keys = {"final_slot", "reason", "candidates"}
+    if not required_keys.issubset(payload):
+        failures.append(f"최종 payload 필수 key 누락: {payload}")
+        return failures
+
+    state = expectation.get("state")
+    if state == "confirmed":
+        if not payload.get("final_slot"):
+            failures.append(f"확정 시 final_slot이 필요함: {payload}")
+        if payload.get("needs_agent_selection") is not False:
+            failures.append(f"확정 시 needs_agent_selection=false여야 함: {payload}")
+        if "selected_index" not in payload and "selected_slot" not in payload:
+            failures.append(f"확정 시 selected_index 또는 selected_slot이 필요함: {payload}")
+    if state == "pending":
+        if payload.get("final_slot") is not None:
+            failures.append(f"미확정 시 final_slot은 null이어야 함: {payload}")
+        if payload.get("needs_agent_selection") is not True:
+            failures.append(f"미확정 시 needs_agent_selection=true여야 함: {payload}")
+    if expectation.get("require_evidence"):
+        for key in ("members", "busy_rows", "candidate_slots"):
+            if key not in payload:
+                failures.append(f"최종 payload 근거 key 누락: {key}, payload={payload}")
+    if expectation.get("answer_matches") and payload.get("final_slot"):
+        if payload["final_slot"] not in result.answer:
+            failures.append(
+                "최종 답변이 final_slot과 일치하지 않음: "
+                f"slot={payload['final_slot']!r}, answer={result.answer!r}"
+            )
+    return failures
+
+
+def check_answer(turn: dict[str, Any], answer: str) -> list[str]:
+    failures: list[str] = []
+    for text in turn.get("expect_answer_contains_all", []):
+        if text not in answer:
+            failures.append(f"답변에 필수 문구가 없음: {text!r}, answer={answer!r}")
+    any_values = turn.get("expect_answer_contains_any", [])
+    if any_values and not any(text in answer for text in any_values):
+        failures.append(f"답변에 기대 문구 중 하나도 없음: {any_values}, answer={answer!r}")
+    return failures
+
+
+def check_turn(turn: dict[str, Any], result: Any) -> list[str]:
+    trace = result.trace if isinstance(result.trace, dict) else {}
+    outer_events = trace.get("events") or []
+    expected_agent = turn["expected_agent"]
+    inner_events = inner_events_from(outer_events, expected_agent)
+
+    failures = check_wrapper_contract(turn, trace, outer_events)
+    failures.extend(check_inner_tools(turn, inner_events))
+    failures.extend(check_busy_rows_forwarding(turn, inner_events))
+    failures.extend(check_load_source_id(turn, inner_events))
+    failures.extend(check_candidate_contract(turn, inner_events))
+    failures.extend(check_decide_uses_validated_candidates(turn, inner_events))
+    failures.extend(check_final_payload(turn, result, trace))
+    failures.extend(check_answer(turn, result.answer or ""))
     if trace.get("error"):
         failures.append(f"Agent 실행 오류: {trace['error']}")
     return failures
 
 
+def selected_scenarios(
+    scenarios: list[dict[str, Any]],
+    requested_ids: list[str],
+) -> list[dict[str, Any]]:
+    if not requested_ids:
+        return scenarios
+    requested = set(requested_ids)
+    selected = [scenario for scenario in scenarios if scenario.get("id") in requested]
+    missing = requested - {str(scenario.get("id")) for scenario in selected}
+    if missing:
+        raise ValueError(f"존재하지 않는 scenario id: {sorted(missing)}")
+    return selected
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--scenarios", type=Path, default=SCRIPT_DIR / "scenarios.json")
+    parser.add_argument("--scenario", action="append", default=[])
     parser.add_argument("--keep-runtime", action="store_true")
     args = parser.parse_args()
 
@@ -99,19 +387,25 @@ def main() -> int:
         from fixed.session_scope import conversation_session_scope
         from fixed.week_agent_registry import run_active_week_agent
 
-        scenarios = json.loads(args.scenarios.read_text(encoding="utf-8"))
+        all_scenarios = json.loads(args.scenarios.read_text(encoding="utf-8"))
+        scenarios = selected_scenarios(all_scenarios, args.scenario)
         for scenario in scenarios:
-            with conversation_session_scope(f"week06-e2e-{scenario['id']}"):
-                result = run_active_week_agent(
-                    6,
-                    [{"role": "user", "content": scenario["message"]}],
+            history: list[dict[str, str]] = []
+            turns = scenario.get("turns") or [{**scenario, "message": scenario["message"]}]
+            for turn_index, turn in enumerate(turns, start=1):
+                history.append({"role": "user", "content": turn["message"]})
+                with conversation_session_scope(f"week06-e2e-{scenario['id']}"):
+                    result = run_active_week_agent(6, history)
+                history.append({"role": "assistant", "content": result.answer})
+                turn_failures = check_turn(turn, result)
+                status = "PASS" if not turn_failures else "FAIL"
+                print(f"[{status}] {scenario['id']} turn={turn_index}")
+                for failure in turn_failures:
+                    print(f"  - {failure}")
+                failures.extend(
+                    f"{scenario['id']} turn={turn_index}: {item}"
+                    for item in turn_failures
                 )
-            scenario_failures = check_scenario(scenario, result)
-            status = "PASS" if not scenario_failures else "FAIL"
-            print(f"[{status}] {scenario['id']}")
-            for failure in scenario_failures:
-                print(f"  - {failure}")
-            failures.extend(f"{scenario['id']}: {item}" for item in scenario_failures)
     finally:
         if args.keep_runtime:
             print(f"runtime preserved: {runtime_dir}")

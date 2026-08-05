@@ -1,28 +1,380 @@
 [
   {
-    "id": "personal-schedule-routing",
-    "message": "2026년 7월 7일부터 17일까지 내 저장 일정을 보여줘.",
-    "expected_agent": "nana_agent",
-    "expected_inner_contains": ["personal_list_saved_schedules"]
-  },
-  {
-    "id": "external-schedule-routing",
-    "message": "철수의 2026년 7월 7일부터 17일까지 바쁜 일정을 알려줘.",
-    "expected_agent": "kana_agent",
-    "expected_inner_order": [
-      "search_previous_conversations",
-      "extract_schedules_from_history"
+    "id": "personal-schedule-routing-and-trace",
+    "turns": [
+      {
+        "message": "2026년 7월 7일부터 17일까지 내 저장 일정을 보여줘.",
+        "expected_agent": "nana_agent",
+        "expect_query_contains": ["2026", "내", "일정"],
+        "expect_inner_contains": ["personal_list_saved_schedules"],
+        "expect_inner_not_contains": [
+          "search_previous_conversations",
+          "collect_member_schedules"
+        ]
+      }
     ]
   },
   {
-    "id": "group-final-slot-routing",
-    "message": "나와 철수가 2026년 7월 7일부터 17일까지 업무시간 중 60분 회의할 최종 시간을 정해줘.",
-    "expected_agent": "kana_agent",
-    "expected_inner_order": [
-      "collect_member_schedules",
-      "find_common_available_slots",
-      "decide_final_slot"
-    ],
-    "expect_final_slot_payload": true
+    "id": "personal-schedule-create-update-delete",
+    "turns": [
+      {
+        "message": "2026년 8월 10일 15시부터 16시까지 테스트 회의를 내 일정에 등록해줘.",
+        "expected_agent": "nana_agent",
+        "expect_query_contains": ["2026", "테스트 회의", "15", "16"],
+        "expect_inner_order": [
+          "extract_schedule_request",
+          "personal_create_schedule"
+        ],
+        "expect_inner_not_contains": ["kana_agent", "collect_member_schedules"]
+      },
+      {
+        "message": "2026년 8월 10일 테스트 회의를 17시부터 18시까지로 수정해줘.",
+        "expected_agent": "nana_agent",
+        "expect_query_contains": ["2026", "테스트 회의", "17", "18"],
+        "expect_inner_order": [
+          "personal_list_saved_schedules",
+          "personal_update_saved_schedule"
+        ]
+      },
+      {
+        "message": "2026년 8월 10일 테스트 회의를 삭제해줘.",
+        "expected_agent": "nana_agent",
+        "expect_query_contains": ["2026", "테스트 회의", "삭제"],
+        "expect_inner_order": [
+          "personal_list_saved_schedules",
+          "personal_delete_saved_schedules"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "personal-reference-save-and-search",
+    "turns": [
+      {
+        "message": "나는 오전 회의를 선호한다고 개인 참고자료에 기억해줘.",
+        "expected_agent": "nana_agent",
+        "expect_query_contains": ["오전 회의", "기억"],
+        "expect_inner_contains": ["add_personal_reference"],
+        "expect_inner_not_contains": ["save_structured_request"]
+      },
+      {
+        "message": "내가 선호한다고 저장한 회의 시간대가 무엇인지 찾아줘.",
+        "expected_agent": "nana_agent",
+        "expect_inner_contains": ["search_personal_references"],
+        "expect_answer_contains_all": ["오전"]
+      }
+    ]
+  },
+  {
+    "id": "todo-reminder-storage-routing",
+    "turns": [
+      {
+        "message": "2026년 8월 10일까지 Week 6 과제 제출을 할 일로 저장해줘.",
+        "expected_agent": "nana_agent",
+        "expect_query_contains": ["2026", "Week 6", "할 일"],
+        "expect_inner_order": [
+          "extract_schedule_request",
+          "save_structured_request"
+        ],
+        "expect_inner_not_contains": ["add_personal_reference", "kana_agent"]
+      }
+    ]
+  },
+  {
+    "id": "external-schedule-search-extract",
+    "turns": [
+      {
+        "message": "철수와 영희의 2026년 7월 7일부터 17일까지 바쁜 일정을 알려줘.",
+        "expected_agent": "kana_agent",
+        "expect_query_contains": ["철수", "영희", "2026"],
+        "expect_inner_exact": [
+          "search_previous_conversations",
+          "extract_schedules_from_history"
+        ],
+        "expect_tool_arguments": [
+          {
+            "tool_name": "extract_schedules_from_history",
+            "arguments": {
+              "member_names": ["철수", "영희"],
+              "date_from": "2026-07-07",
+              "date_to": "2026-07-17"
+            }
+          }
+        ],
+        "expect_inner_not_contains": [
+          "collect_member_schedules",
+          "personal_list_saved_schedules"
+        ],
+        "expect_answer_contains_all": ["철수", "영희"]
+      }
+    ]
+  },
+  {
+    "id": "external-source-evidence",
+    "turns": [
+      {
+        "message": "철수의 2026년 7월 9일 일정과 그 일정이 언급된 원문 대화도 보여줘.",
+        "expected_agent": "kana_agent",
+        "expect_query_contains": ["철수", "2026", "원문"],
+        "expect_inner_exact": [
+          "search_previous_conversations",
+          "extract_schedules_from_history",
+          "load_conversation_messages"
+        ],
+        "expect_tool_arguments": [
+          {
+            "tool_name": "extract_schedules_from_history",
+            "arguments": {
+              "member_names": ["철수"],
+              "date_from": "2026-07-09",
+              "date_to": "2026-07-09"
+            }
+          }
+        ],
+        "expect_load_uses_extract_source_id": true,
+        "expect_answer_contains_all": ["철수"]
+      }
+    ]
+  },
+  {
+    "id": "external-no-match-does-not-load",
+    "turns": [
+      {
+        "message": "민수의 2026년 7월 7일부터 17일까지 바쁜 일정을 알려줘.",
+        "expected_agent": "kana_agent",
+        "expect_query_contains": ["민수", "2026"],
+        "expect_inner_exact": [
+          "search_previous_conversations",
+          "extract_schedules_from_history"
+        ],
+        "expect_inner_not_contains": [
+          "load_conversation_messages",
+          "collect_member_schedules"
+        ],
+        "expect_answer_contains_any": ["없", "찾지 못"]
+      }
+    ]
+  },
+  {
+    "id": "shared-schedule-row-routing",
+    "turns": [
+      {
+        "message": "철수의 2026년 7월 7일부터 17일까지 공유 일정 저장소 row를 조회해줘.",
+        "expected_agent": "kana_agent",
+        "expect_query_contains": ["철수", "공유 일정", "2026"],
+        "expect_inner_exact": ["list_shared_schedules"],
+        "expect_inner_not_contains": [
+          "personal_create_schedule",
+          "personal_update_saved_schedule",
+          "personal_delete_saved_schedules"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "collect-mine-and-external-without-duplicate-search",
+    "turns": [
+      {
+        "message": "나와 철수의 2026년 7월 7일부터 17일까지 일정을 비교해서 보여줘. 시간 결정은 하지 마.",
+        "expected_agent": "kana_agent",
+        "expect_query_contains": ["나", "철수", "2026", "비교"],
+        "expect_inner_exact": ["collect_member_schedules"],
+        "expect_inner_not_contains": [
+          "search_previous_conversations",
+          "extract_schedules_from_history",
+          "find_common_available_slots",
+          "decide_final_slot"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "group-collect-find-decide-confirmed",
+    "turns": [
+      {
+        "message": "나와 철수가 2026년 7월 7일부터 17일까지 업무시간 중 60분 회의할 최종 시간을 정해줘.",
+        "expected_agent": "kana_agent",
+        "expect_query_contains": ["나", "철수", "2026", "60분"],
+        "expect_inner_exact": [
+          "collect_member_schedules",
+          "find_common_available_slots",
+          "decide_final_slot"
+        ],
+        "expect_busy_rows_from": "collect_member_schedules",
+        "expect_candidate_contract": true,
+        "expect_decide_uses_validated_candidates": true,
+        "expect_final_payload": {
+          "state": "confirmed",
+          "require_evidence": true,
+          "answer_matches": true
+        },
+        "expect_inner_not_contains": [
+          "personal_create_schedule",
+          "personal_update_saved_schedule",
+          "personal_delete_saved_schedules"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "group-external-search-find-decide-confirmed",
+    "turns": [
+      {
+        "message": "철수와 영희가 2026년 7월 7일부터 17일까지 업무시간 중 공통으로 가능한 60분 회의 최종 시간을 정해줘. 내 일정은 포함하지 마.",
+        "expected_agent": "kana_agent",
+        "expect_query_contains": ["철수", "영희", "2026", "내 일정은 포함하지 마"],
+        "expect_inner_order": [
+          "search_previous_conversations",
+          "extract_schedules_from_history",
+          "find_common_available_slots",
+          "decide_final_slot"
+        ],
+        "expect_inner_not_contains": ["collect_member_schedules"],
+        "expect_busy_rows_from": "extract_schedules_from_history",
+        "expect_candidate_contract": true,
+        "expect_decide_uses_validated_candidates": true,
+        "expect_final_payload": {
+          "state": "confirmed",
+          "require_evidence": true,
+          "answer_matches": true
+        }
+      }
+    ]
+  },
+  {
+    "id": "group-custom-duration-90-minutes",
+    "turns": [
+      {
+        "message": "나와 영희가 2026년 7월 7일부터 17일까지 업무시간 중 90분 회의할 최종 시간을 정해줘.",
+        "expected_agent": "kana_agent",
+        "expect_query_contains": ["나", "영희", "2026", "90분"],
+        "expect_inner_order": [
+          "collect_member_schedules",
+          "find_common_available_slots",
+          "decide_final_slot"
+        ],
+        "expect_tool_arguments": [
+          {
+            "tool_name": "find_common_available_slots",
+            "arguments": {
+              "member_names": ["영희"],
+              "date_from": "2026-07-07",
+              "date_to": "2026-07-17",
+              "duration_minutes": 90
+            }
+          },
+          {
+            "tool_name": "decide_final_slot",
+            "arguments": {
+              "duration_minutes": 90
+            }
+          }
+        ],
+        "expect_busy_rows_from": "collect_member_schedules",
+        "expect_candidate_contract": true,
+        "expect_decide_uses_validated_candidates": true,
+        "expect_final_payload": {
+          "state": "confirmed",
+          "answer_matches": true
+        }
+      }
+    ]
+  },
+  {
+    "id": "group-no-common-slot-remains-pending",
+    "turns": [
+      {
+        "message": "나와 철수가 2026년 7월 7일 10시부터 11시 사이에 60분 회의할 최종 시간을 정해줘.",
+        "expected_agent": "kana_agent",
+        "expect_query_contains": ["나", "철수", "2026", "10시", "11시"],
+        "expect_inner_order": [
+          "collect_member_schedules",
+          "find_common_available_slots",
+          "decide_final_slot"
+        ],
+        "expect_busy_rows_from": "collect_member_schedules",
+        "expect_candidate_contract": true,
+        "expect_decide_uses_validated_candidates": true,
+        "expect_final_payload": {
+          "state": "pending"
+        }
+      }
+    ]
+  },
+  {
+    "id": "missing-date-clarification-and-resume",
+    "turns": [
+      {
+        "message": "철수와 60분 회의할 시간을 정해줘.",
+        "expected_agent": "kana_agent",
+        "expect_query_contains": ["철수", "60분"],
+        "expect_query_not_contains": ["$APP_TODAY"],
+        "expect_inner_exact": [],
+        "expect_answer_contains_any": ["날짜", "기간", "언제"]
+      },
+      {
+        "message": "2026년 7월 7일부터 17일까지로 찾아줘.",
+        "expected_agent": "kana_agent",
+        "expect_inner_order": [
+          "collect_member_schedules",
+          "find_common_available_slots",
+          "decide_final_slot"
+        ],
+        "expect_final_payload": {
+          "state": "confirmed",
+          "answer_matches": true
+        }
+      }
+    ]
+  },
+  {
+    "id": "missing-member-clarification-and-resume",
+    "turns": [
+      {
+        "message": "2026년 7월 7일부터 17일까지 60분 회의할 시간을 정해줘.",
+        "expected_agent": "kana_agent",
+        "expect_query_contains": ["2026", "60분"],
+        "expect_query_not_contains": ["철수", "영희"],
+        "expect_inner_exact": [],
+        "expect_answer_contains_any": ["누구", "멤버", "참석"]
+      },
+      {
+        "message": "나와 철수로 찾아줘.",
+        "expected_agent": "kana_agent",
+        "expect_inner_order": [
+          "collect_member_schedules",
+          "find_common_available_slots",
+          "decide_final_slot"
+        ],
+        "expect_final_payload": {
+          "state": "confirmed",
+          "answer_matches": true
+        }
+      }
+    ]
+  },
+  {
+    "id": "relative-date-uses-runtime-clock",
+    "turns": [
+      {
+        "message": "철수의 내일 바쁜 일정을 알려줘.",
+        "expected_agent": "kana_agent",
+        "expect_query_contains": ["철수", "내일"],
+        "expect_inner_exact": [
+          "search_previous_conversations",
+          "extract_schedules_from_history"
+        ],
+        "expect_tool_arguments": [
+          {
+            "tool_name": "extract_schedules_from_history",
+            "arguments": {
+              "member_names": ["철수"],
+              "date_from": "$APP_TOMORROW",
+              "date_to": "$APP_TOMORROW"
+            }
+          }
+        ]
+      }
+    ]
   }
 ]
