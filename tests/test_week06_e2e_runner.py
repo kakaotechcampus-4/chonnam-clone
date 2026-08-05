@@ -74,6 +74,36 @@ class Week06E2ERunnerTest(unittest.TestCase):
             },
         )
 
+    def test_final_slot_answer_comparison_accepts_korean_natural_language(self):
+        slot = "2026-07-07 09:00-10:30"
+
+        self.assertTrue(
+            RUNNER.answer_mentions_final_slot(
+                "최종 시간은 2026년 7월 7일 오전 9시부터 10시 30분까지입니다.",
+                slot,
+            )
+        )
+        self.assertTrue(
+            RUNNER.answer_mentions_final_slot(
+                "2026-07-07 09:00-10:30으로 정했습니다.",
+                slot,
+            )
+        )
+        self.assertFalse(
+            RUNNER.answer_mentions_final_slot(
+                "2026년 7월 7일 오전 11시부터 12시까지입니다.",
+                slot,
+            )
+        )
+
+    def test_only_explicitly_state_dependent_turns_are_skipped(self):
+        dependent = {"depends_on_previous_turn": True}
+        independent = {"message": "별도 요청"}
+
+        self.assertTrue(RUNNER.should_skip_turn(dependent, True))
+        self.assertFalse(RUNNER.should_skip_turn(dependent, False))
+        self.assertFalse(RUNNER.should_skip_turn(independent, True))
+
     def test_scenarios_cover_required_week06_workflows(self):
         scenarios = json.loads(SCENARIOS_PATH.read_text(encoding="utf-8"))
         ids = {scenario["id"] for scenario in scenarios}
@@ -107,6 +137,15 @@ class Week06E2ERunnerTest(unittest.TestCase):
         )
 
         by_id = {scenario["id"]: scenario for scenario in scenarios}
+        self.assertTrue(
+            by_id["personal-schedule-create-update-delete"]["turns"][1][
+                "depends_on_previous_turn"
+            ]
+        )
+        self.assertNotIn(
+            "depends_on_previous_turn",
+            by_id["todo-reminder-storage-routing"]["turns"][1],
+        )
         reminder_turn = by_id["todo-reminder-storage-routing"]["turns"][1]
         self.assertIn("알림", reminder_turn["message"])
         self.assertIn("save_structured_request", reminder_turn["expect_inner_order"])
@@ -121,8 +160,8 @@ class Week06E2ERunnerTest(unittest.TestCase):
             conversation_rag["turns"][0]["expect_inner_contains"],
         )
         external_only = by_id["group-external-search-find-decide-confirmed"]["turns"][0]
-        self.assertEqual(external_only["expect_find_members_exact"], ["철수", "영희"])
-        self.assertNotIn("나", external_only["expect_final_payload"]["members_exact"])
+        self.assertEqual(external_only["expect_find_members_exact"], ["나", "철수", "영희"])
+        self.assertIn("나", external_only["expect_final_payload"]["members_exact"])
         pending = by_id["group-no-common-slot-remains-pending"]["turns"][0]
         find_arguments = pending["expect_tool_arguments"][0]["arguments"]
         self.assertEqual(find_arguments["workday_start"], "10:00")

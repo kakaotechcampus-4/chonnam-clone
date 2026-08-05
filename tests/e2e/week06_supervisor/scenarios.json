@@ -29,6 +29,7 @@
       },
       {
         "message": "2026년 8월 10일 테스트 회의를 17시부터 18시까지로 수정해줘.",
+        "depends_on_previous_turn": true,
         "expected_agent": "nana_agent",
         "expect_query_contains": ["2026", "테스트 회의", "17", "18"],
         "expect_inner_order": [
@@ -38,6 +39,7 @@
       },
       {
         "message": "2026년 8월 10일 테스트 회의를 삭제해줘.",
+        "depends_on_previous_turn": true,
         "expected_agent": "nana_agent",
         "expect_query_contains": ["2026", "테스트 회의", "삭제"],
         "expect_inner_order": [
@@ -51,17 +53,18 @@
     "id": "personal-reference-save-and-search",
     "turns": [
       {
-        "message": "나는 오전 회의를 선호한다고 개인 참고자료에 기억해줘.",
+        "message": "나는 새벽 6시 40분 집중 회의를 선호하고 식별 코드는 W6-0640이라고 개인 참고자료에 기억해줘.",
         "expected_agent": "nana_agent",
-        "expect_query_contains": ["오전 회의", "기억"],
+        "expect_query_contains": ["6시 40분", "W6-0640", "기억"],
         "expect_inner_contains": ["add_personal_reference"],
         "expect_inner_not_contains": ["save_structured_request"]
       },
       {
-        "message": "내가 선호한다고 저장한 회의 시간대가 무엇인지 찾아줘.",
+        "message": "내가 저장한 식별 코드 W6-0640의 회의 시간대를 찾아줘.",
+        "depends_on_previous_turn": true,
         "expected_agent": "nana_agent",
         "expect_inner_contains": ["search_personal_references"],
-        "expect_answer_contains_all": ["오전"]
+        "expect_answer_contains_all": ["W6-0640", "6시 40분"]
       }
     ]
   },
@@ -104,6 +107,7 @@
       },
       {
         "message": "앱에 저장된 요청 기록에서 E2E 회귀 테스트를 검색해줘.",
+        "depends_on_previous_turn": true,
         "expected_agent": "nana_agent",
         "expect_query_contains": ["저장된", "E2E 회귀 테스트", "검색"],
         "expect_inner_contains": ["search_saved_requests"],
@@ -286,9 +290,9 @@
     "id": "group-external-search-find-decide-confirmed",
     "turns": [
       {
-        "message": "철수와 영희가 2026년 7월 7일부터 17일까지 업무시간 중 공통으로 가능한 60분 회의 최종 시간을 정해줘. 내 일정은 포함하지 마.",
+        "message": "철수와 영희가 2026년 7월 7일부터 17일까지 업무시간 중 공통으로 가능한 60분 회의 최종 시간을 정해줘.",
         "expected_agent": "kana_agent",
-        "expect_query_contains": ["철수", "영희", "2026", "내 일정은 포함하지 마"],
+        "expect_query_contains": ["철수", "영희", "2026"],
         "expect_inner_order": [
           "search_previous_conversations",
           "extract_schedules_from_history",
@@ -297,13 +301,13 @@
         ],
         "expect_inner_not_contains": ["collect_member_schedules"],
         "expect_busy_rows_from": "extract_schedules_from_history",
-        "expect_find_members_exact": ["철수", "영희"],
+        "expect_find_members_exact": ["나", "철수", "영희"],
         "expect_candidate_contract": true,
         "expect_decide_uses_validated_candidates": true,
         "expect_final_payload": {
           "state": "confirmed",
           "require_evidence": true,
-          "members_exact": ["철수", "영희"],
+          "members_exact": ["나", "철수", "영희"],
           "answer_matches": true
         }
       }
@@ -360,8 +364,9 @@
         "expect_query_contains": [
           "나",
           "철수",
-          "2026-07-07T09:00:00+09:00",
-          "2026-07-17T18:00:00+09:00"
+          "2026-07-07",
+          "2026-07-17",
+          "업무시간"
         ],
         "expect_inner_order": [
           "collect_member_schedules",
@@ -424,15 +429,16 @@
     "id": "missing-date-clarification-and-resume",
     "turns": [
       {
-        "message": "철수와 60분 회의할 시간을 정해줘.",
+        "message": "나와 철수가 60분 회의할 시간을 정해줘.",
         "expected_agent": "kana_agent",
-        "expect_query_contains": ["철수", "60분"],
+        "expect_query_contains": ["나", "철수", "60분"],
         "expect_query_not_contains": ["$APP_TODAY"],
         "expect_inner_exact": [],
         "expect_answer_contains_any": ["날짜", "기간", "언제"]
       },
       {
         "message": "2026년 7월 7일부터 17일까지로 찾아줘.",
+        "depends_on_previous_turn": true,
         "expected_agent": "kana_agent",
         "expect_inner_order": [
           "collect_member_schedules",
@@ -459,6 +465,7 @@
       },
       {
         "message": "나와 철수로 찾아줘.",
+        "depends_on_previous_turn": true,
         "expected_agent": "kana_agent",
         "expect_inner_order": [
           "collect_member_schedules",

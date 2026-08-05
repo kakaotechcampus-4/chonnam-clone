@@ -412,6 +412,40 @@ def slot_to_text(slot: Any) -> str | None:
     return f"{date} {start}-{end}"
 
 
+def answer_mentions_final_slot(answer: str, final_slot: str) -> bool:
+    """ISO payload와 한국어 자연어 답변이 같은 날짜·시각을 말하는지 확인합니다."""
+
+    match = FINAL_SLOT_PATTERN.fullmatch(final_slot)
+    if match is None:
+        return False
+    if final_slot in answer:
+        return True
+
+    day = date.fromisoformat(match.group("date"))
+    date_mentions = {
+        day.isoformat(),
+        f"{day.year}년 {day.month}월 {day.day}일",
+        f"{day.month}월 {day.day}일",
+    }
+
+    def mentions_time(value: str) -> bool:
+        hour_text, minute_text = value.split(":", 1)
+        hour = int(hour_text)
+        minute = int(minute_text)
+        variants = {value, f"{hour:02d}:{minute:02d}"}
+        if minute == 0:
+            variants.update({f"{hour}시", f"{hour}시 00분"})
+        else:
+            variants.update({f"{hour}시 {minute}분", f"{hour}시{minute}분"})
+        return any(variant in answer for variant in variants)
+
+    return (
+        any(value in answer for value in date_mentions)
+        and mentions_time(match.group("start"))
+        and mentions_time(match.group("end"))
+    )
+
+
 def selected_candidate(payload: dict[str, Any]) -> dict[str, Any] | None:
     candidates = payload.get("candidate_slots")
     if not isinstance(candidates, list):
@@ -492,7 +526,7 @@ def check_final_payload(turn: dict[str, Any], result: Any, trace: dict[str, Any]
                 f"최종 payload members 불일치: expected={expected_members}, actual={actual_members}"
             )
     if expectation.get("answer_matches") and payload.get("final_slot"):
-        if payload["final_slot"] not in result.answer:
+        if not answer_mentions_final_slot(result.answer, payload["final_slot"]):
             failures.append(
                 "최종 답변이 final_slot과 일치하지 않음: "
                 f"slot={payload['final_slot']!r}, answer={result.answer!r}"
@@ -600,6 +634,12 @@ def selected_scenarios(
     return selected
 
 
+def should_skip_turn(turn: dict[str, Any], state_chain_blocked: bool) -> bool:
+    """이전 실패로 필요한 상태가 없을 때 명시적으로 의존하는 turn만 건너뜁니다."""
+
+    return bool(turn.get("depends_on_previous_turn") and state_chain_blocked)
+
+
 def seed_conversation_messages(scenario: dict[str, Any]) -> None:
     rows = scenario.get("seed_conversation_messages") or []
     if not rows:
@@ -628,6 +668,7 @@ def main() -> int:
 
     runtime_dir = configure_isolated_runtime()
     failures: list[str] = []
+    skipped_turns = 0
     try:
         from fixed.session_scope import conversation_session_scope
         from fixed.week_agent_registry import run_active_week_agent
@@ -637,8 +678,16 @@ def main() -> int:
         for scenario in scenarios:
             seed_conversation_messages(scenario)
             history: list[dict[str, str]] = []
+            state_chain_blocked = False
             turns = scenario.get("turns") or [{**scenario, "message": scenario["message"]}]
             for turn_index, turn in enumerate(turns, start=1):
+                if should_skip_turn(turn, state_chain_blocked):
+                    skipped_turns += 1
+                    print(
+                        f"[SKIP] {scenario['id']} turn={turn_index} "
+                        "(상태를 만드는 선행 turn 실패)"
+                    )
+                    continue
                 history.append({"role": "user", "content": turn["message"]})
                 with conversation_session_scope(f"week06-e2e-{scenario['id']}"):
                     result = run_active_week_agent(6, history)
@@ -652,6 +701,7 @@ def main() -> int:
                     f"{scenario['id']} turn={turn_index}: {item}"
                     for item in turn_failures
                 )
+                state_chain_blocked = bool(turn_failures)
     finally:
         if args.keep_runtime:
             print(f"runtime preserved: {runtime_dir}")
@@ -659,9 +709,9 @@ def main() -> int:
             shutil.rmtree(runtime_dir, ignore_errors=True)
 
     if failures:
-        print(f"Week06 E2E failed: {len(failures)}")
+        print(f"Week06 E2E failed: {len(failures)} (skipped turns: {skipped_turns})")
         return 1
-    print("Week06 E2E passed")
+    print(f"Week06 E2E passed (skipped turns: {skipped_turns})")
     return 0
 
 
