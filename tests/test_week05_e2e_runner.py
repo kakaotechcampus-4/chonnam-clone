@@ -9,6 +9,9 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 RUNNER_PATH = REPO_ROOT / "tests/e2e/week05_mcp/run_scenarios.py"
 SCENARIOS_PATH = REPO_ROOT / "tests/e2e/week05_mcp/scenarios.json"
+UPDATE_SCENARIOS_PATH = (
+    REPO_ROOT / "tests/e2e/week05_mcp/schedule_update_scenarios.json"
+)
 
 SPEC = importlib.util.spec_from_file_location("week05_e2e_runner", RUNNER_PATH)
 if SPEC is None or SPEC.loader is None:
@@ -18,6 +21,61 @@ SPEC.loader.exec_module(RUNNER)
 
 
 class Week05E2ERunnerTest(unittest.TestCase):
+    def test_collect_result_check_supports_update_regression_contracts(self):
+        events = [
+            {
+                "event": "tool_result",
+                "tool_name": "collect_member_schedules",
+                "content": {
+                    "ok": True,
+                    "tool_name": "collect_member_schedules",
+                    "members": ["나", "민준"],
+                    "rows": [
+                        {
+                            "member_name": "나",
+                            "title": "팀 회의 (온라인)",
+                            "date": "2026-08-23",
+                            "start_time": "15:00",
+                            "end_time": "미정",
+                            "notes": "Nana 개인 일정",
+                        }
+                    ],
+                    "schedule_summary": "- 나 | 팀 회의 | 2026-08-23 15:00-미정",
+                },
+            }
+        ]
+        matching_spec = {
+            "exact_payload_keys": [
+                "ok",
+                "tool_name",
+                "members",
+                "rows",
+                "schedule_summary",
+            ],
+            "expected_members": ["나", "민준"],
+            "exact_row_count": 1,
+            "rows_must_include": [
+                {"member_name": "나", "title": "팀 회의 (온라인)"}
+            ],
+        }
+
+        self.assertEqual(
+            RUNNER._check_collect_member_schedules_rows(matching_spec, events),
+            [],
+        )
+        self.assertTrue(
+            RUNNER._check_collect_member_schedules_rows(
+                {**matching_spec, "exact_row_count": 2},
+                events,
+            )
+        )
+        self.assertTrue(
+            RUNNER._check_collect_member_schedules_rows(
+                {**matching_spec, "expected_members": ["나", "나", "민준"]},
+                events,
+            )
+        )
+
     def test_exact_tool_calls_reject_extra_calls(self):
         self.assertEqual(
             RUNNER._check_tool_calls_exact(
@@ -223,6 +281,57 @@ class Week05E2ERunnerTest(unittest.TestCase):
                 "end_time": "미정",
             },
             unknown_end["expect_collect_member_schedules_rows"]["rows_must_include"],
+        )
+
+    def test_schedule_update_scenarios_cover_each_requested_tc(self):
+        scenarios = json.loads(UPDATE_SCENARIOS_PATH.read_text(encoding="utf-8"))
+        by_id = {scenario["id"]: scenario for scenario in scenarios}
+
+        self.assertEqual(
+            set(by_id),
+            {
+                "tc01-group-schedule-is-not-omitted",
+                "tc02-personal-schedule-still-works",
+                "tc04-duplicate-schedule-is-collapsed",
+                "tc07-distinct-schedules-are-preserved",
+                "tc08-notes-identify-schedule-kind",
+                "tc09-me-is-listed-once",
+                "tc10-legacy-schedule-is-personal",
+                "tc11-payload-contract-is-stable",
+            },
+        )
+        for scenario in scenarios:
+            self.assertTrue(
+                scenario.get("seed_app_requests")
+                or scenario.get("seed_legacy_schedules")
+                or scenario.get("seed_shared_schedules")
+            )
+            self.assertEqual(len(scenario["turns"]), 1)
+            turn = scenario["turns"][0]
+            self.assertEqual(turn["expect_tool_calls_exact"], ["collect_member_schedules"])
+            self.assertIn("expect_collect_member_schedules_rows", turn)
+
+        duplicate_spec = by_id["tc04-duplicate-schedule-is-collapsed"]["turns"][0][
+            "expect_collect_member_schedules_rows"
+        ]
+        self.assertEqual(duplicate_spec["exact_row_count"], 1)
+
+        distinct_spec = by_id["tc07-distinct-schedules-are-preserved"]["turns"][0][
+            "expect_collect_member_schedules_rows"
+        ]
+        self.assertEqual(distinct_spec["exact_row_count"], 4)
+
+        members_spec = by_id["tc09-me-is-listed-once"]["turns"][0][
+            "expect_collect_member_schedules_rows"
+        ]
+        self.assertEqual(members_spec["expected_members"], ["나", "민준"])
+
+        payload_spec = by_id["tc11-payload-contract-is-stable"]["turns"][0][
+            "expect_collect_member_schedules_rows"
+        ]
+        self.assertEqual(
+            set(payload_spec["exact_payload_keys"]),
+            {"ok", "tool_name", "members", "rows", "schedule_summary"},
         )
 
 

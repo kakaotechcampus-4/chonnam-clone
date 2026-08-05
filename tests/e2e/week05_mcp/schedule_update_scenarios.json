@@ -1,0 +1,325 @@
+[
+  {
+    "id": "tc01-group-schedule-is-not-omitted",
+    "description": "TC-01: 민준과 조율할 때 하린과 이미 잡은 그룹 일정이 내 busy-time에 포함되어야 한다.",
+    "week": 5,
+    "seed_app_requests": [
+      {
+        "kind": "group_schedule",
+        "title": "E2E 사전 미팅",
+        "date": "2026-08-21",
+        "start_time": "15:00",
+        "end_time": "16:00",
+        "members": ["하린"],
+        "original_text": "8월 21일 3시에 하린이랑 사전 미팅 잡아줘",
+        "source_schedule_id": "e2e_tc01_group"
+      }
+    ],
+    "turns": [
+      {
+        "message": "내 일정도 포함해서 민준과 2026년 8월 21일 일정을 한 번에 모아줘.",
+        "expect_tool_calls_exact": ["collect_member_schedules"],
+        "expect_tool_call_arguments": [
+          {
+            "tool_name": "collect_member_schedules",
+            "arguments": {
+              "member_names": ["민준"],
+              "date_from": "2026-08-21",
+              "date_to": "2026-08-21"
+            }
+          }
+        ],
+        "expect_collect_member_schedules_rows": {
+          "exact_row_count": 1,
+          "rows_must_include": [
+            {
+              "member_name": "나",
+              "title": "E2E 사전 미팅",
+              "date": "2026-08-21",
+              "start_time": "15:00",
+              "end_time": "16:00",
+              "notes": "Nana 그룹 일정 · 참석자: 하린"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "id": "tc02-personal-schedule-still-works",
+    "description": "TC-02: 기존 개인 일정은 변경 후에도 내 busy-time으로 유지되어야 한다.",
+    "week": 5,
+    "seed_app_requests": [
+      {
+        "kind": "personal_schedule",
+        "title": "E2E 병원 방문",
+        "date": "2026-08-22",
+        "start_time": "10:00",
+        "end_time": "11:00",
+        "members": [],
+        "original_text": "8월 22일 병원 방문",
+        "source_schedule_id": "e2e_tc02_personal"
+      }
+    ],
+    "turns": [
+      {
+        "message": "내 일정도 포함해서 민준과 2026년 8월 22일 일정을 한 번에 모아줘.",
+        "expect_tool_calls_exact": ["collect_member_schedules"],
+        "expect_collect_member_schedules_rows": {
+          "exact_row_count": 1,
+          "rows_must_include": [
+            {
+              "member_name": "나",
+              "title": "E2E 병원 방문",
+              "date": "2026-08-22",
+              "start_time": "10:00",
+              "end_time": "11:00",
+              "notes": "Nana 개인 일정"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "id": "tc04-duplicate-schedule-is-collapsed",
+    "description": "TC-04: 앱 DB 원본과 '나' 공유 row가 같이 조회되어도 동일 일정은 한 건만 남아야 한다.",
+    "week": 5,
+    "seed_app_requests": [
+      {
+        "kind": "personal_schedule",
+        "title": "E2E 팀 회의 (온라인)",
+        "date": "2026-08-23",
+        "start_time": "15:00",
+        "end_time": null,
+        "members": [],
+        "original_text": "8월 23일 팀 회의 (온라인)",
+        "source_schedule_id": "e2e_tc04_duplicate"
+      }
+    ],
+    "turns": [
+      {
+        "message": "조율 대상은 나와 민준이야. 2026년 8월 23일 일정을 한 번에 모아줘.",
+        "expect_tool_calls_exact": ["collect_member_schedules"],
+        "expect_tool_call_arguments": [
+          {
+            "tool_name": "collect_member_schedules",
+            "arguments": {
+              "member_names": ["나", "민준"],
+              "date_from": "2026-08-23",
+              "date_to": "2026-08-23"
+            }
+          }
+        ],
+        "expect_collect_member_schedules_rows": {
+          "expected_members": ["나", "민준"],
+          "exact_row_count": 1,
+          "rows_must_include": [
+            {
+              "member_name": "나",
+              "title": "E2E 팀 회의 (온라인)",
+              "date": "2026-08-23",
+              "start_time": "15:00",
+              "end_time": "미정",
+              "notes": "Nana 개인 일정"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "id": "tc07-distinct-schedules-are-preserved",
+    "description": "TC-07: 날짜·시작 시각·멤버가 다른 일정은 중복 제거 후에도 모두 남아야 한다.",
+    "week": 5,
+    "seed_app_requests": [
+      {
+        "kind": "personal_schedule",
+        "title": "E2E 정기 회의",
+        "date": "2026-08-24",
+        "start_time": "15:00",
+        "end_time": "15:30",
+        "members": [],
+        "source_schedule_id": "e2e_tc07_first"
+      },
+      {
+        "kind": "personal_schedule",
+        "title": "E2E 정기 회의",
+        "date": "2026-08-24",
+        "start_time": "16:00",
+        "end_time": "16:30",
+        "members": [],
+        "source_schedule_id": "e2e_tc07_second"
+      },
+      {
+        "kind": "personal_schedule",
+        "title": "E2E 정기 회의",
+        "date": "2026-08-25",
+        "start_time": "15:00",
+        "end_time": "15:30",
+        "members": [],
+        "source_schedule_id": "e2e_tc07_third"
+      }
+    ],
+    "seed_shared_schedules": [
+      {
+        "schedule_id": "e2e_tc07_minjun",
+        "member_name": "민준",
+        "title": "E2E 정기 회의",
+        "date": "2026-08-24",
+        "start_time": "15:00",
+        "end_time": "15:30",
+        "notes": "민준 외부 일정",
+        "source_conversation_id": "e2e:tc07:minjun"
+      }
+    ],
+    "turns": [
+      {
+        "message": "내 일정도 포함해서 민준과 2026년 8월 24일부터 25일까지 일정을 한 번에 모아줘.",
+        "expect_tool_calls_exact": ["collect_member_schedules"],
+        "expect_collect_member_schedules_rows": {
+          "exact_row_count": 4,
+          "rows_must_include": [
+            {"member_name": "나", "date": "2026-08-24", "start_time": "15:00", "title": "E2E 정기 회의"},
+            {"member_name": "나", "date": "2026-08-24", "start_time": "16:00", "title": "E2E 정기 회의"},
+            {"member_name": "나", "date": "2026-08-25", "start_time": "15:00", "title": "E2E 정기 회의"},
+            {"member_name": "민준", "date": "2026-08-24", "start_time": "15:00", "title": "E2E 정기 회의"}
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "id": "tc08-notes-identify-schedule-kind",
+    "description": "TC-08: 개인 일정과 그룹 일정의 notes가 종류와 참석자를 구분해야 한다.",
+    "week": 5,
+    "seed_app_requests": [
+      {
+        "kind": "personal_schedule",
+        "title": "E2E 개인 운동",
+        "date": "2026-08-26",
+        "start_time": "09:00",
+        "end_time": "10:00",
+        "members": [],
+        "source_schedule_id": "e2e_tc08_personal"
+      },
+      {
+        "kind": "group_schedule",
+        "title": "E2E 그룹 회고",
+        "date": "2026-08-26",
+        "start_time": "14:00",
+        "end_time": "15:00",
+        "members": ["하린", "서연"],
+        "source_schedule_id": "e2e_tc08_group"
+      }
+    ],
+    "turns": [
+      {
+        "message": "내 일정도 포함해서 민준과 2026년 8월 26일 일정을 한 번에 모아줘.",
+        "expect_tool_calls_exact": ["collect_member_schedules"],
+        "expect_collect_member_schedules_rows": {
+          "exact_row_count": 2,
+          "rows_must_include": [
+            {"member_name": "나", "title": "E2E 개인 운동", "notes": "Nana 개인 일정"},
+            {"member_name": "나", "title": "E2E 그룹 회고", "notes": "Nana 그룹 일정 · 참석자: 하린, 서연"}
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "id": "tc09-me-is-listed-once",
+    "description": "TC-09: member_names에 '나'가 들어와도 반환 members에는 '나'가 한 번만 나와야 한다.",
+    "week": 5,
+    "seed_app_requests": [
+      {
+        "kind": "personal_schedule",
+        "title": "E2E members 검증",
+        "date": "2026-08-27",
+        "start_time": "11:00",
+        "end_time": "12:00",
+        "members": [],
+        "source_schedule_id": "e2e_tc09_members"
+      }
+    ],
+    "turns": [
+      {
+        "message": "조율 대상은 나와 민준이야. 2026년 8월 27일 일정을 한 번에 모아줘.",
+        "expect_tool_calls_exact": ["collect_member_schedules"],
+        "expect_tool_call_arguments": [
+          {
+            "tool_name": "collect_member_schedules",
+            "arguments": {"member_names": ["나", "민준"]}
+          }
+        ],
+        "expect_collect_member_schedules_rows": {
+          "expected_members": ["나", "민준"],
+          "exact_row_count": 1,
+          "rows_must_include": [
+            {"member_name": "나", "title": "E2E members 검증"}
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "id": "tc10-legacy-schedule-is-personal",
+    "description": "TC-10: request_kind가 없는 Week 1 형식의 기존 row도 개인 일정으로 수집되어야 한다.",
+    "week": 5,
+    "seed_legacy_schedules": [
+      {
+        "schedule_id": "e2e_tc10_legacy",
+        "title": "E2E 기존 과제 제출",
+        "date": "2026-08-28",
+        "start_time": "17:00",
+        "end_time": "18:00",
+        "attendees": []
+      }
+    ],
+    "turns": [
+      {
+        "message": "내 일정도 포함해서 민준과 2026년 8월 28일 일정을 한 번에 모아줘.",
+        "expect_tool_calls_exact": ["collect_member_schedules"],
+        "expect_collect_member_schedules_rows": {
+          "exact_row_count": 1,
+          "rows_must_include": [
+            {
+              "member_name": "나",
+              "title": "E2E 기존 과제 제출",
+              "notes": "Nana 개인 일정"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "id": "tc11-payload-contract-is-stable",
+    "description": "TC-11: collect_member_schedules는 ok/tool_name/members/rows/schedule_summary 5개 key 계약을 유지해야 한다.",
+    "week": 5,
+    "seed_app_requests": [
+      {
+        "kind": "personal_schedule",
+        "title": "E2E payload 검증",
+        "date": "2026-08-29",
+        "start_time": "13:00",
+        "end_time": "14:00",
+        "members": [],
+        "source_schedule_id": "e2e_tc11_payload"
+      }
+    ],
+    "turns": [
+      {
+        "message": "내 일정도 포함해서 민준과 2026년 8월 29일 일정을 한 번에 모아줘.",
+        "expect_tool_calls_exact": ["collect_member_schedules"],
+        "expect_collect_member_schedules_rows": {
+          "exact_payload_keys": ["ok", "tool_name", "members", "rows", "schedule_summary"],
+          "exact_row_count": 1,
+          "rows_must_include": [
+            {"member_name": "나", "title": "E2E payload 검증"}
+          ]
+        }
+      }
+    ]
+  }
+]

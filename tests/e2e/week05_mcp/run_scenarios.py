@@ -283,6 +283,30 @@ def _check_collect_member_schedules_rows(spec: dict[str, Any], events: list[dict
     if not rows:
         return ["'collect_member_schedules' 결과 rows가 비어 있음"]
 
+    if "exact_payload_keys" in spec:
+        expected_keys = set(spec["exact_payload_keys"])
+        actual_keys = set(content)
+        if actual_keys != expected_keys:
+            failures.append(
+                "'collect_member_schedules' payload key가 기대와 다름: "
+                f"기대={sorted(expected_keys)}, 실제={sorted(actual_keys)}"
+            )
+
+    if "expected_members" in spec:
+        expected_members = spec["expected_members"]
+        actual_members = content.get("members")
+        if actual_members != expected_members:
+            failures.append(
+                "'collect_member_schedules' members가 기대와 다름: "
+                f"기대={expected_members}, 실제={actual_members}"
+            )
+
+    if "exact_row_count" in spec and len(rows) != spec["exact_row_count"]:
+        failures.append(
+            "'collect_member_schedules' row 개수가 기대와 다름: "
+            f"기대={spec['exact_row_count']}, 실제={len(rows)}, rows={rows}"
+        )
+
     member_names_present = {row.get("member_name") for row in rows}
     for expected_member in spec.get("must_include_members", []):
         if expected_member not in member_names_present:
@@ -318,6 +342,47 @@ def _check_collect_member_schedules_rows(spec: dict[str, Any], events: list[dict
         failures.append("'collect_member_schedules' 결과에 schedule_summary가 없음")
 
     return failures
+
+
+def _seed_scenario_data(scenario: dict[str, Any]) -> None:
+    """시나리오의 사전 조건을 격리된 앱 DB와 공유 DB에 만듭니다."""
+
+    if _CONFIG is None:
+        raise RuntimeError("E2E runtime이 구성되지 않았습니다.")
+
+    from fixed.app_store import AppSQLiteStore
+    from fixed.external_people_store import ExternalPeopleSQLiteStore
+    from fixed.store_base import now_iso
+
+    app_store = AppSQLiteStore(_CONFIG.app_db_path)
+    for request in scenario.get("seed_app_requests", []):
+        app_store.save_structured_request(dict(request))
+
+    legacy_rows = scenario.get("seed_legacy_schedules", [])
+    if legacy_rows:
+        with app_store.connect() as conn:
+            for row in legacy_rows:
+                conn.execute(
+                    """
+                    INSERT INTO schedules
+                        (schedule_id, request_id, owner, title, date, start_time,
+                         end_time, attendees_json, source, created_at)
+                    VALUES (?, NULL, 'me', ?, ?, ?, ?, ?, 'week01_legacy', ?)
+                    """,
+                    (
+                        row["schedule_id"],
+                        row["title"],
+                        row.get("date"),
+                        row.get("start_time"),
+                        row.get("end_time"),
+                        json.dumps(row.get("attendees", []), ensure_ascii=False),
+                        now_iso(),
+                    ),
+                )
+
+    external_store = ExternalPeopleSQLiteStore(_CONFIG.external_db_path)
+    for schedule in scenario.get("seed_shared_schedules", []):
+        external_store.create_shared_schedule(**schedule)
 
 
 def _check_turn(turn_spec: dict[str, Any], outcome: dict[str, Any]) -> list[str]:
@@ -395,6 +460,8 @@ def run_scenario(scenario: dict[str, Any]) -> tuple[bool, list[str]]:
     conversation_id = f"e2e-week05-{scenario['id']}"
     history: list[dict[str, str]] = []
     failures: list[str] = []
+
+    _seed_scenario_data(scenario)
 
     for turn_index, turn_spec in enumerate(scenario["turns"]):
         outcome = _run_turn(conversation_id, history, turn_spec["message"])
