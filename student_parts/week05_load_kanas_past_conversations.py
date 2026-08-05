@@ -373,7 +373,7 @@ def _collect_member_schedules(
     external_payload = json.loads(
         call_mcp_tool_sync(
             "extract_schedules_from_history",
-            {"member_names": member_names, "date_from": date_from, "date_to": date_to},
+            {"member_names": member_names, "date_from": normalized_from, "date_to": normalized_to},
         )
     )
     external_rows = external_payload.get("rows", [])
