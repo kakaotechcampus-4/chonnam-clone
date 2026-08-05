@@ -9,7 +9,7 @@ from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
 from fixed.external_people_store import normalize_external_member_names
-from fixed.langchain_trace import extract_agent_events, extract_final_text
+from fixed.langchain_trace import extract_agent_events, extract_final_text, stream_chunk_messages
 from fixed.llm import chat_model
 from fixed.runtime_clock import current_app_date_iso
 from fixed.schedule_decision import (
@@ -237,6 +237,8 @@ def nana_prompt_parts() -> list[str]:
         '앱에 저장된 요청 기록' 검색은 search_saved_requests, '앱의 이전 일반 대화' 검색은
         search_conversation_messages를 반드시 사용한다. 앱 내부 일반 대화는 Nana 담당이며
         외부 멤버의 대화가 아니므로 Kana 담당이라고 돌려보내지 않는다.
+        사용자가 앞서 개인 참고자료에 저장한 식별 코드·선호·규칙을 "찾아줘"라고 하면
+        일정 제목으로 해석하지 말고 search_personal_references를 호출한다.
         """,
     ]
 
@@ -274,6 +276,11 @@ def kana_prompt_parts() -> list[str]:
         final_slot 형식은 'YYYY-MM-DD HH:MM-HH:MM'이다.
         후보가 없거나 선택할 수 없으면 final_slot=null, needs_agent_selection=true로 두고 임의 확정하지 않는다.
         확정했다면 needs_agent_selection=false로 두며 후보·busy_rows·멤버·날짜 범위·reason을 함께 전달한다.
+        find_common_available_slots를 호출할 때 candidate_slots를 반드시 list로 전달한다.
+        공통 후보가 없으면 빈 list를 전달하고, find 결과가 빈 list여도 decide_final_slot을
+        반드시 이어서 호출해 final_slot=null, needs_agent_selection=true로 기록한다.
+        후보의 시작·종료 간격은 요청 duration_minutes와 정확히 같아야 한다. 최종 확정 시
+        final_slot은 selected_slot 또는 selected_index가 가리키는 후보의 날짜·시작·종료와 정확히 같아야 한다.
         앞선 조회 tool의 rows는 busy_rows에 그대로 복사한다. member_name의 공백을 바꾸거나
         notes, source_conversation_id 같은 필드를 생략하지 말고 find와 decide 양쪽에 같은 rows를 전달한다.
 
@@ -336,13 +343,16 @@ def extract_langchain_trace(result: dict[str, Any]) -> dict[str, Any]:
             if content.get("final_decision_payload"):
                 final_decision_payload = content["final_decision_payload"]
 
-    return {
+    trace = {
         "events": events,
         "supervisor_selected_agent": selected_agent,
         "inner_tool_names": inner_tool_names,
         "final_slot_payload": final_slot_payload,
         "final_decision_payload": final_decision_payload,
     }
+    if isinstance(result, dict) and "supervisor_retry_count" in result:
+        trace["supervisor_retry_count"] = result["supervisor_retry_count"]
+    return trace
 
 
 def tool_name(tool_object: Any) -> str:
@@ -664,6 +674,40 @@ def _nana_retry_instruction(query: str, sequence: tuple[str, ...]) -> str:
     )
 
 
+def _kana_required_terminal_tool(query: str) -> str | None:
+    """필수 입력이 명확한 Kana 비교·결정 요청의 완료 tool을 판별합니다."""
+
+    normalized = " ".join(str(query).split())
+    has_date = _EXPLICIT_DATE_PATTERN.search(normalized) is not None
+    has_named_participants = (
+        re.search(r"나와\s*\S+", normalized) is not None
+        or re.search(r"\S+와\s+\S+가", normalized) is not None
+    )
+    if not has_date or not has_named_participants:
+        return None
+    if "시간 결정은 하지 마" in normalized or "일정을 비교" in normalized:
+        return "collect_member_schedules"
+    if "회의" in normalized and any(word in normalized for word in ("최종", "정해", "결정")):
+        return "decide_final_slot"
+    return None
+
+
+def _kana_retry_instruction(query: str, terminal_tool: str) -> str:
+    if terminal_tool == "collect_member_schedules":
+        workflow = "collect_member_schedules를 호출해 비교 결과를 받은 뒤 답하세요. 시간 결정 tool은 호출하지 마세요."
+    else:
+        workflow = (
+            "알맞은 일정 조회 결과를 busy_rows로 그대로 보존하고 candidate_slots list를 직접 만든 뒤 "
+            "find_common_available_slots -> decide_final_slot까지 끝내세요. 후보가 없더라도 빈 list와 "
+            "final_slot=null, needs_agent_selection=true로 decide_final_slot을 반드시 호출하세요."
+        )
+    return (
+        f"원래 사용자 요청:\n{query}\n\n"
+        "이전 실행이 Kana workflow의 필수 완료 단계 전에 종료되었습니다. 같은 요청을 안전하게 한 번만 다시 수행하세요. "
+        + workflow
+    )
+
+
 @tool(args_schema=AgentQueryInput)
 def nana_agent(query: str) -> str:
     """개인 일정과 개인 RAG 작업을 self-contained query로 Nana에게 위임합니다.
@@ -725,7 +769,11 @@ def nana_agent(query: str) -> str:
 
 @tool(args_schema=AgentQueryInput)
 def kana_agent(query: str) -> str:
-    """그룹 일정 종합 작업을 프롬프트 기반 Kana 하위 에이전트에게 위임합니다."""
+    """외부 멤버 일정과 그룹 조율을 self-contained query로 Kana에게 위임합니다.
+
+    query에는 외부 멤버·날짜 범위·회의 길이·조회/비교/최종 결정 의도를 보존합니다.
+    Supervisor는 외부 일정이나 그룹 조율을 직접 답하지 말고 이 wrapper를 호출합니다.
+    """
 
     global _KANA_SUBAGENT
     if _KANA_SUBAGENT is None:
@@ -739,6 +787,22 @@ def kana_agent(query: str) -> str:
         {"messages": [{"role": "user", "content": query}]}
     )
     events = extract_agent_events(result)
+    retry_count = 0
+    terminal_tool = _kana_required_terminal_tool(query)
+    if terminal_tool is not None and terminal_tool not in _tool_call_names(events):
+        retry_count = 1
+        retry_result = _KANA_SUBAGENT.invoke(
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": _kana_retry_instruction(query, terminal_tool),
+                    }
+                ]
+            }
+        )
+        events = [*events, *extract_agent_events(retry_result)]
+        result = retry_result
     final_slot_payload: dict[str, Any] | None = None
     final_decision_payload: dict[str, Any] | None = None
     for event in events:
@@ -757,8 +821,110 @@ def kana_agent(query: str) -> str:
         "inner_tool_names": _tool_call_names(events),
         "final_slot_payload": final_slot_payload,
         "final_decision_payload": final_decision_payload,
+        "retry_count": retry_count,
     }
     return json.dumps(payload, ensure_ascii=False)
+
+
+_SUPERVISOR_REQUEST_KEYWORDS = (
+    "일정",
+    "회의",
+    "할 일",
+    "할일",
+    "알림",
+    "리마인더",
+    "참고자료",
+    "저장된 요청",
+    "이전 일반 대화",
+    "공유",
+    "바쁜",
+)
+
+
+def _message_text(message: Any) -> str:
+    if isinstance(message, dict):
+        return str(message.get("content") or "")
+    return str(getattr(message, "content", "") or "")
+
+
+def _requires_supervisor_delegation(messages: list[Any]) -> bool:
+    """일정·저장·RAG 범위 요청에만 Supervisor wrapper 재시도를 허용합니다."""
+
+    last_user_text = ""
+    for message in reversed(messages):
+        role = message.get("role") if isinstance(message, dict) else getattr(message, "type", None)
+        if role in {"user", "human"}:
+            last_user_text = _message_text(message)
+            break
+    return any(keyword in last_user_text for keyword in _SUPERVISOR_REQUEST_KEYWORDS)
+
+
+def _supervisor_wrapper_observed(result: dict[str, Any]) -> bool:
+    return any(
+        event.get("tool_name") in {"nana_agent", "kana_agent"}
+        for event in extract_agent_events(result)
+        if event.get("event") in {"tool_call", "tool_result"}
+    )
+
+
+class Week06SupervisorRetryAgent:
+    """wrapper 미호출만 안전하게 한 번 교정하는 Week 6 invoke adapter입니다."""
+
+    def __init__(self, agent: Any):
+        self._agent = agent
+
+    def invoke(self, payload: dict[str, Any], *args: Any, **kwargs: Any) -> dict[str, Any]:
+        result = self._agent.invoke(payload, *args, **kwargs)
+        messages = list(payload.get("messages") or [])
+        if _supervisor_wrapper_observed(result) or not _requires_supervisor_delegation(messages):
+            if isinstance(result, dict):
+                result["supervisor_retry_count"] = 0
+            return result
+
+        retry_payload = dict(payload)
+        retry_payload["messages"] = [
+            *messages,
+            {
+                "role": "user",
+                "content": (
+                    "직전 일정·저장·RAG 요청을 Supervisor가 직접 답하지 마세요. 역할 경계에 따라 "
+                    "nana_agent 또는 kana_agent 중 담당 wrapper 하나를 정확히 한 번 호출하세요. "
+                    "wrapper query는 직전 사용자 요청의 멤버·날짜·시간·작업 의도를 모두 보존한 "
+                    "self-contained 요청이어야 합니다."
+                ),
+            },
+        ]
+        retry_result = self._agent.invoke(retry_payload, *args, **kwargs)
+        if isinstance(retry_result, dict):
+            retry_result["supervisor_retry_count"] = 1
+        return retry_result
+
+    def stream(self, payload: dict[str, Any], *args: Any, **kwargs: Any) -> Any:
+        """stream에서도 wrapper 미호출을 확인한 뒤 안전하게 한 번만 재시도합니다."""
+
+        collected_messages: list[Any] = []
+        for chunk in self._agent.stream(payload, *args, **kwargs):
+            collected_messages.extend(stream_chunk_messages(chunk))
+            yield chunk
+
+        messages = list(payload.get("messages") or [])
+        first_result = {"messages": collected_messages}
+        if _supervisor_wrapper_observed(first_result) or not _requires_supervisor_delegation(messages):
+            return
+
+        retry_payload = dict(payload)
+        retry_payload["messages"] = [
+            *messages,
+            {
+                "role": "user",
+                "content": (
+                    "직전 일정·저장·RAG 요청을 Supervisor가 직접 답하지 마세요. 역할 경계에 따라 "
+                    "nana_agent 또는 kana_agent 중 담당 wrapper 하나를 정확히 한 번 호출하세요. "
+                    "wrapper query는 직전 사용자 요청의 모든 조건을 보존한 self-contained 요청이어야 합니다."
+                ),
+            },
+        ]
+        yield from self._agent.stream(retry_payload, *args, **kwargs)
 
 
 def build_langchain_supervisor_agent() -> object:
@@ -766,10 +932,12 @@ def build_langchain_supervisor_agent() -> object:
 
     global _SUPERVISOR_AGENT
     if _SUPERVISOR_AGENT is None:
-        _SUPERVISOR_AGENT = create_agent(
-            model=chat_model(),
-            tools=supervisor_tools(),
-            system_prompt=supervisor_system_prompt(),
+        _SUPERVISOR_AGENT = Week06SupervisorRetryAgent(
+            create_agent(
+                model=chat_model(),
+                tools=supervisor_tools(),
+                system_prompt=supervisor_system_prompt(),
+            )
         )
     return _SUPERVISOR_AGENT
 

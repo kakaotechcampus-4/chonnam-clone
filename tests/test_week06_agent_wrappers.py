@@ -280,6 +280,64 @@ class Week06AgentWrapperTest(unittest.TestCase):
         )
         self.assertEqual(second["answer"], "최종 시간을 정했습니다.")
 
+    @patch.object(week06, "extract_final_text", return_value="최종 시간을 정했습니다.")
+    @patch.object(week06, "extract_agent_events")
+    @patch.object(week06, "chat_model", return_value="model")
+    @patch.object(week06, "create_agent")
+    def test_kana_agent_retries_missing_terminal_tool_once(
+        self,
+        create_agent,
+        _chat_model,
+        extract_events,
+        _extract_text,
+    ):
+        subagent = Mock()
+        subagent.invoke.side_effect = [{"attempt": 1}, {"attempt": 2}]
+        create_agent.return_value = subagent
+        extract_events.side_effect = [
+            [{"event": "tool_call", "tool_name": "find_common_available_slots"}],
+            [{"event": "tool_call", "tool_name": "decide_final_slot"}],
+        ]
+
+        payload = json.loads(
+            week06.kana_agent.invoke(
+                {
+                    "query": (
+                        "나와 철수가 2026년 7월 7일부터 17일까지 60분 회의할 "
+                        "최종 시간을 정해줘."
+                    )
+                }
+            )
+        )
+
+        self.assertEqual(subagent.invoke.call_count, 2)
+        self.assertEqual(payload["retry_count"], 1)
+        self.assertEqual(
+            payload["inner_tool_names"],
+            ["find_common_available_slots", "decide_final_slot"],
+        )
+        self.assertIn(
+            "find_common_available_slots -> decide_final_slot",
+            subagent.invoke.call_args_list[1].args[0]["messages"][0]["content"],
+        )
+
+    def test_kana_retry_plan_requires_date_and_named_participants(self):
+        self.assertEqual(
+            week06._kana_required_terminal_tool(
+                "나와 철수가 2026년 7월 7일부터 17일까지 회의할 최종 시간을 정해줘."
+            ),
+            "decide_final_slot",
+        )
+        self.assertEqual(
+            week06._kana_required_terminal_tool(
+                "나와 철수의 2026년 7월 7일부터 17일까지 일정을 비교해줘. 시간 결정은 하지 마."
+            ),
+            "collect_member_schedules",
+        )
+        self.assertIsNone(
+            week06._kana_required_terminal_tool("나와 철수가 60분 회의할 시간을 정해줘.")
+        )
+
     @patch.object(week06, "extract_agent_events")
     def test_supervisor_trace_lifts_wrapper_metadata(self, extract_events):
         final_slot = {
@@ -319,6 +377,95 @@ class Week06AgentWrapperTest(unittest.TestCase):
         self.assertEqual(trace["final_slot_payload"], final_slot)
         self.assertEqual(trace["final_decision_payload"], {"status": "confirmed"})
 
+    @patch.object(week06, "extract_agent_events", return_value=[])
+    def test_supervisor_retries_in_scope_request_without_wrapper_once(self, _extract_events):
+        underlying = Mock()
+        underlying.invoke.side_effect = [
+            {"messages": ["직접 답변"]},
+            {"messages": ["wrapper 재시도 결과"]},
+        ]
+        agent = week06.Week06SupervisorRetryAgent(underlying)
+        payload = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "2026년 8월 10일 테스트 회의를 내 일정에 등록해줘.",
+                }
+            ]
+        }
+
+        result = agent.invoke(payload)
+
+        self.assertEqual(underlying.invoke.call_count, 2)
+        retry_messages = underlying.invoke.call_args_list[1].args[0]["messages"]
+        self.assertEqual(retry_messages[0], payload["messages"][0])
+        self.assertIn("wrapper 하나를 정확히 한 번", retry_messages[-1]["content"])
+        self.assertEqual(result["supervisor_retry_count"], 1)
+
+    @patch.object(week06, "extract_agent_events")
+    def test_supervisor_does_not_retry_observed_wrapper_or_out_of_scope_chat(
+        self,
+        extract_events,
+    ):
+        underlying = Mock()
+        underlying.invoke.side_effect = [
+            {"messages": ["위임 결과"]},
+            {"messages": ["일반 답변"]},
+        ]
+        agent = week06.Week06SupervisorRetryAgent(underlying)
+        extract_events.side_effect = [
+            [{"event": "tool_result", "tool_name": "nana_agent"}],
+            [],
+        ]
+
+        delegated = agent.invoke(
+            {"messages": [{"role": "user", "content": "내 일정 보여줘"}]}
+        )
+        ordinary = agent.invoke(
+            {"messages": [{"role": "user", "content": "안녕"}]}
+        )
+
+        self.assertEqual(underlying.invoke.call_count, 2)
+        self.assertEqual(delegated["supervisor_retry_count"], 0)
+        self.assertEqual(ordinary["supervisor_retry_count"], 0)
+
+    @patch.object(week06, "extract_agent_events", return_value=[])
+    def test_supervisor_stops_after_one_retry_even_without_wrapper(self, _extract_events):
+        underlying = Mock()
+        underlying.invoke.side_effect = [
+            {"messages": ["첫 직접 답변"]},
+            {"messages": ["두 번째 직접 답변"]},
+        ]
+        agent = week06.Week06SupervisorRetryAgent(underlying)
+
+        result = agent.invoke(
+            {"messages": [{"role": "user", "content": "회의 일정 정해줘"}]}
+        )
+
+        self.assertEqual(underlying.invoke.call_count, 2)
+        self.assertEqual(result["supervisor_retry_count"], 1)
+
+    @patch.object(week06, "_supervisor_wrapper_observed", return_value=False)
+    def test_supervisor_stream_retries_in_scope_request_once(self, _observed):
+        underlying = Mock()
+        underlying.stream.side_effect = [
+            iter([{"model": {"messages": ["첫 응답"]}}]),
+            iter([{"tools": {"messages": ["wrapper 응답"]}}]),
+        ]
+        agent = week06.Week06SupervisorRetryAgent(underlying)
+        payload = {
+            "messages": [
+                {"role": "user", "content": "2026년 8월 10일 회의 일정 등록해줘"}
+            ]
+        }
+
+        chunks = list(agent.stream(payload, stream_mode="updates"))
+
+        self.assertEqual(underlying.stream.call_count, 2)
+        self.assertEqual(len(chunks), 2)
+        retry_messages = underlying.stream.call_args_list[1].args[0]["messages"]
+        self.assertIn("self-contained", retry_messages[-1]["content"])
+
     @patch.object(week06, "supervisor_system_prompt", return_value="supervisor prompt")
     @patch.object(week06, "supervisor_tools", return_value=["nana", "kana"])
     @patch.object(week06, "chat_model", return_value="model")
@@ -336,8 +483,9 @@ class Week06AgentWrapperTest(unittest.TestCase):
         first = week06.build_langchain_supervisor_agent()
         second = week06.build_week_agent()
 
-        self.assertIs(first, supervisor)
-        self.assertIs(second, supervisor)
+        self.assertIsInstance(first, week06.Week06SupervisorRetryAgent)
+        self.assertIs(first._agent, supervisor)
+        self.assertIs(second, first)
         create_agent.assert_called_once_with(
             model="model",
             tools=["nana", "kana"],
