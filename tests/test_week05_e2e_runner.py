@@ -7,8 +7,8 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-RUNNER_PATH = REPO_ROOT / ".claude/skills/e2e-week05-mcp-verify/run_scenarios.py"
-SCENARIOS_PATH = REPO_ROOT / ".claude/skills/e2e-week05-mcp-verify/scenarios.json"
+RUNNER_PATH = REPO_ROOT / "tests/e2e/week05_mcp/run_scenarios.py"
+SCENARIOS_PATH = REPO_ROOT / "tests/e2e/week05_mcp/scenarios.json"
 
 SPEC = importlib.util.spec_from_file_location("week05_e2e_runner", RUNNER_PATH)
 if SPEC is None or SPEC.loader is None:
