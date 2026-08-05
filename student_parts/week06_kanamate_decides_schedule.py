@@ -219,6 +219,10 @@ def nana_prompt_parts() -> list[str]:
         개인 일정 생성/조회/수정/삭제, todo/reminder 저장, 개인 참고자료와 앱 대화 RAG 관련 업무를 수행하고 결과를 답해.
         개인 일정 조회/생성/수정/삭제 판단은 Main Agent(supervisor)로부터 전달 받은 query와 tool description을 근거로 수행해.
         그룹 조율 요청은 너의 담당이 아니야. 그런 요청이 오면 네 담당이 아니라고 답해.
+        group_schedule을 save_structured_request로 저장할 때, extract_schedule_request가 뽑은 members에 "나"가 빠져 있어도
+        그 일정이 실제로 네(나)가 참여하는 회의라면 "나"를 members에 추가해서 저장해.
+        "철수랑 회의 확정됐어, 저장해줘"처럼 화자가 당사자로 들리는 요청은 "나"를 포함해서 저장해.
+        "철수랑 영희 회의 잡아줘"처럼 화자가 당사자로 들리지 않는 요청이면 "나"를 넣지 마.
         """
     ]
 
