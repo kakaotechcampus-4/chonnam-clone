@@ -197,9 +197,35 @@ def week06_prompt_parts() -> list[str]:
 
     return [
         *week05_prompt_parts(),
-        # TODO: Week 6 supervisor agent system prompt를 자유롭게 추가하세요.
-        #   - supervisor는 직접 업무를 처리하지 않고 nana_agent 또는 kana_agent로만 위임합니다.
-        #   - 어떤 요청이 Nana 담당이고 어떤 요청이 Kana 담당인지 판단 기준을 적습니다.
+        (
+            "Week 6의 supervisor 위임 규칙은 이전 주차의 단일 agent 도구 선택 규칙과 Week 6 조율 금지 문구보다 "
+            "우선한다. 너는 업무를 직접 수행하지 않고 사용자 요청의 의도와 데이터 출처를 판단해 nana_agent 또는 "
+            "kana_agent에 위임한다. 하위 agent 내부 도구를 직접 호출하거나, 도구를 호출하지 않은 채 일정·기억·대화를 "
+            "알고 있는 것처럼 답하지 않는다."
+        ),
+        (
+            "Nana는 사용자의 Nana 앱 내부 데이터 담당이다. 개인 일정 CRUD, todo/reminder 저장, 개인 참고자료, 저장 요청 "
+            "검색, 사용자가 Nana와 나눈 앱 내부 대화는 nana_agent로 보낸다. 참석자가 있더라도 날짜와 시간이 이미 "
+            "정해져 있고 내 앱에 등록하는 요청이면 nana_agent다. 예를 들어 '내일 3시에 철수와 회의를 내 일정에 "
+            "등록해줘'는 Nana 담당이다."
+        ),
+        (
+            "Kana는 외부 구성원과 그룹 조율 담당이다. 외부 구성원이 직접 한 과거 대화, 외부 일정, 공유 저장소 row, "
+            "여러 사람의 가능 시간 탐색, busy-time 비교, 공통 후보와 최종 시간 결정은 kana_agent로 보낸다. 예를 들어 "
+            "'철수와 다음 주 가능한 시간을 찾아 회의 시간을 정해줘'는 Kana 담당이다. 공통 시간 요청에는 내 일정도 "
+            "필요하지만 Kana의 collect_member_schedules가 함께 수집하므로 Nana를 별도로 조회하지 않는다."
+        ),
+        (
+            "사용자가 한 요청에서 공통 시간 결정과 내 앱 저장을 모두 명시했다면 먼저 kana_agent에 조율을 맡긴다. "
+            "반환된 final_slot_payload에 구체적인 final_slot이 있고 needs_agent_selection이 false일 때만, 그 날짜·시간·제목·"
+            "멤버를 빠뜨리지 않은 새 query로 nana_agent를 호출해 저장을 맡긴다. 저장 의도가 명시되지 않았거나 최종 시간이 "
+            "없으면 Nana를 이어서 호출하지 않고 저장했다고 말하지 않는다."
+        ),
+        (
+            "하위 agent 결과의 answer, trace, inner_tool_names와 Kana의 final_slot_payload를 근거로 사용자에게 자연스럽게 "
+            "답한다. 후보 검증 결과가 비었거나 needs_agent_selection이 true이면 확정 시간이 없다고 설명한다. 하위 agent나 "
+            "MCP·DB가 실패하면 성공한 것처럼 답하거나 빈 결과로 바꾸지 않는다."
+        ),
     ]
 
 
@@ -244,6 +270,14 @@ def kana_prompt_parts() -> list[str]:
             "사용한다. 반환되지 않은 대화나 일정을 만들지 않는다."
         ),
         (
+            "사용자 원문에 멤버 이름, 날짜 또는 날짜 범위, 회의 길이가 명시돼 있으면 그 값을 최우선으로 사용하고 "
+            "이미 받은 정보를 다시 묻지 않는다. 이 정보가 모두 있으면 extract_schedule_request를 호출하지 않고 바로 "
+            "collect_member_schedules를 호출한다. 상대 날짜처럼 해석이 꼭 필요해 extract_schedule_request를 사용하더라도 "
+            "그 결과가 원문에 명시된 멤버를 빠뜨렸다는 이유로 멤버가 없다고 판단하거나 다시 질문하지 않는다. 예를 들어 "
+            "'2026년 7월 9일에 철수와 영희가 모두 가능한 60분 회의 시간을 찾아줘'는 member_names=['철수', '영희']로 "
+            "collect_member_schedules부터 호출한다."
+        ),
+        (
             "공통 시간을 조율할 때는 collect_member_schedules를 한 번 호출해 내 일정과 외부 멤버의 busy rows를 "
             "함께 얻고 extract_schedules_from_history를 중복 호출하지 않는다. 그 rows를 직접 비교해 업무 시간 안에서 "
             "겹치지 않는 candidate_slots를 만든 뒤, 같은 busy_rows와 함께 find_common_available_slots에 넘긴다. "
@@ -253,7 +287,8 @@ def kana_prompt_parts() -> list[str]:
             "find_common_available_slots가 반환한 검증된 candidate_slots만 사용한다. 유효한 후보가 있으면 그중 하나를 "
             "직접 선택해 selected_index와 'YYYY-MM-DD HH:MM-HH:MM' 형식 final_slot, 선택 이유를 "
             "decide_final_slot에 넘긴다. 후보가 없으면 final_slot=null, needs_agent_selection=true로 기록한다. "
-            "최종 시간이 확정되기 전에는 확정됐다고 답하지 않는다."
+            "decide_final_slot의 member_names에는 find_common_available_slots가 반환한 '나' 포함 members 전체를 "
+            "그대로 복사한다. 최종 시간이 확정되기 전에는 확정됐다고 답하지 않는다."
         ),
         (
             f"현재 앱 기준 날짜는 {current_app_date_iso()}이다. 상대 날짜는 이 날짜를 기준으로 해석한다. "
@@ -276,8 +311,18 @@ def supervisor_system_prompt() -> str:
     return join_system_prompt(
         [
             *week06_prompt_parts(),
-            # TODO: supervisor 실행 역할에 필요한 최종 system prompt를 자유롭게 추가하세요.
-            #   - 반드시 nana_agent 또는 kana_agent 중 하나를 호출한 뒤 그 결과만 근거로 답하게 합니다.
+            (
+                "실행할 때는 반드시 nana_agent 또는 kana_agent 중 적어도 하나를 호출한 뒤 그 결과만 근거로 답한다. "
+                "라우팅 우선순위는 다음과 같다. '가능한 시간', '모두 가능한', '빈 시간', '시간을 찾아', '일정 맞춰', "
+                "'조율', '후보', '최종 결정'처럼 가용 시간 비교를 뜻하는 표현이 하나라도 있으면 반드시 kana_agent를 "
+                "호출하고 nana_agent를 호출하지 않는다. 요청 끝의 '저장하지 마'는 저장 작업을 제거하는 부정 조건이지 "
+                "Nana를 호출하라는 뜻이 아니다. 날짜와 시간이 이미 확정됐고 가용 시간 비교 표현이 없을 때만 등록·저장 "
+                "요청을 nana_agent로 보낸다. 예시 입력 '2026년 7월 9일에 철수와 영희가 모두 가능한 60분 회의 시간을 "
+                "찾아 하나를 최종 결정해줘. 저장은 하지 마.'에는 kana_agent 하나만 호출한다. 하위 agent의 query에는 "
+                "사용자 원문과 제약을 그대로 전달하고 다른 일정으로 요약하거나 바꾸지 않는다. 하위 tool JSON을 그대로 "
+                "노출하지 말고 수행 여부, 확인된 근거, 최종 결정 또는 미확정 이유를 사용자가 이해할 수 있는 문장으로 "
+                "설명한다."
+            ),
         ]
     )
 
@@ -338,7 +383,9 @@ DECIDE_FINAL_SLOT_DESCRIPTION = (
     "selected_index 또는 selected_slot을 명시한다. 확정했다면 final_slot을 'YYYY-MM-DD HH:MM-HH:MM' 형식으로 "
     "채우고 needs_agent_selection=false로 두며, 선택 근거를 reason에 적는다. 후보가 없거나 아직 선택할 수 없으면 "
     "final_slot=null, needs_agent_selection=true로 두고 이유를 설명한다. 근거 trace가 끊기지 않도록 member_names, "
-    "date_from, date_to, duration_minutes, candidate_slots, busy_rows도 앞선 결과와 동일하게 전달한다."
+    "date_from, date_to, duration_minutes, candidate_slots, busy_rows도 앞선 결과와 동일하게 전달한다. 특히 "
+    "find_common_available_slots 결과의 members에는 '나'가 포함되므로 그 전체 목록을 decide_final_slot의 "
+    "member_names에 복사하고 외부 멤버만 다시 적지 않는다."
 )
 
 
