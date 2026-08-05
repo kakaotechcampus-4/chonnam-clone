@@ -180,5 +180,115 @@ class CommonAvailableSlotTests(unittest.TestCase):
         self.assertEqual(payload["candidate_slots"][0]["reason"], "모두 가능한 시간")
 
 
+class FinalSlotDecisionTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.candidates = [
+            {
+                "date": "2026-08-06",
+                "start_time": "11:00",
+                "end_time": "12:00",
+                "duration_minutes": 60,
+                "reason": "오전 후보",
+            },
+            {
+                "date": "2026-08-06",
+                "start_time": "14:00",
+                "end_time": "15:00",
+                "duration_minutes": 60,
+                "reason": "오후 후보",
+            },
+        ]
+
+    def test_description_requires_kana_to_make_the_final_choice(self) -> None:
+        description = week06.DECIDE_FINAL_SLOT_DESCRIPTION
+
+        self.assertIn("대신 고르는 도구가 아니라", description)
+        self.assertIn("selected_index", description)
+        self.assertIn("YYYY-MM-DD HH:MM-HH:MM", description)
+        self.assertIn("final_slot=null", description)
+        self.assertIn("busy_rows", description)
+
+    def test_selected_index_records_the_exact_final_slot_and_evidence(self) -> None:
+        busy_rows = [
+            {
+                "member_name": "철수",
+                "title": "기존 일정",
+                "date": "2026-08-06",
+                "start_time": "10:00",
+                "end_time": "11:00",
+            }
+        ]
+        raw_result = week06.decide_final_slot.invoke(
+            {
+                "candidate_slots": self.candidates,
+                "selected_index": 1,
+                "final_slot": "2026-08-06 14:00-15:00",
+                "needs_agent_selection": False,
+                "member_names": ["나", "철수"],
+                "date_from": "2026-08-06T00:00:00+09:00",
+                "date_to": "2026-08-06T23:59:59+09:00",
+                "duration_minutes": 60,
+                "reason": "오후가 모두에게 가능함",
+                "busy_rows": busy_rows,
+            }
+        )
+
+        self.assertNotIn("\\u", raw_result)
+        payload = json.loads(raw_result)
+        self.assertEqual(payload["final_slot"], "2026-08-06 14:00-15:00")
+        self.assertEqual(payload["selected_index"], 1)
+        self.assertEqual(payload["selected_slot"], self.candidates[1])
+        self.assertFalse(payload["needs_agent_selection"])
+        self.assertEqual(payload["reason"], "오후가 모두에게 가능함")
+        self.assertEqual(payload["members"], ["나", "철수"])
+        self.assertEqual(payload["date_from"], "2026-08-06")
+        self.assertEqual(payload["busy_rows"], busy_rows)
+
+    def test_missing_selection_keeps_the_decision_open(self) -> None:
+        payload = json.loads(
+            week06.decide_final_slot.invoke(
+                {
+                    "candidate_slots": self.candidates,
+                    "selected_index": None,
+                    "selected_slot": None,
+                    "final_slot": None,
+                    "needs_agent_selection": None,
+                }
+            )
+        )
+
+        self.assertIsNone(payload["final_slot"])
+        self.assertTrue(payload["needs_agent_selection"])
+        self.assertIn("최종 확정하지 않았습니다", payload["reason"])
+        self.assertEqual(payload["candidates"], [
+            "2026-08-06 11:00-12:00",
+            "2026-08-06 14:00-15:00",
+        ])
+
+    def test_invalid_index_does_not_fall_back_to_another_candidate(self) -> None:
+        payload = json.loads(
+            week06.decide_final_slot.invoke(
+                {
+                    "candidate_slots": self.candidates,
+                    "selected_index": 9,
+                    "final_slot": None,
+                    "needs_agent_selection": None,
+                }
+            )
+        )
+
+        self.assertIsNone(payload["final_slot"])
+        self.assertTrue(payload["needs_agent_selection"])
+        self.assertIn("범위를 벗어났습니다", payload["reason"])
+
+    def test_no_candidates_remains_unconfirmed(self) -> None:
+        payload = json.loads(week06.decide_final_slot.invoke({"candidate_slots": []}))
+
+        self.assertIsNone(payload["final_slot"])
+        self.assertTrue(payload["needs_agent_selection"])
+        self.assertEqual(payload["candidates"], [])
+        self.assertIn("찾지 못했습니다", payload["reason"])
+
+
 if __name__ == "__main__":
     unittest.main()
