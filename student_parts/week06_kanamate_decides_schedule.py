@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import date, timedelta
 from typing import Any
 
 from langchain.agents import create_agent
@@ -314,6 +315,10 @@ def supervisor_system_prompt() -> str:
             사용자의 멤버·날짜·의도를 query에 보존하고 사용자가 말하지 않은 값이나 결정을 추가하지 않는다.
             query를 검색 키워드만 남긴 짧은 구로 축약하지 않는다. 저장 기록 검색, 앱 내부 대화 검색,
             생성·수정·삭제 같은 작업 의도를 하위 agent가 알 수 있게 원문 표현을 보존한다.
+            예를 들어 '앱에 저장된 요청 기록에서 검색'은 해당 출처 표현까지 nana_agent query에 보존한다.
+            외부 멤버 이름과 '바쁜 일정'이 함께 있으면 개인 일정으로 바꾸지 말고 kana_agent에 위임한다.
+            '오늘', '내일' 같은 상대 날짜는 현재 앱 기준 날짜로 계산한 YYYY-MM-DD 절대 날짜로 바꾸고,
+            원래 상대 날짜 표현 대신 그 날짜를 wrapper query의 date_from/date_to 의미로 명시한다.
             후속 답변만으로 멤버·날짜·회의 길이가 완성되는 경우에는 앞선 대화의 미완성 요청과 합쳐
             하위 agent가 단독으로 이해할 수 있는 query를 만든다.
             하위 agent를 호출하지 않은 채 직접 완료 답변을 만들지 않는다.
@@ -821,7 +826,22 @@ def _kana_decision_retry_reason(query: str, events: list[dict[str, Any]]) -> str
             or find_arguments.get("workday_end") != explicit_window[1]
         ):
             return "사용자 명시 허용 시간 범위 불일치"
+    if _kana_broad_range_has_empty_candidates(events):
+        return "여러 날짜 범위의 후보 생성 누락"
     return None
+
+
+def _kana_broad_range_has_empty_candidates(events: list[dict[str, Any]]) -> bool:
+    find_result = _last_tool_result(events, "find_common_available_slots")
+    find_arguments = _last_tool_arguments(events, "find_common_available_slots") or {}
+    return bool(
+        isinstance(find_result, dict)
+        and find_result.get("candidate_slots") == []
+        and find_arguments.get("date_from")
+        and find_arguments.get("date_to")
+        and normalize_date_bound(str(find_arguments["date_from"]))
+        != normalize_date_bound(str(find_arguments["date_to"]))
+    )
 
 
 def _known_empty_schedule_lookup(events: list[dict[str, Any]]) -> bool:
@@ -894,7 +914,8 @@ def _kana_retry_instruction(
             find_arguments.get("workday_start") != explicit_window[0]
             or find_arguments.get("workday_end") != explicit_window[1]
         )
-        if find_result is not None and not window_mismatch:
+        requires_refind = window_mismatch or _kana_broad_range_has_empty_candidates(events)
+        if find_result is not None and not requires_refind:
             workflow = (
                 "앞선 find_common_available_slots를 다시 호출하지 말고 그 결과의 members, busy_rows, "
                 "candidate_slots를 정확히 복사해 decide_final_slot만 호출하세요. 후보가 없으면 빈 list와 "
@@ -1048,7 +1069,8 @@ def kana_agent(query: str) -> str:
                 find_arguments.get("workday_start") != explicit_window[0]
                 or find_arguments.get("workday_end") != explicit_window[1]
             )
-            if find_result is not None and not window_mismatch:
+            requires_refind = window_mismatch or _kana_broad_range_has_empty_candidates(events)
+            if find_result is not None and not requires_refind:
                 retry_tools = ("decide_final_slot",)
             elif any(
                 _last_tool_result(events, source_tool) is not None
@@ -1140,6 +1162,82 @@ def _supervisor_wrapper_observed(result: dict[str, Any]) -> bool:
     )
 
 
+def _last_user_text(messages: list[Any]) -> str:
+    for message in reversed(messages):
+        role = message.get("role") if isinstance(message, dict) else getattr(message, "type", None)
+        if role in {"user", "human"}:
+            return _message_text(message)
+    return ""
+
+
+def _app_tomorrow_iso() -> str:
+    return (date.fromisoformat(current_app_date_iso()) + timedelta(days=1)).isoformat()
+
+
+def _supervisor_retry_reason(result: dict[str, Any], messages: list[Any]) -> str | None:
+    """wrapper 선택과 self-contained query의 명시적 계약 위반만 재시도합니다."""
+
+    events = extract_agent_events(result)
+    wrapper_calls = [
+        event
+        for event in events
+        if event.get("event") == "tool_call"
+        and event.get("tool_name") in {"nana_agent", "kana_agent"}
+    ]
+    if not wrapper_calls:
+        if any(
+            event.get("event") == "tool_result"
+            and event.get("tool_name") in {"nana_agent", "kana_agent"}
+            for event in events
+        ):
+            return None
+        return "담당 wrapper 호출 누락"
+
+    call = wrapper_calls[-1]
+    selected_agent = call.get("tool_name")
+    arguments = call.get("arguments")
+    wrapper_query = str(arguments.get("query") or "") if isinstance(arguments, dict) else ""
+    original = _last_user_text(messages)
+
+    if "저장된 요청 기록" in original:
+        if selected_agent != "nana_agent":
+            return "저장된 요청 기록 검색은 nana_agent 담당"
+        if "저장된" not in wrapper_query or "검색" not in wrapper_query:
+            return "wrapper query에서 저장된 요청 기록이라는 검색 출처가 누락됨"
+
+    owner_match = re.search(r"(?P<owner>[^\s]+)의\s+.*바쁜 일정", original)
+    is_external_busy_lookup = bool(
+        owner_match and owner_match.group("owner") not in {"나", "내", "저", "제"}
+    )
+    if is_external_busy_lookup and selected_agent != "kana_agent":
+        return "외부 멤버의 바쁜 일정 조회는 kana_agent 담당"
+
+    if "내일" in original:
+        tomorrow = _app_tomorrow_iso()
+        if tomorrow not in wrapper_query:
+            return f"상대 날짜 내일을 절대 날짜 {tomorrow}로 변환하지 않음"
+    return None
+
+
+def _supervisor_retry_instruction(messages: list[Any], reason: str) -> str:
+    original = _last_user_text(messages)
+    correction = ""
+    if "저장된 요청 기록" in original:
+        correction = (
+            " nana_agent를 호출하고 query에 '앱에 저장된 요청 기록에서'라는 출처와 검색 의도를 보존하세요."
+        )
+    if "내일" in original:
+        correction += (
+            f" 외부 멤버 일정이므로 kana_agent를 호출하고 '내일'을 {_app_tomorrow_iso()}로 바꿔 "
+            "date_from과 date_to가 같은 날짜인 완결된 조회 요청을 전달하세요."
+        )
+    return (
+        f"직전 위임의 교정 사유: {reason}. 원래 사용자 요청은 '{original}'입니다. "
+        "담당 wrapper 하나를 정확히 한 번만 다시 호출하고 query를 self-contained하게 만드세요."
+        + correction
+    )
+
+
 class Week06SupervisorRetryAgent:
     """wrapper 미호출만 안전하게 한 번 교정하는 Week 6 invoke adapter입니다."""
 
@@ -1149,7 +1247,12 @@ class Week06SupervisorRetryAgent:
     def invoke(self, payload: dict[str, Any], *args: Any, **kwargs: Any) -> dict[str, Any]:
         result = self._agent.invoke(payload, *args, **kwargs)
         messages = list(payload.get("messages") or [])
-        if _supervisor_wrapper_observed(result) or not _requires_supervisor_delegation(messages):
+        if not _requires_supervisor_delegation(messages):
+            if isinstance(result, dict):
+                result["supervisor_retry_count"] = 0
+            return result
+        retry_reason = _supervisor_retry_reason(result, messages)
+        if retry_reason is None:
             if isinstance(result, dict):
                 result["supervisor_retry_count"] = 0
             return result
@@ -1159,12 +1262,7 @@ class Week06SupervisorRetryAgent:
             *messages,
             {
                 "role": "user",
-                "content": (
-                    "직전 일정·저장·RAG 요청을 Supervisor가 직접 답하지 마세요. 역할 경계에 따라 "
-                    "nana_agent 또는 kana_agent 중 담당 wrapper 하나를 정확히 한 번 호출하세요. "
-                    "wrapper query는 직전 사용자 요청의 멤버·날짜·시간·작업 의도를 모두 보존한 "
-                    "self-contained 요청이어야 합니다."
-                ),
+                "content": _supervisor_retry_instruction(messages, retry_reason),
             },
         ]
         retry_result = self._agent.invoke(retry_payload, *args, **kwargs)

@@ -360,6 +360,42 @@ class Week06AgentWrapperTest(unittest.TestCase):
             "사용자 명시 허용 시간 범위 불일치",
         )
 
+        broad_empty = [
+            {
+                "event": "tool_call",
+                "tool_name": "find_common_available_slots",
+                "arguments": {
+                    "date_from": "2026-07-07",
+                    "date_to": "2026-07-17",
+                },
+            },
+            {
+                "event": "tool_result",
+                "tool_name": "find_common_available_slots",
+                "content": {
+                    "members": ["나", "철수"],
+                    "busy_rows": rows,
+                    "candidate_slots": [],
+                },
+            },
+            {
+                "event": "tool_result",
+                "tool_name": "decide_final_slot",
+                "content": {
+                    "members": ["나", "철수"],
+                    "busy_rows": rows,
+                    "candidate_slots": [],
+                },
+            },
+        ]
+        self.assertEqual(
+            week06._kana_decision_retry_reason(
+                "나와 철수가 2026년 7월 7일부터 17일까지 회의할 최종 시간을 정해줘.",
+                broad_empty,
+            ),
+            "여러 날짜 범위의 후보 생성 누락",
+        )
+
     @patch.object(week06, "extract_final_text", return_value="최종 시간을 정했습니다.")
     @patch.object(week06, "extract_agent_events")
     @patch.object(week06, "chat_model", return_value="model")
@@ -585,6 +621,61 @@ class Week06AgentWrapperTest(unittest.TestCase):
 
         self.assertEqual(underlying.invoke.call_count, 2)
         self.assertEqual(result["supervisor_retry_count"], 1)
+
+    @patch.object(week06, "current_app_date_iso", return_value="2026-08-06")
+    @patch.object(week06, "extract_agent_events")
+    def test_supervisor_retries_wrong_relative_date_route_with_absolute_date(
+        self,
+        extract_events,
+        _current_date,
+    ):
+        underlying = Mock()
+        underlying.invoke.side_effect = [{"attempt": 1}, {"attempt": 2}]
+        extract_events.return_value = [
+            {
+                "event": "tool_call",
+                "tool_name": "nana_agent",
+                "arguments": {"query": "철수의 내일 바쁜 일정 알려줘"},
+            }
+        ]
+        agent = week06.Week06SupervisorRetryAgent(underlying)
+
+        result = agent.invoke(
+            {"messages": [{"role": "user", "content": "철수의 내일 바쁜 일정을 알려줘."}]}
+        )
+
+        correction = underlying.invoke.call_args_list[1].args[0]["messages"][-1]["content"]
+        self.assertEqual(result["supervisor_retry_count"], 1)
+        self.assertIn("kana_agent", correction)
+        self.assertIn("2026-08-07", correction)
+
+    @patch.object(week06, "extract_agent_events")
+    def test_supervisor_retries_query_that_drops_saved_record_source(self, extract_events):
+        underlying = Mock()
+        underlying.invoke.side_effect = [{"attempt": 1}, {"attempt": 2}]
+        extract_events.return_value = [
+            {
+                "event": "tool_call",
+                "tool_name": "nana_agent",
+                "arguments": {"query": "E2E 회귀 테스트 일정 검색"},
+            }
+        ]
+        agent = week06.Week06SupervisorRetryAgent(underlying)
+
+        result = agent.invoke(
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "앱에 저장된 요청 기록에서 E2E 회귀 테스트를 검색해줘.",
+                    }
+                ]
+            }
+        )
+
+        correction = underlying.invoke.call_args_list[1].args[0]["messages"][-1]["content"]
+        self.assertEqual(result["supervisor_retry_count"], 1)
+        self.assertIn("앱에 저장된 요청 기록에서", correction)
 
     @patch.object(week06, "_supervisor_wrapper_observed", return_value=False)
     def test_supervisor_stream_retries_in_scope_request_once(self, _observed):
