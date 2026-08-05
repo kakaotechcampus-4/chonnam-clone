@@ -283,14 +283,13 @@ def tool_name(tool_object: Any) -> str:
 
 
 FIND_COMMON_AVAILABLE_SLOTS_DESCRIPTION = (
-    # TODO: find_common_available_slots tool description을 자유롭게 작성하세요.
-    #   - 이 Python tool이 후보를 계산하지 않는다는 점을 Kana agent에게 분명히 알려야 합니다.
-    #     agent가 busy_rows를 읽고 candidate_slots를 직접 채워 넘기게 만드는 것이 핵심입니다.
-    #   - candidate_slots 각 항목이 date(YYYY-MM-DD), start_time(HH:MM), end_time(HH:MM),
-    #     duration_minutes, reason을 포함해야 한다는 형식을 적습니다.
-    #   - 후보는 어떤 busy row와도 겹치면 안 되고, busy_rows도 앞선 tool output에서 복사해 넘기게 합니다.
-    #   - 이 결과로 답변을 끝내지 말고 decide_final_slot을 이어서 호출하도록 유도합니다.
-    ""
+    "공통 가능 시간을 대신 계산하는 도구가 아니라 Kana가 직접 고른 후보를 검증하고 trace에 기록하는 도구다. "
+    "먼저 collect_member_schedules로 나와 외부 멤버의 busy rows를 조회하고, 그 rows를 읽어 겹치지 않는 "
+    "candidate_slots를 직접 만든 뒤 busy_rows 인자에도 같은 rows를 복사한다. 각 후보는 date(YYYY-MM-DD), "
+    "start_time(HH:MM), end_time(HH:MM), duration_minutes, reason을 모두 포함해야 한다. 후보는 요청 날짜 범위와 "
+    "업무 시간 안에 있어야 하고 요청한 회의 길이를 충족해야 하며, 어떤 busy row와도 겹치면 안 된다. "
+    "시작 또는 종료 시간이 미정인 busy row가 있는 날짜는 보수적으로 후보에서 제외한다. 검증 결과의 "
+    "candidate_slots만 사용하고, 이 도구로 답변을 끝내지 말고 이어서 decide_final_slot을 호출한다."
 )
 
 
@@ -377,12 +376,47 @@ def find_common_available_slots_dict(
 ) -> dict[str, Any]:
     """멤버별 busy-time rows와 LLM이 고른 후보 payload를 검증 결과로 바꿉니다."""
 
-    # TODO: 멤버 이름/날짜 범위를 정규화하고, busy_rows를 수집한 뒤 후보 검증 payload를 만드세요.
-    #   - normalize_external_member_names(...)로 멤버 이름을, normalize_date_bound(...)로 날짜를 정규화합니다.
-    #   - busy_rows가 None이면 collect_member_schedules.invoke({...})를 호출해 rows를 채웁니다.
-    #   - 검증 payload 생성은 find_common_available_slots_payload(...)에 넘깁니다. 이때 내 일정도 근거이므로
-    #     member_names에는 "나"를 함께 포함합니다.
-    ...
+    normalized_member_names = normalize_external_member_names(member_names)
+    normalized_date_from = normalize_date_bound(date_from)
+    normalized_date_to = normalize_date_bound(date_to)
+    members = ["나", *[name for name in normalized_member_names if name != "나"]]
+
+    resolved_busy_rows = busy_rows
+    if resolved_busy_rows is None:
+        collected_text = collect_member_schedules.invoke(
+            {
+                "member_names": normalized_member_names,
+                "date_from": normalized_date_from,
+                "date_to": normalized_date_to,
+            }
+        )
+        try:
+            collected_payload = json.loads(collected_text)
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise RuntimeError("collect_member_schedules returned invalid JSON") from exc
+        if not isinstance(collected_payload, dict):
+            raise RuntimeError("collect_member_schedules returned a non-object payload")
+        if collected_payload.get("ok") is False:
+            raise RuntimeError("collect_member_schedules reported a failed collection")
+        collected_rows = collected_payload.get("rows")
+        if not isinstance(collected_rows, list):
+            raise RuntimeError("collect_member_schedules returned a non-list rows field")
+        if any(not isinstance(row, dict) for row in collected_rows):
+            raise RuntimeError("collect_member_schedules returned a non-object row")
+        resolved_busy_rows = collected_rows
+
+    return find_common_available_slots_payload(
+        member_names=members,
+        date_from=normalized_date_from,
+        date_to=normalized_date_to,
+        busy_rows=resolved_busy_rows,
+        duration_minutes=duration_minutes,
+        workday_start=workday_start,
+        workday_end=workday_end,
+        limit=limit,
+        candidate_slots=candidate_slots,
+        llm_reason=llm_reason,
+    )
 
 
 @tool(description=FIND_COMMON_AVAILABLE_SLOTS_DESCRIPTION, args_schema=FindCommonAvailableSlotsInput)
@@ -400,8 +434,19 @@ def find_common_available_slots(
 ) -> str:
     """수집된 멤버 일정에서 LLM이 직접 고른 공통 가능 후보 시간을 검증합니다."""
 
-    # TODO: find_common_available_slots_dict(...) 결과를 JSON 문자열로 반환하세요.
-    ...
+    payload = find_common_available_slots_dict(
+        member_names=member_names,
+        date_from=date_from,
+        date_to=date_to,
+        duration_minutes=duration_minutes,
+        workday_start=workday_start,
+        workday_end=workday_end,
+        limit=limit,
+        busy_rows=busy_rows,
+        candidate_slots=candidate_slots,
+        llm_reason=llm_reason,
+    )
+    return json.dumps(payload, ensure_ascii=False)
 
 
 @tool(description=DECIDE_FINAL_SLOT_DESCRIPTION, args_schema=DecideFinalSlotInput)
