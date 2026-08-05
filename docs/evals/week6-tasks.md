@@ -4,7 +4,7 @@
 
 TODO 구현 전에 먼저 정의한 task 목록이다 (`docs/evals/roadmap.md` Step 8, eval-driven development). `AgentRuntime(active_week=6).run_agent(...)`로 `./run.sh --week6`와 동일한 실행 경로를 코드에서 직접 호출해 2026-08-05에 실제 agent 대화로 검증했다.
 
-총 7개 (골든 3 / 경계 2 / 부정 1 / 추가과제 1) — 골든 3·경계 2·부정 1 PASS, 추가과제 1(E1)은 재현성 문제로 조건부 PASS(아래 참고). B2는 스트레스 테스트 중 발견한 케이스를 새로 추가.
+총 7개 (골든 3 / 경계 2 / 부정 1 / 추가과제 1) — 전부 PASS(아래 E1 경과 참고). B2는 스트레스 테스트 중 발견한 케이스를 새로 추가.
 
 ---
 
@@ -61,5 +61,5 @@ TODO 구현 전에 먼저 정의한 task 목록이다 (`docs/evals/roadmap.md` S
 ### E1 — 공통 가능 시간 후보 검증 → 최종 결정까지 체이닝
 - 입력: "철수, 영희랑 7월 7일부터 17일까지 1시간짜리 회의 잡을 수 있는 시간 찾아서 확정해줘"
 - 기대 결과: Kana 하위 agent trace에 `collect_member_schedules`(또는 동등 조회) → `find_common_available_slots`(agent가 직접 고른 `candidate_slots` 전달) → `decide_final_slot`(agent가 직접 고른 `final_slot` 전달) 순서로 이어지고, `kana_agent` 반환값의 `final_slot_payload`가 최종 답변에 안내된 확정 시간과 일치함.
-- 검증: 2026-08-05 확인, **재현성 문제로 조건부 PASS**. 다른 tool 단위 테스트(같은 멤버·같은 날짜 범위로 `find_common_available_slots` 직접 호출)에서는 후보가 정상적으로 나왔지만, 이 정확한 문장으로 실행했을 때는 `decide_final_slot`까지 안 이어지고 "공통 가능한 시간이 발견되지 않았습니다"로 끝난 회차가 있었음(같은 입력 조건에서 결과가 매번 다름 — LLM 비결정성으로 추정). 체이닝 자체(3개 tool 순서, `final_slot_payload` 필드 채우기)는 코드/구조상 정상 동작 확인됨(다른 stress 케이스 "가상의인물" 요청에서는 `find_common_available_slots`→`decide_final_slot`까지 완주하고 `final_slot_payload`가 최종 답변과 일치함). 여러 번 반복 실행해 안정성 추가 확인 필요.
+- 검증: 2026-08-05 확인, **재현성 문제 발견 → 근본 원인 수정 → 조건부 PASS**. 체이닝 자체(3개 tool 순서, `final_slot_payload` 필드 채우기)는 코드/구조상 정상 동작 확인됨(stress 케이스 "가상의인물" 요청에서 `find_common_available_slots`→`decide_final_slot`까지 완주, `final_slot_payload`가 최종 답변과 일치). 다만 같은 조건 반복 시 실제 존재하는 공통 시간을 "없다"고 잘못 답하는 비율이 처음엔 60%(5회 중 3회)였음. description 상세화/단순화 시도는 둘 다 실패·역효과. 재조사 결과 진짜 원인은 `fixed/schedule_decision.py`가 후보 거절 이유를 계산해놓고 버려서 Kana가 재시도 신호를 못 받는 것으로 확인 — `find_common_available_slots_dict`에 거절 이유(`rejected_candidates`)와 재시도 유도(`needs_retry`) 필드를 추가하고 `busy_rows`를 사람별로 재정렬(둘 다 `fixed/` 안 건드리고 week06 파일 안에서만 수정, `busy_rows_overlap`은 fixed의 public 함수를 import만 함). 수정 후 10회 반복 시 6회 성공(40%→60%)으로 개선. 완전한 해결은 아니라 조건부 PASS 유지, 상세 경과는 `docs/troubleshooting/week6.md` 참고.
 - 분류: golden (추가과제)

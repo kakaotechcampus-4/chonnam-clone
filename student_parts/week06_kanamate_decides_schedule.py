@@ -360,7 +360,10 @@ FIND_COMMON_AVAILABLE_SLOTS_DESCRIPTION = (
     "candidate_slots=[{'date': '2026-07-08', 'start_time': '11:00', 'end_time': '12:00', "
     "'duration_minutes': 60, 'reason': '철수의 10~11시 회의 직후 첫 가능 시간'}]처럼 겹치지 않는 시간대를 넣어 호출한다.\n"
     "이 tool의 결과만으로 사용자에게 최종 답변을 끝내지 마세요. 검증된 후보 중 하나를 최종 확정하려면 "
-    "반드시 decide_final_slot을 이어서 호출해야 합니다."
+    "반드시 decide_final_slot을 이어서 호출해야 합니다.\n"
+    "candidate_slots를 비운 채(빈 리스트) 이 tool을 호출하지 마세요 — busy_rows만 넘기고 "
+    "이 tool이 대신 계산해주길 기다리면 안 됩니다. 반드시 당신이 최소 1개 이상 candidate_slots를 "
+    "직접 채워서 호출해야 합니다."
 )
 
 
