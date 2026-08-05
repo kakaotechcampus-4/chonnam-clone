@@ -1,4 +1,4 @@
-.PHONY: test e2e e2e-schedule e2e-week05
+.PHONY: test e2e e2e-schedule e2e-week05 e2e-week05-update
 
 E2E_ARGS ?=
 
@@ -12,3 +12,6 @@ e2e-schedule:
 
 e2e-week05:
 	uv run python tests/e2e/week05_mcp/run_scenarios.py $(E2E_ARGS)
+
+e2e-week05-update:
+	uv run python tests/e2e/week05_mcp/run_scenarios.py --scenarios tests/e2e/week05_mcp/schedule_update_scenarios.json $(E2E_ARGS)

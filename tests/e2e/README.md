@@ -74,6 +74,23 @@ uv run python tests/e2e/week05_mcp/run_scenarios.py
 
 각 시나리오의 `PASS`는 기대한 tool 목록·순서·인자, tool result row, 답변 문구 조건이 모두 일치했다는 뜻입니다. `FAIL`은 출력에 표시된 turn의 실제 tool 호출과 기대값이 다르다는 뜻이며, prompt 또는 Week 5 tool 구현의 회귀 가능성을 의미합니다.
 
+### `make e2e-week05-update`
+
+```bash
+make e2e-week05-update
+```
+
+Week 5 일정 수집 업데이트의 TC-01/02/04/07/08/09/10/11을 각각 독립된
+시나리오로 실행합니다. 각 시나리오는 임시 DB에 개인·그룹·구버전·공유
+일정을 사전 조건으로 준비한 뒤, 실제 Week 5 agent가 `collect_member_schedules`를
+선택하는지와 tool result의 row 개수·값·members·payload key를 검증합니다.
+
+특정 TC만 실행할 수도 있습니다.
+
+```bash
+make e2e-week05-update E2E_ARGS="--only tc04-duplicate-schedule-is-collapsed"
+```
+
 ### `make e2e`
 
 ```bash
@@ -121,6 +138,7 @@ uv run python tests/e2e/week05_mcp/run_scenarios.py
 
 - `schedule/`: Week 3/4에서 저장·조회 tool을 실제로 호출하는지 검증합니다.
 - `week05_mcp/`: Week 5의 `search_previous_conversations -> extract_schedules_from_history -> load_conversation_messages` 순서, 불필요한 중복 호출, 결과 row 구조를 검증합니다.
+- `week05_mcp/schedule_update_scenarios.json`: Week 5 일정 누락·중복 제거 업데이트의 TC별 사전 DB 조건과 기대 tool result를 정의합니다.
 - 각 `scenarios.json`은 대화 turn과 기대 tool 호출·답변·DB 상태를 정의하는 test fixture입니다.
 - 각 `run_scenarios.py`는 fixture를 재생하고 trace와 DB를 검증하는 CLI 테스트 러너입니다.
 
