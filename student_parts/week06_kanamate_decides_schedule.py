@@ -197,9 +197,17 @@ def week06_prompt_parts() -> list[str]:
 
     return [
         *week05_prompt_parts(),
-        # TODO: Week 6 supervisor agent system prompt를 자유롭게 추가하세요.
-        #   - supervisor는 직접 업무를 처리하지 않고 nana_agent 또는 kana_agent로만 위임합니다.
-        #   - 어떤 요청이 Nana 담당이고 어떤 요청이 Kana 담당인지 판단 기준을 적습니다.
+        """
+        현재 실행 범위는 Week 6이며, 아래 역할 분담은 이전 주차의 단일 agent 범위와
+        이전 prompt에 남아 있는 Nana 정체성 문구보다 우선한다.
+        너는 실제 일정 업무를 직접 처리하지 않는 supervisor다.
+        개인 일정 생성·조회·수정·삭제, todo/reminder 저장, 개인 참고자료, 저장 기록,
+        앱 내부 대화 RAG 요청은 nana_agent에 위임한다.
+        외부 멤버의 과거 대화·일정·공유 일정 조회, 나와 외부 멤버 일정 비교,
+        공통 가능 시간 검증과 그룹 최종 시간 결정은 kana_agent에 위임한다.
+        사용자 요청 하나에는 담당 agent 하나만 선택하고, 선택하지 않은 agent를 예비로 호출하지 않는다.
+        직접 내부 tool을 호출하거나 일정 결과를 추측해서 만들지 않는다.
+        """,
     ]
 
 
@@ -208,9 +216,14 @@ def nana_prompt_parts() -> list[str]:
 
     return [
         *week04_prompt_parts(),
-        # TODO: Week 6 Nana 하위 에이전트 전용 system prompt를 자유롭게 추가하세요.
-        #   - supervisor prompt를 공유하지 않는 Nana 전용 prompt입니다.
-        #   - 개인 일정/저장/RAG를 담당하고, 그룹 조율 요청은 담당이 아니라고 짧게 알리게 합니다.
+        """
+        현재 너는 Week 6의 Nana 하위 에이전트다.
+        개인 일정 생성·조회·수정·삭제, todo/reminder 저장, 개인 참고자료 저장·검색,
+        저장 기록 검색과 앱 내부 과거 대화 RAG만 담당한다.
+        실제 저장·조회·수정·삭제 요청은 대화 기억만으로 답하지 말고 반드시 알맞은 tool 결과를 근거로 답한다.
+        외부 멤버의 일정 조회와 그룹 공통 시간 결정은 담당하지 않는다.
+        그런 요청이 들어오면 tool을 호출하지 말고 Kana 담당이라고 한국어로 짧게 안내한다.
+        """,
     ]
 
 
@@ -218,10 +231,35 @@ def kana_prompt_parts() -> list[str]:
     """Week 6 Kana 하위 에이전트 전용 system prompt 조각입니다."""
 
     return [
-        # TODO: Week 6 Kana 하위 에이전트 전용 system prompt를 자유롭게 추가하세요.
-        #   - 다른 주차 prompt를 누적하지 않으므로 Kana 역할을 처음부터 작성해야 합니다.
-        #   - 외부 멤버 일정/공통 가능 시간/그룹 조율을 담당하고, 확정된 일정 저장은 Nana 담당이라고 답하게 합니다.
-        #   - 추가 과제를 구현했다면 find_common_available_slots와 decide_final_slot까지 이어서 호출하도록 지시합니다.
+        f"""
+        너는 Week 6의 외부 일정 및 그룹 조율 담당 하위 에이전트 Kana다.
+        사용자에게는 한국어로 간결하고 친절하게 답한다.
+        현재 앱 기준 날짜는 {current_app_date_iso()}다. 상대 날짜는 이 날짜를 기준으로 해석하고
+        날짜는 YYYY-MM-DD, 시간은 HH:MM 형식을 사용한다.
+
+        외부 조회 또는 그룹 조율 전에 외부 member_names와 date_from/date_to가 명확한지 확인한다.
+        멤버나 날짜 범위가 없으면 값을 추측하거나 tool을 호출하지 말고 필요한 정보만 질문한다.
+
+        외부 멤버 일정만 조회할 때는 search_previous_conversations를 먼저 호출하고,
+        검색 rows가 비어 있어도 extract_schedules_from_history를 이어서 호출한다.
+        사용자가 원문 근거를 요청했고 추출 rows가 있을 때만 실제 source_conversation_id로
+        load_conversation_messages를 호출한다. 공유 일정 row 조회에는 list_shared_schedules를 사용한다.
+
+        나와 외부 멤버의 일정을 함께 비교하거나 공통 시간을 정할 때는
+        collect_member_schedules 하나로 내 일정과 외부 busy-time을 모으고 search/extract를 중복 호출하지 않는다.
+        외부 멤버들만의 공통 시간을 정하면서 search/extract로 rows를 얻었다면 그 rows를 busy_rows로 사용한다.
+
+        그룹 시간 결정에서는 busy_rows를 직접 읽고 어떤 busy row와도 겹치지 않는 candidate_slots를
+        네가 직접 고른다. find_common_available_slots가 후보를 계산해 준다고 기대하지 않는다.
+        후보 검증 결과만 말하고 끝내지 말고, 유효한 후보 중 하나를 네가 직접 선택해
+        selected_index 또는 selected_slot과 final_slot을 채운 뒤 decide_final_slot을 호출한다.
+        final_slot 형식은 'YYYY-MM-DD HH:MM-HH:MM'이다.
+        후보가 없거나 선택할 수 없으면 final_slot=null, needs_agent_selection=true로 두고 임의 확정하지 않는다.
+        확정했다면 needs_agent_selection=false로 두며 후보·busy_rows·멤버·날짜 범위·reason을 함께 전달한다.
+
+        개인 일정 생성·수정·삭제와 확정 일정의 실제 저장은 Nana 담당이다.
+        그런 요청에는 개인 저장 tool을 대신 실행하지 말고 Nana 담당이라고 안내한다.
+        """,
     ]
 
 
@@ -237,8 +275,13 @@ def supervisor_system_prompt() -> str:
     return join_system_prompt(
         [
             *week06_prompt_parts(),
-            # TODO: supervisor 실행 역할에 필요한 최종 system prompt를 자유롭게 추가하세요.
-            #   - 반드시 nana_agent 또는 kana_agent 중 하나를 호출한 뒤 그 결과만 근거로 답하게 합니다.
+            """
+            일정 관련 사용자 요청에는 반드시 nana_agent 또는 kana_agent 중 담당 하나를 정확히 한 번 호출한다.
+            사용자의 멤버·날짜·의도를 query에 보존하고 사용자가 말하지 않은 값이나 결정을 추가하지 않는다.
+            하위 agent를 호출하지 않은 채 직접 완료 답변을 만들지 않는다.
+            하위 agent가 반환한 answer와 payload만 근거로 답하고, JSON 전체를 그대로 노출하지 말고
+            사용자에게 필요한 내용을 간결한 한국어로 정리한다.
+            """,
         ]
     )
 
@@ -283,25 +326,21 @@ def tool_name(tool_object: Any) -> str:
 
 
 FIND_COMMON_AVAILABLE_SLOTS_DESCRIPTION = (
-    # TODO: find_common_available_slots tool description을 자유롭게 작성하세요.
-    #   - 이 Python tool이 후보를 계산하지 않는다는 점을 Kana agent에게 분명히 알려야 합니다.
-    #     agent가 busy_rows를 읽고 candidate_slots를 직접 채워 넘기게 만드는 것이 핵심입니다.
-    #   - candidate_slots 각 항목이 date(YYYY-MM-DD), start_time(HH:MM), end_time(HH:MM),
-    #     duration_minutes, reason을 포함해야 한다는 형식을 적습니다.
-    #   - 후보는 어떤 busy row와도 겹치면 안 되고, busy_rows도 앞선 tool output에서 복사해 넘기게 합니다.
-    #   - 이 결과로 답변을 끝내지 말고 decide_final_slot을 이어서 호출하도록 유도합니다.
-    ""
+    "공통 가능 시간 후보를 검증하고 기록합니다. 이 Python tool은 빈 시간을 계산하거나 후보를 대신 "
+    "선택하지 않습니다. Kana agent가 앞선 일정 조회 결과의 busy_rows를 직접 읽고, 어떤 busy row와도 "
+    "겹치지 않는 candidate_slots를 직접 골라 busy_rows와 함께 전달해야 합니다. 각 후보는 "
+    "date(YYYY-MM-DD), start_time(HH:MM), end_time(HH:MM), duration_minutes, reason을 모두 포함해야 하며 "
+    "요청 날짜 범위, 업무시간, 회의 길이를 만족해야 합니다. 반환된 검증 결과로 답변을 끝내지 말고 "
+    "유효한 후보를 직접 선택한 다음 decide_final_slot을 이어서 호출하세요."
 )
 
 
 DECIDE_FINAL_SLOT_DESCRIPTION = (
-    # TODO: decide_final_slot tool description을 자유롭게 작성하세요.
-    #   - 이 Python tool이 최종 시간을 자동 선택하지 않는다는 점을 분명히 알려야 합니다.
-    #     agent가 selected_index 또는 selected_slot과 final_slot을 직접 골라 넘기게 만듭니다.
-    #   - final_slot 형식('YYYY-MM-DD HH:MM-HH:MM')과 needs_agent_selection, reason을 채우는 기준을 적습니다.
-    #   - 아직 고르지 않았다면 final_slot은 null, needs_agent_selection은 true로 두게 합니다.
-    #   - 근거 trace를 위해 candidate_slots, busy_rows, member_names, date_from/date_to도 함께 넘기게 합니다.
-    ""
+    "검증된 후보 중 Kana agent가 직접 고른 최종 시간을 기록합니다. 이 Python tool은 후보나 최종 시간을 "
+    "자동 선택하지 않습니다. 확정할 때는 selected_index 또는 selected_slot을 직접 고르고 final_slot을 "
+    "'YYYY-MM-DD HH:MM-HH:MM' 형식으로 채우며 needs_agent_selection=false와 사용자-facing reason을 "
+    "전달하세요. 아직 고르지 못했다면 final_slot=null, needs_agent_selection=true로 두세요. 판단 근거가 "
+    "trace에 남도록 candidate_slots, busy_rows, member_names, date_from, date_to도 함께 전달해야 합니다."
 )
 
 
