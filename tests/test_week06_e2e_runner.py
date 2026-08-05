@@ -104,6 +104,19 @@ class Week06E2ERunnerTest(unittest.TestCase):
         self.assertFalse(RUNNER.should_skip_turn(dependent, False))
         self.assertFalse(RUNNER.should_skip_turn(independent, True))
 
+    def test_failed_retry_without_required_tools_remains_a_real_failure(self):
+        failures = RUNNER.check_inner_tools(
+            {
+                "expect_inner_order": [
+                    "extract_schedule_request",
+                    "personal_create_schedule",
+                ]
+            },
+            [],
+        )
+
+        self.assertTrue(any("내부 tool 순서 불일치" in item for item in failures))
+
     def test_scenarios_cover_required_week06_workflows(self):
         scenarios = json.loads(SCENARIOS_PATH.read_text(encoding="utf-8"))
         ids = {scenario["id"] for scenario in scenarios}

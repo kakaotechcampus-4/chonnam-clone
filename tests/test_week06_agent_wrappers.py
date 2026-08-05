@@ -71,7 +71,153 @@ class Week06AgentWrapperTest(unittest.TestCase):
         self.assertEqual(first["selected_agent"], "nana_agent")
         self.assertEqual(first["answer"], "내 일정을 확인했습니다.")
         self.assertEqual(first["inner_tool_names"], ["personal_list_saved_schedules"])
+        self.assertEqual(first["retry_count"], 0)
         self.assertEqual(second["selected_agent"], "nana_agent")
+
+    @patch.object(week06, "extract_final_text", return_value="일정을 저장했습니다.")
+    @patch.object(week06, "extract_agent_events")
+    @patch.object(week06, "chat_model", return_value="model")
+    @patch.object(week06, "create_agent")
+    def test_nana_agent_retries_missing_mutation_once_and_merges_trace(
+        self,
+        create_agent,
+        _chat_model,
+        extract_events,
+        _extract_text,
+    ):
+        subagent = Mock()
+        first_result = {"attempt": 1}
+        retry_result = {"attempt": 2}
+        subagent.invoke.side_effect = [first_result, retry_result]
+        create_agent.return_value = subagent
+        retry_events = [
+            {"event": "tool_call", "tool_name": "extract_schedule_request"},
+            {"event": "tool_result", "tool_name": "extract_schedule_request", "content": {"ok": True}},
+            {"event": "tool_call", "tool_name": "personal_create_schedule"},
+            {"event": "tool_result", "tool_name": "personal_create_schedule", "content": {"ok": True}},
+        ]
+        extract_events.side_effect = [[], retry_events]
+
+        payload = json.loads(
+            week06.nana_agent.invoke(
+                {
+                    "query": (
+                        "2026년 8월 10일 15시부터 16시까지 테스트 회의를 "
+                        "내 일정에 등록해줘."
+                    )
+                }
+            )
+        )
+
+        self.assertEqual(subagent.invoke.call_count, 2)
+        retry_query = subagent.invoke.call_args_list[1].args[0]["messages"][0]["content"]
+        self.assertIn("원래 사용자 요청", retry_query)
+        self.assertIn(
+            "extract_schedule_request -> personal_create_schedule",
+            retry_query,
+        )
+        self.assertEqual(payload["retry_count"], 1)
+        self.assertEqual(
+            payload["inner_tool_names"],
+            ["extract_schedule_request", "personal_create_schedule"],
+        )
+
+    @patch.object(week06, "extract_final_text", return_value="완료")
+    @patch.object(week06, "extract_agent_events")
+    @patch.object(week06, "chat_model", return_value="model")
+    @patch.object(week06, "create_agent")
+    def test_nana_agent_does_not_retry_after_mutation_or_known_empty_lookup(
+        self,
+        create_agent,
+        _chat_model,
+        extract_events,
+        _extract_text,
+    ):
+        subagent = Mock()
+        subagent.invoke.return_value = {"result": "nana"}
+        create_agent.return_value = subagent
+        extract_events.side_effect = [
+            [
+                {
+                    "event": "tool_result",
+                    "tool_name": "personal_create_schedule",
+                    "content": {"ok": True},
+                },
+            ],
+            [
+                {"event": "tool_call", "tool_name": "personal_list_saved_schedules"},
+                {
+                    "event": "tool_result",
+                    "tool_name": "personal_list_saved_schedules",
+                    "content": {"ok": True, "schedules": []},
+                },
+            ],
+        ]
+
+        created = json.loads(
+            week06.nana_agent.invoke(
+                {
+                    "query": (
+                        "2026년 8월 10일 15시부터 16시까지 테스트 회의를 "
+                        "내 일정에 등록해줘."
+                    )
+                }
+            )
+        )
+        deleted = json.loads(
+            week06.nana_agent.invoke(
+                {"query": "2026년 8월 10일 테스트 회의를 삭제해줘."}
+            )
+        )
+
+        self.assertEqual(subagent.invoke.call_count, 2)
+        self.assertEqual(created["retry_count"], 0)
+        self.assertEqual(deleted["retry_count"], 0)
+
+    @patch.object(week06, "extract_final_text", return_value="도구 없이 종료")
+    @patch.object(week06, "extract_agent_events", side_effect=[[], []])
+    @patch.object(week06, "chat_model", return_value="model")
+    @patch.object(week06, "create_agent")
+    def test_nana_agent_stops_after_one_failed_retry(
+        self,
+        create_agent,
+        _chat_model,
+        _extract_events,
+        _extract_text,
+    ):
+        subagent = Mock()
+        subagent.invoke.side_effect = [{"attempt": 1}, {"attempt": 2}]
+        create_agent.return_value = subagent
+
+        payload = json.loads(
+            week06.nana_agent.invoke(
+                {"query": "2026년 8월 10일까지 Week 6 과제 제출을 할 일로 저장해줘."}
+            )
+        )
+
+        self.assertEqual(subagent.invoke.call_count, 2)
+        self.assertEqual(payload["retry_count"], 1)
+        self.assertEqual(payload["inner_tool_names"], [])
+
+    def test_nana_retry_plan_requires_explicit_complete_mutation_input(self):
+        self.assertEqual(
+            week06._nana_mutation_retry_plan(
+                "2026년 8월 10일 15시부터 16시까지 테스트 회의를 내 일정에 등록해줘."
+            ),
+            (
+                "personal_create_schedule",
+                ("extract_schedule_request", "personal_create_schedule"),
+            ),
+        )
+        self.assertEqual(
+            week06._nana_mutation_retry_plan(
+                "2026년 8월 10일 테스트 회의를 17시부터 18시까지로 수정해줘."
+            )[0],
+            "personal_update_saved_schedule",
+        )
+        self.assertIsNone(
+            week06._nana_mutation_retry_plan("내일 3시에 회의 등록해줘.")
+        )
 
     @patch.object(week06, "extract_final_text", return_value="최종 시간을 정했습니다.")
     @patch.object(week06, "extract_agent_events")

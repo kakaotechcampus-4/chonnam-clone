@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from langchain.agents import create_agent
@@ -597,9 +598,80 @@ def propose_group_schedule(
     return json.dumps({"ok": True, "tool_name": "propose_group_schedule", "final_decision": payload}, ensure_ascii=False)
 
 
+_EXPLICIT_DATE_PATTERN = re.compile(r"(?:\d{4}년\s*\d{1,2}월\s*\d{1,2}일|\d{4}-\d{1,2}-\d{1,2})")
+_TIME_RANGE_PATTERN = re.compile(
+    r"(?:\d{1,2}(?::\d{2}|시)(?:\s*\d{1,2}분)?).*?부터.*?"
+    r"(?:\d{1,2}(?::\d{2}|시)(?:\s*\d{1,2}분)?).*?까지"
+)
+
+
+def _nana_mutation_retry_plan(query: str) -> tuple[str, tuple[str, ...]] | None:
+    """명시 필드가 충분한 Nana mutation 요청만 보수적으로 재시도 대상으로 분류합니다."""
+
+    normalized = " ".join(str(query).split())
+    has_date = _EXPLICIT_DATE_PATTERN.search(normalized) is not None
+    has_time_range = _TIME_RANGE_PATTERN.search(normalized) is not None
+    if not has_date:
+        return None
+    if any(word in normalized for word in ("삭제", "지워", "제거")):
+        return (
+            "personal_delete_saved_schedules",
+            ("personal_list_saved_schedules", "personal_delete_saved_schedules"),
+        )
+    if any(word in normalized for word in ("수정", "변경", "옮겨", "바꿔")) and has_time_range:
+        return (
+            "personal_update_saved_schedule",
+            ("personal_list_saved_schedules", "personal_update_saved_schedule"),
+        )
+    if "할 일" in normalized or "할일" in normalized or "알림" in normalized or "리마인더" in normalized:
+        if any(word in normalized for word in ("저장", "등록", "추가", "기억")):
+            return (
+                "save_structured_request",
+                ("extract_schedule_request", "save_structured_request"),
+            )
+    is_personal_create = (
+        any(word in normalized for word in ("내 일정", "개인 일정"))
+        and any(word in normalized for word in ("등록", "저장", "추가", "생성", "잡아"))
+        and has_time_range
+        and "참고자료" not in normalized
+    )
+    if is_personal_create:
+        return (
+            "personal_create_schedule",
+            ("extract_schedule_request", "personal_create_schedule"),
+        )
+    return None
+
+
+def _known_empty_schedule_lookup(events: list[dict[str, Any]]) -> bool:
+    """수정·삭제 선행 조회가 성공했고 후보가 명확히 비었는지 확인합니다."""
+
+    for event in reversed(events):
+        if event.get("event") != "tool_result" or event.get("tool_name") != "personal_list_saved_schedules":
+            continue
+        content = event.get("content")
+        return isinstance(content, dict) and content.get("ok") is not False and content.get("schedules") == []
+    return False
+
+
+def _nana_retry_instruction(query: str, sequence: tuple[str, ...]) -> str:
+    sequence_text = " -> ".join(sequence)
+    return (
+        f"원래 사용자 요청:\n{query}\n\n"
+        "이전 실행이 필요한 mutation tool 결과 없이 종료되었습니다. 같은 요청을 한 번만 다시 수행하세요. "
+        f"필수 값이 충분하면 {sequence_text} 순서를 끝까지 실행하고 마지막 mutation tool 결과를 받은 뒤에만 "
+        "완료 답변을 만드세요. 필수 값이 실제로 부족하면 추측하거나 mutation하지 말고 부족한 값만 질문하세요."
+    )
+
+
 @tool(args_schema=AgentQueryInput)
 def nana_agent(query: str) -> str:
-    """개인 일정과 개인 RAG 작업을 프롬프트 기반 Nana 하위 에이전트에게 위임합니다."""
+    """개인 일정과 개인 RAG 작업을 self-contained query로 Nana에게 위임합니다.
+
+    query에는 원래 멤버·날짜·시간·생성/수정/삭제/검색 의도를 보존합니다. 명시 필드가
+    충분한 mutation 요청이 mutation tool 없이 끝나면, 이미 mutation이 실행되지 않았고
+    조회 후보가 명확히 빈 경우도 아닐 때에만 교정 지시로 안전하게 한 번 재시도합니다.
+    """
 
     global _NANA_SUBAGENT
     if _NANA_SUBAGENT is None:
@@ -613,11 +685,40 @@ def nana_agent(query: str) -> str:
         {"messages": [{"role": "user", "content": query}]}
     )
     events = extract_agent_events(result)
+    retry_count = 0
+    retry_plan = _nana_mutation_retry_plan(query)
+    if retry_plan is not None:
+        mutation_tool, required_sequence = retry_plan
+        observed_tools = {
+            event.get("tool_name")
+            for event in events
+            if event.get("event") in {"tool_call", "tool_result"}
+        }
+        lookup_is_empty = (
+            mutation_tool in {"personal_update_saved_schedule", "personal_delete_saved_schedules"}
+            and _known_empty_schedule_lookup(events)
+        )
+        if mutation_tool not in observed_tools and not lookup_is_empty:
+            retry_count = 1
+            retry_result = _NANA_SUBAGENT.invoke(
+                {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": _nana_retry_instruction(query, required_sequence),
+                        }
+                    ]
+                }
+            )
+            retry_events = extract_agent_events(retry_result)
+            events = [*events, *retry_events]
+            result = retry_result
     payload = {
         "selected_agent": "nana_agent",
         "answer": extract_final_text(result),
         "trace": events,
         "inner_tool_names": _tool_call_names(events),
+        "retry_count": retry_count,
     }
     return json.dumps(payload, ensure_ascii=False)
 
