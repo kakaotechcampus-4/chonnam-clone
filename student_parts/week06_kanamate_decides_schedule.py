@@ -287,8 +287,14 @@ def supervisor_system_prompt() -> str:
     return join_system_prompt(
         [
             *week06_prompt_parts(),
-            # TODO: supervisor 실행 역할에 필요한 최종 system prompt를 자유롭게 추가하세요.
-            #   - 반드시 nana_agent 또는 kana_agent 중 하나를 호출한 뒤 그 결과만 근거로 답하게 합니다.
+            """
+            너는 직접 답변을 만들어내지 않는다. 사용자 요청마다 반드시 nana_agent 또는
+            kana_agent 중 하나 이상을 호출하고, 그 결과로 받은 answer만을 근거로 최종 답변을 구성한다.
+            하위 에이전트 결과에 없는 내용을 지어내지 않는다.
+
+            하위 에이전트가 반환한 JSON에 final_slot_payload 또는 final_decision_payload가 있으면
+            그 값을 최종 답변에 반영해 사용자가 확정된 시간을 알 수 있게 한다.
+            """,
         ]
     )
 
