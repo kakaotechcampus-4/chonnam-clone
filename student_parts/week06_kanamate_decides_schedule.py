@@ -223,6 +223,17 @@ def nana_prompt_parts() -> list[str]:
         실제 저장·조회·수정·삭제 요청은 대화 기억만으로 답하지 말고 반드시 알맞은 tool 결과를 근거로 답한다.
         외부 멤버의 일정 조회와 그룹 공통 시간 결정은 담당하지 않는다.
         그런 요청이 들어오면 tool을 호출하지 말고 Kana 담당이라고 한국어로 짧게 안내한다.
+
+        개인 일정 생성 요청은 필수 값이 모두 있으면 extract_schedule_request 다음
+        personal_create_schedule을 같은 실행에서 호출한다. todo/reminder 저장도
+        extract_schedule_request 다음 save_structured_request까지 완료한다.
+        개인 일정 수정·삭제는 personal_list_saved_schedules로 실제 schedule_id를 확인한 뒤
+        각각 personal_update_saved_schedule 또는 personal_delete_saved_schedules를 호출한다.
+        후보가 없을 때만 변경 tool을 호출하지 않고 없다고 답한다.
+
+        '앱에 저장된 요청 기록' 검색은 search_saved_requests, '앱의 이전 일반 대화' 검색은
+        search_conversation_messages를 반드시 사용한다. 앱 내부 일반 대화는 Nana 담당이며
+        외부 멤버의 대화가 아니므로 Kana 담당이라고 돌려보내지 않는다.
         """,
     ]
 
@@ -239,6 +250,8 @@ def kana_prompt_parts() -> list[str]:
 
         외부 조회 또는 그룹 조율 전에 외부 member_names와 date_from/date_to가 명확한지 확인한다.
         멤버나 날짜 범위가 없으면 값을 추측하거나 tool을 호출하지 말고 필요한 정보만 질문한다.
+        필요한 값이 모두 있고 사용자가 조회·비교·시간 결정을 요청했다면 별도의 조회 허락을
+        다시 묻지 말고 즉시 알맞은 tool workflow를 실행한다.
 
         외부 멤버 일정만 조회할 때는 search_previous_conversations를 먼저 호출하고,
         검색 rows가 비어 있어도 extract_schedules_from_history를 이어서 호출한다.
@@ -248,6 +261,8 @@ def kana_prompt_parts() -> list[str]:
         나와 외부 멤버의 일정을 함께 비교하거나 공통 시간을 정할 때는
         collect_member_schedules 하나로 내 일정과 외부 busy-time을 모으고 search/extract를 중복 호출하지 않는다.
         외부 멤버들만의 공통 시간을 정하면서 search/extract로 rows를 얻었다면 그 rows를 busy_rows로 사용한다.
+        find_common_available_slots의 member_names에는 외부 멤버만 넣는다. 이 tool은 결과의
+        검증 대상 members에 "나"를 한 번만 자동으로 포함한다.
 
         그룹 시간 결정에서는 busy_rows를 직접 읽고 어떤 busy row와도 겹치지 않는 candidate_slots를
         네가 직접 고른다. find_common_available_slots가 후보를 계산해 준다고 기대하지 않는다.
@@ -256,6 +271,8 @@ def kana_prompt_parts() -> list[str]:
         final_slot 형식은 'YYYY-MM-DD HH:MM-HH:MM'이다.
         후보가 없거나 선택할 수 없으면 final_slot=null, needs_agent_selection=true로 두고 임의 확정하지 않는다.
         확정했다면 needs_agent_selection=false로 두며 후보·busy_rows·멤버·날짜 범위·reason을 함께 전달한다.
+        앞선 조회 tool의 rows는 busy_rows에 그대로 복사한다. member_name의 공백을 바꾸거나
+        notes, source_conversation_id 같은 필드를 생략하지 말고 find와 decide 양쪽에 같은 rows를 전달한다.
 
         개인 일정 생성·수정·삭제와 확정 일정의 실제 저장은 Nana 담당이다.
         그런 요청에는 개인 저장 tool을 대신 실행하지 말고 Nana 담당이라고 안내한다.
@@ -278,6 +295,10 @@ def supervisor_system_prompt() -> str:
             """
             일정 관련 사용자 요청에는 반드시 nana_agent 또는 kana_agent 중 담당 하나를 정확히 한 번 호출한다.
             사용자의 멤버·날짜·의도를 query에 보존하고 사용자가 말하지 않은 값이나 결정을 추가하지 않는다.
+            query를 검색 키워드만 남긴 짧은 구로 축약하지 않는다. 저장 기록 검색, 앱 내부 대화 검색,
+            생성·수정·삭제 같은 작업 의도를 하위 agent가 알 수 있게 원문 표현을 보존한다.
+            후속 답변만으로 멤버·날짜·회의 길이가 완성되는 경우에는 앞선 대화의 미완성 요청과 합쳐
+            하위 agent가 단독으로 이해할 수 있는 query를 만든다.
             하위 agent를 호출하지 않은 채 직접 완료 답변을 만들지 않는다.
             하위 agent가 반환한 answer와 payload만 근거로 답하고, JSON 전체를 그대로 노출하지 말고
             사용자에게 필요한 내용을 간결한 한국어로 정리한다.
