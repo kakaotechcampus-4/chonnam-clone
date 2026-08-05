@@ -16,6 +16,7 @@ from fixed.external_people_store import (
     external_schedule_summary,
     normalize_external_member_names,
     normalize_external_schedule_date_bounds,
+    strip_parenthetical_text,
 )
 from fixed.llm import chat_model
 from fixed.mcp_client import (
@@ -407,8 +408,23 @@ class CollectMemberSchedulesInput(BaseModel):
 def _structured_request_from_schedule_row(row: dict[str, Any]) -> StructuredRequest:
     """앱 일정 row를 Week 2 StructuredRequest 기준으로 읽습니다."""
 
+    """kind를 고정값으로 두지 않고 row에서 읽는 이유.
+
+    1. row에 일정 종류가 들어 있다.
+       fixed/store_base.py:44의 SCHEDULE_COLUMNS_WITH_KIND가 structured_requests
+       테이블의 kind를 request_kind 컬럼으로 함께 조회하므로, list_schedules
+       결과 row만으로 개인 일정과 그룹 일정을 구분할 수 있다.
+
+    2. 고정하면 그룹 일정이 개인 일정으로 읽힌다.
+       _my_schedule_notes()가 request.kind로 notes 문구를 정한다. 값을
+       "personal_schedule"로 고정하면 참석자가 있는 그룹 일정도 개인 일정으로
+       표시되고, 참석자 정보가 rows에서 사라진다.
+
+    3. Week 1 임시 일정 row에는 이 값이 없다.
+       PERSONAL_SCHEDULES 항목은 request_kind를 가지지 않으므로 개인 일정으로 본다.
+    """
     return StructuredRequest(
-        kind="personal_schedule",
+        kind="group_schedule" if row.get("request_kind") == "group_schedule" else "personal_schedule",
         title=row.get("title"),
         date=row.get("date"),
         start_time=row.get("start_time"),
@@ -446,6 +462,15 @@ def _row_in_date_range(date_text: Any, date_from: str, date_to: str) -> bool:
     return True
 
 
+def _my_schedule_notes(request: StructuredRequest) -> str:
+    """내 일정 row가 개인 일정인지, 참석자가 있는 그룹 일정인지 설명합니다."""
+
+    if request.kind != "group_schedule":
+        return "Nana 개인 일정"
+    members = [str(member).strip() for member in (request.members or []) if str(member).strip()]
+    return f"Nana 그룹 일정 · 참석자: {', '.join(members)}" if members else "Nana 그룹 일정"
+
+
 def _personal_schedule_row(schedule: dict[str, Any]) -> dict[str, Any]:
     """내 일정 row를 외부 멤버 row와 같은 필드 구조로 변환합니다."""
 
@@ -461,21 +486,64 @@ def _personal_schedule_row(schedule: dict[str, Any]) -> dict[str, Any]:
        Week 6에서 두 출처의 row를 같은 사람으로 인식할 수 있다.
        상수는 fixed/external_people_store.py의 PERSONAL_SHARED_MEMBER_NAME이다.
 
-    3. notes에는 출처를 기록한다.
-       앱 일정 row에는 notes 필드가 없다. 대신 이 row가 SQLite 저장 일정인지
-       현재 대화 임시 일정인지 적어 두면, LLM 답변과 trace 확인에서 두 출처를
-       구분할 수 있다. schedule_id가 있으면 저장 일정, 없으면 임시 일정이다.
+    3. notes에는 일정 종류와 참석자를 기록한다.
+       앱 일정 row에는 notes 필드가 없다. 대신 이 row가 개인 일정인지 참석자가 있는
+       그룹 일정인지 적어 두면, LLM이 답변에서 두 종류를 구분해 설명할 수 있다.
+       문구는 _my_schedule_notes()가 request.kind와 request.members로 만든다.
     """
     request = _structured_request_from_schedule_row(schedule)
-    source_note = "앱 SQLite 저장 일정" if schedule.get("schedule_id") else "현재 대화 임시 일정"
     return {
         "member_name": PERSONAL_SHARED_MEMBER_NAME,
         "title": request.title or "제목 없음",
         "date": request.date,
         "start_time": request.start_time or "미정",
         "end_time": request.end_time or "미정",
-        "notes": source_note,
+        "notes": _my_schedule_notes(request),
     }
+
+
+def _dedupe_schedule_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """같은 일정이 두 경로로 들어와도 rows에 한 번만 남깁니다."""
+
+    """비교 키를 값 그대로 두지 않는 이유와, 이 함수가 걸러내는 범위.
+
+    1. 앱 DB 경로와 공유 저장소 경로가 같은 일정을 서로 다르게 다듬는다.
+       공유 저장소는 등록 시점에 제목에서 소괄호와 그 안의 내용을 제거하고 연속
+       공백을 하나로 줄인다(fixed/external_people_store.py:88
+       strip_parenthetical_text). 앱 DB row는 제목 원문을 그대로 둔다. 그래서 값을
+       그대로 비교하면 "팀 회의 (온라인)"과 "팀 회의"가 서로 다른 일정으로 남는다.
+
+    2. end_time은 키에서 뺀다.
+       공유 저장소는 종료 시간이 비어 있으면 "미정"을 채우고, 앱 DB 경로는 저장
+       당시 값을 그대로 둔다. 두 값을 서로 되돌릴 수 없으므로 비교 대상에서
+       제외하고, 같은 사람이 같은 날 같은 시각에 시작하는 같은 제목의 일정은
+       하나로 판정한다.
+
+    3. start_time이 비어 있으면 "미정"으로 맞춘다.
+       공유 저장소가 빈 시작 시간을 "미정"으로 저장하므로 같은 값으로 맞춘다.
+
+    4. 걸러내는 범위는 호출부의 조회 조건에 따라 달라진다.
+       _collect_member_schedules는 외부 조회 대상에서 "나"를 이미 제외하므로,
+       현재 구현에서 내 일정이 두 경로로 함께 들어오는 경우는 없다. 이 함수는
+       한 출처 안에 같은 일정이 두 번 들어온 경우를 걸러내고, 외부 조회 조건이
+       바뀌어 "나" row가 다시 들어오면 그 중복도 같은 기준으로 판정한다.
+
+    5. 앞에 오는 row를 남긴다.
+       dict은 넣은 순서를 유지하고 setdefault는 이미 있는 키를 덮어쓰지 않는다.
+       호출부가 내 일정 row를 외부 row보다 앞에 두므로, 남는 row의 notes는
+       _my_schedule_notes()가 만든 문구가 된다.
+    """
+
+    deduped: dict[tuple[str, ...], dict[str, Any]] = {}
+    for row in rows:
+        key = (
+            str(row.get("member_name") or "").strip(),
+            str(row.get("date") or "").strip(),
+            str(row.get("start_time") or "").strip() or "미정",
+            strip_parenthetical_text(str(row.get("title") or "")),
+        )
+        deduped.setdefault(key, row)
+    return list(deduped.values())
 
 
 # 종료 시간이 확정되지 않은 row의 end_time 값입니다.
@@ -622,11 +690,11 @@ def _collect_member_schedules(
 
 
       ┌──────────────────────────────────────────────┐
-      │ collect_member_schedules                     │  이 파일 863
+      │ collect_member_schedules                     │  이 파일 1102
       └───────────────────────┬──────────────────────┘
                               ▼
       ┌──────────────────────────────────────────────┐
-      │ _personal_schedules_for_current_scope        │  이 파일 285
+      │ _personal_schedules_for_current_scope        │  이 파일 271
       └───────────────────────┬──────────────────────┘
                               ▼
                              ___
@@ -635,15 +703,15 @@ def _collect_member_schedules(
                               │
                               ▼
       ┌──────────────────────────────────────────────┐
-      │ _collect_member_schedules                    │  이 파일 511
+      │ _collect_member_schedules                    │  이 파일 671
       └──────┬────────────────────────────────┬──────┘
              │ 내 일정                          │ 외부 멤버 일정
              ▼                                ▼
       ┌────────────────────────┐       ┌──────────────────────────┐
-      │ _personal_schedule_row │ 479   │ call_mcp_tool_sync(      │
-      │ _row_in_date_range     │ 451   │  "extract_schedules_     │
-      └──────────┬─────────────┘       │   from_history", args)   │
-                 │                     └────────────┬─────────────┘
+      │ _personal_schedule_row │ 474   │ _fetch_external_         │ 598
+      │ _my_schedule_notes     │ 465   │  schedule_rows(...)      │
+      │ _row_in_date_range     │ 437   │                          │
+      └──────────┬─────────────┘       └────────────┬─────────────┘
                  │                              .-~-▼-~-~-~-~-~-.
                  │                             ( ☁ MCP 서버 호출  )
                  │                              `-~-~-~-┬-~-~-~-'
@@ -651,7 +719,7 @@ def _collect_member_schedules(
                  │                             ┌──────────────────────┐
                  │                             │ @mcp.tool 구현        │
                  │                             │ mcp_server/sqlite_   │
-                 │                             │ mcp_server.py:53     │
+                 │                             │ mcp_server.py:51     │
                  │                             └──────────┬───────────┘
                  │                                        ▼
                  │                                       ___
@@ -663,6 +731,10 @@ def _collect_member_schedules(
                                  ▼
       ( {member_name, title, date, start_time, end_time, notes}, ... )
                                  ▼
+      ┌──────────────────────────────────────────────┐
+      │ _dedupe_schedule_rows(rows)                  │  이 파일 505
+      └──────────────────────┬───────────────────────┘
+                             ▼
       ┌──────────────────────────────────────────────┐
       │ external_schedule_summary(rows)              │  fixed/external_people_store.py:134
       └──────────────────────┬───────────────────────┘
@@ -713,7 +785,12 @@ def _collect_member_schedules(
            try 안에 남은 것은 프로세스 경계를 넘는 두 줄뿐이고, 응답 구조 확인은
            타입 검사로 분리했다. 근거는 _fetch_external_schedule_rows에 있다.
 
-    6. 날짜, 시작 시간, 이름 순으로 정렬한다.
+    6. 두 출처를 합친 뒤 중복을 한 번 걸러낸다.
+       내 일정 row를 외부 row보다 앞에 두고 _dedupe_schedule_rows에 넘긴다.
+       이 함수는 앞에 오는 row를 남기므로, 순서를 바꾸면 남는 row의 notes가
+       공유 저장소 쪽 문구가 된다. 판정 기준은 _dedupe_schedule_rows에 적었다.
+
+    7. 날짜, 시작 시간, 이름 순으로 정렬한다.
        외부 store의 조회 순서와 같은 기준으로 맞춰, 두 출처를 합친 뒤에도
        읽는 순서가 일정하게 유지되도록 한다.
     """
@@ -743,13 +820,24 @@ def _collect_member_schedules(
             date_to=normalized_date_to,
         )
 
-    rows = [*personal_rows, *external_rows]
+    rows = _dedupe_schedule_rows([*personal_rows, *external_rows])
     rows.sort(
         key=lambda row: (
             str(row.get("date") or ""),
             str(row.get("start_time") or ""),
             str(row.get("member_name") or ""),
         )
+    )
+
+    """출처별 row 개수를 조회 결과가 아니라 rows에서 다시 세는 이유.
+
+    _dedupe_schedule_rows가 row를 제거할 수 있으므로 조회 단계의 개수를 그대로
+    담으면 두 값의 합이 len(rows)와 어긋난다. 내 일정 row의 member_name은 항상
+    PERSONAL_SHARED_MEMBER_NAME이고 외부 조회 대상에서는 이 이름을 제외하므로,
+    남은 rows를 member_name으로 나누면 두 출처를 구분할 수 있다.
+    """
+    personal_row_count = sum(
+        1 for row in rows if row.get("member_name") == PERSONAL_SHARED_MEMBER_NAME
     )
 
     """종료 시간 미확정 일정을 payload 항목으로 따로 담는 이유.
@@ -777,8 +865,8 @@ def _collect_member_schedules(
         "external_member_names": external_member_names,
         "date_from": normalized_date_from,
         "date_to": normalized_date_to,
-        "personal_row_count": len(personal_rows),
-        "external_row_count": len(external_rows),
+        "personal_row_count": personal_row_count,
+        "external_row_count": len(rows) - personal_row_count,
         "unknown_end_time_count": len(unknown_end_time_rows),
         "unknown_end_time_rows": unknown_end_time_rows,
         "rows": rows,
