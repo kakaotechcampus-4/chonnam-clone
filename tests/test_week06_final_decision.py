@@ -83,6 +83,7 @@ class Week06FinalDecisionTest(unittest.TestCase):
         self.assertIsNone(payload["final_slot"])
         self.assertTrue(payload["needs_agent_selection"])
         self.assertEqual(payload["candidates"], [])
+        self.assertEqual(payload["candidate_slots"], [])
         self.assertIn("찾지 못했습니다", payload["reason"])
 
     def test_out_of_range_index_does_not_select(self):
