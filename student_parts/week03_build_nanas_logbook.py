@@ -461,7 +461,9 @@ def save_structured_request(
     """todo/reminder 등 구조화 요청을 실제 SQLite에 저장하는 최종 mutation tool입니다.
 
     extract_schedule_request 결과를 인자에 그대로 옮겨 호출하고, 이 tool의 성공 결과를
-    받기 전에는 저장됐다고 최종 답변하지 않습니다.
+    받기 전에는 저장됐다고 최종 답변하지 않습니다. todo는 제목과 날짜만 명시돼도 저장하며
+    start_time/end_time은 선택 값입니다. reminder도 사용자가 말한 시각만 채우고, 말하지 않은
+    선택 값을 다시 묻느라 저장 workflow를 중단하지 않습니다.
     """
 
     request = SaveStructuredRequestInput(
