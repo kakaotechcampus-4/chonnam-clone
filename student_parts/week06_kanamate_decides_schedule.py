@@ -18,7 +18,9 @@ from fixed.schedule_decision import (
     normalize_date_bound,
 )
 from student_parts.week01_wake_up_nana import join_system_prompt
-from student_parts.week02_structure_natural_language_requests import extract_schedule_request
+from student_parts.week02_structure_natural_language_requests import (
+    extract_schedule_request,
+)
 from student_parts.week04_retrieve_nanas_memory import week04_prompt_parts, week04_tools
 from student_parts.week05_load_kanas_past_conversations import (
     collect_member_schedules,
@@ -28,7 +30,6 @@ from student_parts.week05_load_kanas_past_conversations import (
     search_previous_conversations,
     week05_prompt_parts,
 )
-
 
 _NANA_SUBAGENT: Any | None = None
 _KANA_SUBAGENT: Any | None = None
@@ -200,6 +201,17 @@ def week06_prompt_parts() -> list[str]:
         # TODO: Week 6 supervisor agent system prompt를 자유롭게 추가하세요.
         #   - supervisor는 직접 업무를 처리하지 않고 nana_agent 또는 kana_agent로만 위임합니다.
         #   - 어떤 요청이 Nana 담당이고 어떤 요청이 Kana 담당인지 판단 기준을 적습니다.
+        "supervisor는 직접 일정을 조회/저장/조율하지 않는다. 반드시 nana_agent 또는 kana_agent 중 하나를 호출해 위임하고, 그 결과만 근거로 답한다.",
+        "위임 대상을 정할 때는 다음 순서로 생각한다:",
+        "1) 요청이 '나' 혼자만의 개인 일정 조회/생성/수정/삭제, 할 일/알림 저장, 개인 참고자료·앱 대화 RAG를 가리키는지 본다 → 맞으면 nana_agent.",
+        "2) 외부 멤버(철수/영희 등)가 등장하거나 여러 사람의 공통 시간을 맞추거나 공유 일정 저장소/외부 이전 대화를 다루는지 본다 → 맞으면 kana_agent.",
+        "3) 판단이 애매하면 지금 실제로 수행할 동작이 무엇인지로 다시 고른다(저장/조회는 Nana, 외부 정보 조회·시간 조율은 Kana).",
+        "'내일 오후 3시에 치과 예약 일정 추가해줘' → nana_agent(query='내일 오후 3시에 치과 예약 일정 추가해줘') (개인 일정 저장, 외부 멤버 없음)",
+        "'철수랑 영희 7월 7일부터 17일까지 일정 좀 알려줘' → kana_agent(query='철수랑 영희 7월 7일부터 17일까지 일정 좀 알려줘') (외부 멤버 일정 조회)",
+        "'철수, 영희랑 다같이 시간 되는 때 찾아줘' → kana_agent(query='철수, 영희랑 다같이 시간 되는 때 찾아줘') (여러 명의 공통 시간 조율)",
+        "(그룹 시간 조율이 끝난 뒤) '방금 정해진 시간으로 내 캘린더에도 저장해줘' → nana_agent(query='방금 정해진 시간으로 내 캘린더에도 저장해줘') (직전 대화가 Kana 담당이었어도, 이번 요청의 실제 동작은 개인 일정 저장이므로 Nana로 위임한다)",
+        "한 번의 발화에 두 역할이 섞여 있으면(예: '내 일정도 보여주고 철수랑 시간도 맞춰줘') 먼저 필요한 쪽 하나만 호출하고, 아직 처리하지 못한 부분이 있다고 답변에 안내한 뒤 다음 턴에 나머지를 처리한다.",
+        "인사말이나 위 상황과 무관한 일반 잡담에는 nana_agent/kana_agent 중 어느 것도 호출하지 않는다.",
     ]
 
 
@@ -208,9 +220,18 @@ def nana_prompt_parts() -> list[str]:
 
     return [
         *week04_prompt_parts(),
-        # TODO: Week 6 Nana 하위 에이전트 전용 system prompt를 자유롭게 추가하세요.
-        #   - supervisor prompt를 공유하지 않는 Nana 전용 prompt입니다.
-        #   - 개인 일정/저장/RAG를 담당하고, 그룹 조율 요청은 담당이 아니라고 짧게 알리게 합니다.
+        "당신은 Nana입니다. 개인 일정 조회/생성/수정/삭제, 할 일/알림 저장, 개인 참고자료 검색, 이 앱에 저장된 나와의 대화 발화 RAG 검색을 담당합니다.",
+        "이 프롬프트는 supervisor의 system prompt와 공유되지 않습니다. supervisor가 위임한 query 한 문장만 보고 판단해야 하므로, 필요한 지시는 전부 이 프롬프트 안에 있어야 합니다.",
+        "요청을 받으면 다음 순서로 생각합니다:",
+        "1) 요청에 외부 멤버(철수/영희 등 나 이외의 사람 이름)가 조금이라도 등장하는지 본다.",
+        "2) 등장하면 tool을 하나도 호출하지 않고 담당이 아니라고 짧게 답한 뒤 끝낸다.",
+        "3) 등장하지 않으면 지금까지(Week 1~4) 배운 tool 선택 규칙을 그대로 따라 개인 일정/할 일/알림/참고자료/RAG tool 중 하나를 호출한다.",
+        "'내일 오후 3시에 치과 예약 일정 추가해줘' → 외부 멤버 없음 → Week 1 개인 일정 저장 tool을 그대로 호출한다.",
+        "'주중에는 15시부터 18시까지 항상 모각코일정이 있어 참고해' → 외부 멤버 없음 → Week 4 add_personal_reference를 그대로 호출한다.",
+        "'철수, 영희랑 다같이 시간 되는 때 찾아줘' → 외부 멤버 등장 → tool을 호출하지 않고 '이 요청은 제 담당이 아니에요. 외부 팀원과의 시간 조율은 Kana가 처리합니다.'라고만 답한다.",
+        "'철수한테 이 일정 전달해줘', '영희가 언제 바쁜지 알려줘'처럼 외부 멤버가 조금이라도 등장하는 요청도 같은 이유로 담당이 아닙니다.",
+        "'나랑 철수 같이 언제 시간 되는지 확인해줘'처럼 '나'가 포함돼 있어도 철수 같은 외부 멤버가 함께 등장하면 역시 담당이 아닙니다.",
+        "다시 강조: 외부 멤버가 조금이라도 등장하면 tool 호출 금지, 담당 아니라고만 답한다.",
     ]
 
 
@@ -218,10 +239,29 @@ def kana_prompt_parts() -> list[str]:
     """Week 6 Kana 하위 에이전트 전용 system prompt 조각입니다."""
 
     return [
-        # TODO: Week 6 Kana 하위 에이전트 전용 system prompt를 자유롭게 추가하세요.
-        #   - 다른 주차 prompt를 누적하지 않으므로 Kana 역할을 처음부터 작성해야 합니다.
-        #   - 외부 멤버 일정/공통 가능 시간/그룹 조율을 담당하고, 확정된 일정 저장은 Nana 담당이라고 답하게 합니다.
-        #   - 추가 과제를 구현했다면 find_common_available_slots와 decide_final_slot까지 이어서 호출하도록 지시합니다.
+        "당신은 Kana입니다. 외부 멤버의 일정 확인, 여러 사람의 공통 가능 시간 파악, 그룹 일정 조율을 담당합니다.",
+        "이 프롬프트는 다른 어떤 주차나 agent의 system prompt도 이어받지 않습니다. supervisor가 위임한 query 한 문장만 보고 판단해야 하므로, 필요한 지시는 전부 이 프롬프트 안에 있어야 합니다.",
+        "확정된 그룹 일정을 개인 캘린더에 '저장'하는 것은 당신 담당이 아닙니다. 그건 Nana가 처리합니다.",
+        "tool을 고를 때는 다음 순서로 생각합니다:",
+        "1) 그룹 일정을 새로 조율하는 요청이면 먼저 extract_schedule_request로 제목/멤버/날짜 범위를 구조화한다.",
+        "2) 외부 팀원과의 지난 대화 자체를 묻는지 본다.",
+        "3) 그 대화의 전체 내용을 보여달라는지 본다.",
+        "4) 나를 제외한 특정 외부 멤버만의 일정을 묻는지 본다.",
+        "5) 나를 포함해 여러 명의 공통 가능 시간을 맞춰야 하는지 본다.",
+        "6) 공유 일정 저장소 자체를 조회해달라는지 본다.",
+        "'철수랑 영희랑 다음 주에 회의 잡고 싶어' → extract_schedule_request(...)로 제목/멤버/날짜 범위부터 구조화한다.",
+        "'~가 예전에 ~라고 말한 적 있어?', '~랑 나눈 대화 찾아줘'처럼 외부 팀원과의 지난 대화를 물으면 search_previous_conversations를 호출한다.",
+        "'철수가 예전에 API 연동 얘기한 적 있어?' → search_previous_conversations(query='API 연동', member_names=['철수'])",
+        "search_previous_conversations 결과의 '전체 내용', '자세히', '다 보여줘'를 요청하면 그 결과의 conversation_id로 load_conversation_messages를 호출한다.",
+        "(search_previous_conversations 결과로 conversation_id='ext_cs'를 찾은 뒤) '그 대화 전체 내용 보여줘' → load_conversation_messages(conversation_id='ext_cs')",
+        "'~가 언제 바쁜지', '~의 일정 좀 알려줘'처럼 나를 제외한 외부 멤버만의 일정을 물으면 extract_schedules_from_history를 호출한다.",
+        "'철수랑 영희 7월 7일부터 17일까지 일정 좀 알려줘' → extract_schedules_from_history(member_names=['철수','영희'], date_from='2026-07-07', date_to='2026-07-17')",
+        "'다같이 언제 시간 되는지', '~랑 나랑 언제 가능한지', '일정 조율해줘'처럼 나를 포함해 여러 명의 시간을 맞춰야 하면 collect_member_schedules를 호출한다.",
+        "'나랑 철수, 영희 다같이 언제 시간 되는지 확인해줘' → collect_member_schedules(member_names=['철수','영희'], date_from=..., date_to=...)",
+        "'공유 일정 저장소', '공유된 일정 목록', '다 같이 보는 일정 목록'처럼 저장소 자체를 조회해달라고 하면 list_shared_schedules를 호출한다.",
+        "'공유 일정 저장소에 등록된 거 다 보여줘' → list_shared_schedules()",
+        "list_shared_schedules를 인자 없이 호출하면 외부 실습용 기본 날짜 범위만 조회됩니다. 특정 일정의 존재 여부를 확인해야 하면 반드시 member_names 또는 date_from/date_to를 명시해서 호출한다.",
+        "인사말이나 위 상황과 무관한 일반 잡담에는 위 tool들을 호출하지 않는다.",
     ]
 
 
@@ -239,12 +279,20 @@ def supervisor_system_prompt() -> str:
             *week06_prompt_parts(),
             # TODO: supervisor 실행 역할에 필요한 최종 system prompt를 자유롭게 추가하세요.
             #   - 반드시 nana_agent 또는 kana_agent 중 하나를 호출한 뒤 그 결과만 근거로 답하게 합니다.
+            "당신은 supervisor입니다. 사용자 요청을 스스로 처리하지 않습니다. 매 요청마다 nana_agent 또는 kana_agent 중 정확히 하나를 호출하고, 그 tool의 반환 JSON에 있는 answer만 근거로 최종 답변을 작성합니다.",
+            "tool을 호출하지 않고 직접 답하거나, tool 결과에 없는 내용을 답변에 지어내지 않습니다.",
+            "호출한 tool의 answer가 '이 요청은 제 담당이 아니에요'라는 취지면, 반대쪽 tool(nana_agent↔kana_agent)로 한 번만 다시 시도한 뒤 그 결과로 최종 답변을 작성합니다.",
+            "두 번째 시도에서도 담당이 아니라는 답이 나오면 더 이상 재시도하지 않고, 어떤 부분이 처리 안 됐는지 사용자에게 안내합니다.",
         ]
     )
 
 
 def _tool_call_names(events: list[dict[str, Any]]) -> list[str]:
-    return [event["tool_name"] for event in events if event.get("event") == "tool_call" and event.get("tool_name")]
+    return [
+        event["tool_name"]
+        for event in events
+        if event.get("event") == "tool_call" and event.get("tool_name")
+    ]
 
 
 def extract_langchain_trace(result: dict[str, Any]) -> dict[str, Any]:
@@ -257,7 +305,10 @@ def extract_langchain_trace(result: dict[str, Any]) -> dict[str, Any]:
     selected_agent: str | None = None
 
     for event in events:
-        if event.get("event") == "tool_call" and event.get("tool_name") in {"nana_agent", "kana_agent"}:
+        if event.get("event") == "tool_call" and event.get("tool_name") in {
+            "nana_agent",
+            "kana_agent",
+        }:
             selected_agent = event["tool_name"]
         content = event.get("content")
         if isinstance(content, dict):
@@ -279,7 +330,9 @@ def extract_langchain_trace(result: dict[str, Any]) -> dict[str, Any]:
 
 
 def tool_name(tool_object: Any) -> str:
-    return getattr(tool_object, "name", getattr(tool_object, "__name__", str(tool_object)))
+    return getattr(
+        tool_object, "name", getattr(tool_object, "__name__", str(tool_object))
+    )
 
 
 FIND_COMMON_AVAILABLE_SLOTS_DESCRIPTION = (
@@ -306,10 +359,18 @@ DECIDE_FINAL_SLOT_DESCRIPTION = (
 
 
 class FindCommonAvailableSlotsInput(BaseModel):
-    member_names: list[str] = Field(description="공통 가능 시간을 찾아야 하는 외부 멤버 이름 목록")
-    date_from: str = Field(description="조회 시작 날짜. ISO datetime이면 날짜 부분만 사용")
-    date_to: str = Field(description="조회 종료 날짜. ISO datetime이면 날짜 부분만 사용")
-    duration_minutes: int = Field(default=60, ge=30, le=480, description="회의 길이(분)")
+    member_names: list[str] = Field(
+        description="공통 가능 시간을 찾아야 하는 외부 멤버 이름 목록"
+    )
+    date_from: str = Field(
+        description="조회 시작 날짜. ISO datetime이면 날짜 부분만 사용"
+    )
+    date_to: str = Field(
+        description="조회 종료 날짜. ISO datetime이면 날짜 부분만 사용"
+    )
+    duration_minutes: int = Field(
+        default=60, ge=30, le=480, description="회의 길이(분)"
+    )
     workday_start: str = Field(default="09:00", description="허용 업무 시간 시작 HH:MM")
     workday_end: str = Field(default="18:00", description="허용 업무 시간 종료 HH:MM")
     limit: int = Field(default=5, ge=1, le=20, description="최대 후보 수")
@@ -324,13 +385,21 @@ class FindCommonAvailableSlotsInput(BaseModel):
             "duration_minutes, reason을 포함하고 busy_rows와 겹치면 안 됩니다."
         ),
     )
-    llm_reason: str | None = Field(default=None, description="LLM agent가 후보 목록을 고른 전체 이유")
+    llm_reason: str | None = Field(
+        default=None, description="LLM agent가 후보 목록을 고른 전체 이유"
+    )
 
 
 class DecideFinalSlotInput(BaseModel):
-    candidate_slots: list[Any] = Field(default_factory=list, description="find_common_available_slots 결과의 후보 목록")
-    selected_slot: Any | None = Field(default=None, description="LLM agent가 직접 고른 후보 객체")
-    selected_index: int | None = Field(default=None, description="LLM agent가 직접 고른 candidate_slots index")
+    candidate_slots: list[Any] = Field(
+        default_factory=list, description="find_common_available_slots 결과의 후보 목록"
+    )
+    selected_slot: Any | None = Field(
+        default=None, description="LLM agent가 직접 고른 후보 객체"
+    )
+    selected_index: int | None = Field(
+        default=None, description="LLM agent가 직접 고른 candidate_slots index"
+    )
     final_slot: str | None = Field(
         default=None,
         description="최종 확정 시간 텍스트. 형식은 'YYYY-MM-DD HH:MM-HH:MM'. 미확정이면 null",
@@ -339,12 +408,18 @@ class DecideFinalSlotInput(BaseModel):
         default=None,
         description="후보 선택이 더 필요하면 true, final_slot을 확정했으면 false",
     )
-    member_names: list[str] | None = Field(default=None, description="회의 대상 멤버 목록")
+    member_names: list[str] | None = Field(
+        default=None, description="회의 대상 멤버 목록"
+    )
     date_from: str | None = Field(default=None, description="요청 날짜 범위 시작")
     date_to: str | None = Field(default=None, description="요청 날짜 범위 종료")
     duration_minutes: int = Field(default=60, description="회의 길이(분)")
-    reason: str | None = Field(default=None, description="최종 선택 또는 보류에 대한 사용자-facing 설명")
-    busy_rows: list[dict[str, Any]] | None = Field(default=None, description="최종 결정 근거로 남길 busy_rows")
+    reason: str | None = Field(
+        default=None, description="최종 선택 또는 보류에 대한 사용자-facing 설명"
+    )
+    busy_rows: list[dict[str, Any]] | None = Field(
+        default=None, description="최종 결정 근거로 남길 busy_rows"
+    )
 
 
 class ProposeGroupScheduleInput(BaseModel):
@@ -385,7 +460,10 @@ def find_common_available_slots_dict(
     ...
 
 
-@tool(description=FIND_COMMON_AVAILABLE_SLOTS_DESCRIPTION, args_schema=FindCommonAvailableSlotsInput)
+@tool(
+    description=FIND_COMMON_AVAILABLE_SLOTS_DESCRIPTION,
+    args_schema=FindCommonAvailableSlotsInput,
+)
 def find_common_available_slots(
     member_names: list[str],
     date_from: str,
@@ -463,8 +541,15 @@ def propose_group_schedule(
 ) -> str:
     """Kana가 고른 후보 시간으로 최종 그룹 일정 결정 페이로드를 만듭니다."""
 
-    slots = [slot.model_dump() if hasattr(slot, "model_dump") else slot for slot in candidate_slots or []]
-    selected = selected_slot.model_dump() if hasattr(selected_slot, "model_dump") else selected_slot
+    slots = [
+        slot.model_dump() if hasattr(slot, "model_dump") else slot
+        for slot in candidate_slots or []
+    ]
+    selected = (
+        selected_slot.model_dump()
+        if hasattr(selected_slot, "model_dump")
+        else selected_slot
+    )
     payload = {
         "title": title,
         "members": normalize_external_member_names(member_names),
@@ -473,7 +558,10 @@ def propose_group_schedule(
         "reason": reason,
         "candidate_slots": slots,
     }
-    return json.dumps({"ok": True, "tool_name": "propose_group_schedule", "final_decision": payload}, ensure_ascii=False)
+    return json.dumps(
+        {"ok": True, "tool_name": "propose_group_schedule", "final_decision": payload},
+        ensure_ascii=False,
+    )
 
 
 @tool(args_schema=AgentQueryInput)
