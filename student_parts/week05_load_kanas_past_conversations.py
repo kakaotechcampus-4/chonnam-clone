@@ -386,7 +386,7 @@ def _collect_member_schedules(
     result_dict = json.loads(result_str)
     external_rows = result_dict["rows"]
 
-    rows = _dedupe_schedule_rows([*my_rows, *external_rows.get("rows", [])])
+    rows = _dedupe_schedule_rows([*my_rows, *external_rows])
     return {
         "ok": True,
         "tool_name": "collect_member_schedules",
