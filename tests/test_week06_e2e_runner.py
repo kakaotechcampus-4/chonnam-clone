@@ -176,6 +176,8 @@ class Week06E2ERunnerTest(unittest.TestCase):
         self.assertEqual(external_only["expect_find_members_exact"], ["나", "철수", "영희"])
         self.assertIn("나", external_only["expect_final_payload"]["members_exact"])
         pending = by_id["group-no-common-slot-remains-pending"]["turns"][0]
+        self.assertIn("10시", pending["expect_query_contains"])
+        self.assertIn("11시", pending["expect_query_contains"])
         find_arguments = pending["expect_tool_arguments"][0]["arguments"]
         self.assertEqual(find_arguments["workday_start"], "10:00")
         self.assertEqual(find_arguments["workday_end"], "11:00")
