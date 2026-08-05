@@ -1,0 +1,28 @@
+[
+  {
+    "id": "personal-schedule-routing",
+    "message": "2026년 7월 7일부터 17일까지 내 저장 일정을 보여줘.",
+    "expected_agent": "nana_agent",
+    "expected_inner_contains": ["personal_list_saved_schedules"]
+  },
+  {
+    "id": "external-schedule-routing",
+    "message": "철수의 2026년 7월 7일부터 17일까지 바쁜 일정을 알려줘.",
+    "expected_agent": "kana_agent",
+    "expected_inner_order": [
+      "search_previous_conversations",
+      "extract_schedules_from_history"
+    ]
+  },
+  {
+    "id": "group-final-slot-routing",
+    "message": "나와 철수가 2026년 7월 7일부터 17일까지 업무시간 중 60분 회의할 최종 시간을 정해줘.",
+    "expected_agent": "kana_agent",
+    "expected_inner_order": [
+      "collect_member_schedules",
+      "find_common_available_slots",
+      "decide_final_slot"
+    ],
+    "expect_final_slot_payload": true
+  }
+]
