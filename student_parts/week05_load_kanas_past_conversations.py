@@ -293,10 +293,14 @@ class CollectMemberSchedulesInput(BaseModel):
 
 
 def _structured_request_from_schedule_row(row: dict[str, Any]) -> StructuredRequest:
-    """앱 일정 row를 Week 2 StructuredRequest 기준으로 읽습니다."""
+    """앱 일정 row를 Week 2 StructuredRequest 기준으로 읽습니다.
+
+    SQLite row는 request_kind로 개인/그룹을 구분합니다. Week 1 임시 일정 row에는
+    이 값이 없으므로 개인 일정으로 봅니다.
+    """
 
     return StructuredRequest(
-        kind="personal_schedule",
+        kind="group_schedule" if row.get("request_kind") == "group_schedule" else "personal_schedule",
         title=row.get("title"),
         date=row.get("date"),
         start_time=row.get("start_time"),
@@ -304,6 +308,15 @@ def _structured_request_from_schedule_row(row: dict[str, Any]) -> StructuredRequ
         members=row.get("attendees") or row.get("members") or [],
         original_text=str(row.get("title") or ""),
     )
+
+
+def _my_schedule_notes(request: StructuredRequest) -> str:
+    """내 일정 row가 개인 일정인지, 참석자가 있는 그룹 일정인지 설명합니다."""
+
+    if request.kind != "group_schedule":
+        return "Nana 개인 일정"
+    members = [str(member).strip() for member in (request.members or []) if str(member).strip()]
+    return f"Nana 그룹 일정 · 참석자: {', '.join(members)}" if members else "Nana 그룹 일정"
 
 
 def _collect_member_schedules(
@@ -332,19 +345,24 @@ def _collect_member_schedules(
     else:
         external_rows = []
     
-    # 내 일정을 row 구조로 변환 — 외부 멤버와 동일하게 date_from~date_to 범위로 좁힌다
-    personal_rows = [
-        {
-            "member_name": "나",
-            "title": schedule.get("title"),
-            "date": schedule.get("date"),
-            "start_time": schedule.get("start_time"),
-            "end_time": schedule.get("end_time"),
-            "notes": None,
-        }
-        for schedule in personal_schedules
-        if normalized_date_from <= (schedule.get("date") or "") <= normalized_date_to
-    ]
+    # 내 일정을 row 구조로 변환 — 외부 멤버와 동일하게 date_from~date_to 범위로 좁힌다.
+    # notes는 개인/그룹 일정을 구분해서 LLM이 왜 바쁜지(어떤 회의·참석자 때문인지) 설명할 수 있게 한다.
+    personal_rows = []
+    for schedule in personal_schedules:
+        schedule_date = schedule.get("date")
+        if not (normalized_date_from <= (schedule_date or "") <= normalized_date_to):
+            continue
+        request = _structured_request_from_schedule_row(schedule)
+        personal_rows.append(
+            {
+                "member_name": "나",
+                "title": schedule.get("title"),
+                "date": schedule_date,
+                "start_time": schedule.get("start_time"),
+                "end_time": schedule.get("end_time"),
+                "notes": _my_schedule_notes(request),
+            }
+        )
     
     # 내 일정과 외부 일정 합치기
     rows = [*personal_rows, *external_rows]
