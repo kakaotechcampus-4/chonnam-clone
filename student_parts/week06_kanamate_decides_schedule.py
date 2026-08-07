@@ -34,7 +34,7 @@ _NANA_SUBAGENT: Any | None = None
 _KANA_SUBAGENT: Any | None = None
 _SUPERVISOR_AGENT: Any | None = None
 
-WEEK06_MEMORY_PROMPT="""
+WEEK06_DELEGATION_PROMPT="""
 너는 6주차 모델이고, 직접 일을 처리하지 않으며, 위임된 nana_agent 혹은 kana_agent를 호출해야 한다. 
 nana_agent는 개인 일정/저장/RAG를 담당하고, '내 일정 보여줘/잡아줘'와 같은 요청이 올 때 호출한다.
 kana_agent는 외부 대화/멤버 일정/그룹 일정 조율을 담당하고, '철수랑 시간 맞춰줘'와 같은 요청이 올 때 호출한다.
@@ -42,12 +42,14 @@ kana_agent는 외부 대화/멤버 일정/그룹 일정 조율을 담당하고, 
 
 NANA_PROMPT="""
 너는 nana_agent이고, 개인 일정/저장/RAG를 담당한다.
-그룹 일정 조율 요청은 너의 담당이 아니라 kana_agent 담당이다.
+담당 범위 밖 요청이면 처리하지 말고 그 사실을 알린다.
 """
 
-KANA_PROMPT="""
+KANA_PROMPT=f"""
 너는 kana_agent이고, 외부 대화/멤버 일정/그룹 일정 조율을 담당한다.
-확정된 일정 저장은 너의 담당이 아니라 nana_agent 담당이다.
+담당 범위 밖 요청이면 처리하지 말고 그 사실을 알린다.
+오늘은 {current_app_date_iso()}이다. 
+상대 날짜는 이 날짜 기준으로 YYYY-MM-DD로 바꾼다.
 """
 
 SUPERVISOR_PROMPT="""
@@ -216,7 +218,7 @@ def week06_prompt_parts() -> list[str]:
 
     return [
         *week05_prompt_parts(),
-        WEEK06_MEMORY_PROMPT,
+        WEEK06_DELEGATION_PROMPT,
     ]
 
 
@@ -499,10 +501,11 @@ def nana_agent(query: str) -> str:
             system_prompt=nana_system_prompt(),
         )
     result = _NANA_SUBAGENT.invoke({"messages": [{"role": "user", "content": query}]})
+    selected_agent= tool_name(nana_agent)
     answer= extract_final_text(result)
     trace= extract_agent_events(result)
     inner_tool_names= _tool_call_names(trace)
-    return json.dumps({"selected_agent": "nana", "answer": answer, "trace": trace, "inner_tool_names": inner_tool_names}, ensure_ascii=False)
+    return json.dumps({"selected_agent": selected_agent, "answer": answer, "trace": trace, "inner_tool_names": inner_tool_names}, ensure_ascii=False)
 
 
 @tool(args_schema=AgentQueryInput)
@@ -517,10 +520,11 @@ def kana_agent(query: str) -> str:
             system_prompt=kana_system_prompt(),
             )
     result = _KANA_SUBAGENT.invoke({"messages": [{"role": "user", "content": query}]})
+    selected_agent= tool_name(kana_agent)
     answer= extract_final_text(result)
     trace= extract_agent_events(result)
     inner_tool_names= _tool_call_names(trace)
-    return json.dumps({"selected_agent": "kana", "answer": answer, "trace": trace, "inner_tool_names": inner_tool_names, 
+    return json.dumps({"selected_agent": selected_agent, "answer": answer, "trace": trace, "inner_tool_names": inner_tool_names, 
                        "final_slot_payload": None, "final_decision_payload": None}, ensure_ascii=False)
 
 
