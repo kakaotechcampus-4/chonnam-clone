@@ -364,15 +364,15 @@ def _collect_member_schedules(
     )
     my_rows = []
     for row in personal_schedules:
-        sr = _structured_request_from_schedule_row(row)
+        structured_request = _structured_request_from_schedule_row(row)
         my_rows.append(
             {
                 "member_name": PERSONAL_SHARED_MEMBER_NAME,
-                "title": sr.title,
-                "date": sr.date,
-                "start_time": sr.start_time,
-                "end_time": sr.end_time,
-                "notes": _my_schedule_notes(sr),
+                "title": structured_request.title,
+                "date": structured_request.date,
+                "start_time": structured_request.start_time,
+                "end_time": structured_request.end_time,
+                "notes": _my_schedule_notes(structured_request),
             }
         )
     result_str = call_mcp_tool_sync(

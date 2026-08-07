@@ -38,6 +38,9 @@ _NANA_SUBAGENT: Any | None = None
 _KANA_SUBAGENT: Any | None = None
 _SUPERVISOR_AGENT: Any | None = None
 
+NANA_AGENT_NAME = "nana_agent"
+KANA_AGENT_NAME = "kana_agent"
+SUPERVISOR_AGENT_NAME = "supervisor"
 
 # [6주차 수강생 구현 가이드]
 #
@@ -267,6 +270,7 @@ def kana_prompt_parts() -> list[str]:
         "'공유 일정 저장소에 등록된 거 다 보여줘' → list_shared_schedules()",
         "list_shared_schedules를 인자 없이 호출하면 외부 실습용 기본 날짜 범위만 조회됩니다. 특정 일정의 존재 여부를 확인해야 하면 반드시 member_names 또는 date_from/date_to를 명시해서 호출한다.",
         "인사말이나 위 상황과 무관한 일반 잡담에는 위 tool들을 호출하지 않는다.",
+        f"현재 날짜는 {current_app_date_iso()}이다.",
     ]
 
 
@@ -312,8 +316,8 @@ def extract_langchain_trace(result: dict[str, Any]) -> dict[str, Any]:
 
     for event in events:
         if event.get("event") == "tool_call" and event.get("tool_name") in {
-            "nana_agent",
-            "kana_agent",
+            NANA_AGENT_NAME,
+            KANA_AGENT_NAME,
         }:
             selected_agent = event["tool_name"]
         content = event.get("content")
@@ -606,11 +610,11 @@ def supervisor_tools() -> list[Any]:
 
 
 def agent_tool_names(agent_name: str) -> list[str]:
-    if agent_name == "nana_agent":
+    if agent_name == NANA_AGENT_NAME:
         return [tool_name(item) for item in week04_tools()]
-    if agent_name == "kana_agent":
+    if agent_name == KANA_AGENT_NAME:
         return [tool_name(item) for item in kana_tools()]
-    if agent_name == "supervisor":
+    if agent_name == SUPERVISOR_AGENT_NAME:
         return [tool_name(item) for item in supervisor_tools()]
     return []
 
@@ -670,7 +674,7 @@ def nana_agent(query: str) -> str:
     answer = extract_final_text(result)
     return json.dumps(
         {
-            "selected_agent": "nana_agent",
+            "selected_agent": NANA_AGENT_NAME,
             "answer": answer,
             "trace": events,
             "inner_tool_names": _tool_call_names(events),
@@ -707,7 +711,7 @@ def kana_agent(query: str) -> str:
             final_decision_payload = content["final_decision"]
     return json.dumps(
         {
-            "selected_agent": "kana_agent",
+            "selected_agent": KANA_AGENT_NAME,
             "answer": answer,
             "trace": events,
             "inner_tool_names": _tool_call_names(events),
