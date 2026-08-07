@@ -5,6 +5,8 @@ from typing import Any
 
 from langchain.agents import create_agent
 from langchain_core.tools import tool
+from langgraph.errors import GraphRecursionError
+from openai import OpenAIError
 from pydantic import BaseModel, Field
 
 from fixed.external_people_store import PERSONAL_SHARED_MEMBER_NAME, normalize_external_member_names
@@ -238,6 +240,10 @@ def kana_prompt_parts() -> list[str]:
             "- 외부 멤버만의 busy-time이 필요하면 extract_schedules_from_history를, "
             "나를 포함한 여러 사람의 busy-time을 한 번에 봐야 하면 collect_member_schedules를 사용한다.\n"
             "- 공유 일정 저장소 자체에 등록된 row를 확인해야 하면 list_shared_schedules를 사용한다.\n"
+            "- '다들', '모두'처럼 구체적인 참석자 이름이 하나도 없는 요청에서만: 이름을 지어내서 "
+            "member_names에 채우지 않고, 조회를 시도하지 말고 사용자에게 참석자 이름을 먼저 물어본다. "
+            "요청에 특정 이름이 하나라도 있으면(예: '철수랑 회의') 그 이름만으로 바로 조회를 진행하고, "
+            "참석자가 더 있을 것 같다는 추측만으로 되묻지 않는다.\n"
             "- 공통 가능 시간을 찾아야 하면 collect_member_schedules 결과의 rows를 busy_rows로 삼아, "
             "그 어떤 busy row와도 겹치지 않는 후보를 네가 직접 골라 find_common_available_slots에 "
             "candidate_slots와 busy_rows로 함께 넘긴다. 이 tool은 후보를 계산해주지 않으므로 "
@@ -245,11 +251,12 @@ def kana_prompt_parts() -> list[str]:
             "- find_common_available_slots 결과만으로 답을 끝내지 말고, 후보 중 하나를 확정하거나 "
             "아직 사용자 확인이 더 필요하면 decide_final_slot을 이어서 호출해 final_slot 또는 "
             "needs_agent_selection 상태를 기록한다.\n"
-            "- collect_member_schedules 또는 find_common_available_slots 결과의 external_lookup_ok가 "
-            "false이면, 그 멤버들의 busy_rows는 조회 실패로 불완전한 상태다. 겹치는 busy row가 "
-            "안 보인다고 해서 그 시간이 확실히 비어 있다고 단정하지 않는다. 이 경우 decide_final_slot을 "
-            "호출하더라도 final_slot을 확정하지 말고 needs_agent_selection=true로 두고, reason에 "
-            "외부 일정 조회가 실패해 확정할 수 없다는 점과 사용자 확인이 필요하다는 점을 남긴다.\n"
+            "- collect_member_schedules 결과의 external_lookup_ok가 false이면, 그 멤버들의 busy_rows는 "
+            "조회 실패로 불완전한 상태다. 이걸 한 번이라도 확인했다면, 그 뒤에 find_common_available_slots가 "
+            "external_lookup_ok를 뭐라고 돌려주든 상관없이(겹치는 busy row가 안 보인다고 해서 그 시간이 "
+            "확실히 비어 있다고 단정하지 않고) 최종 확정을 하지 않는다. decide_final_slot을 호출하더라도 "
+            "final_slot을 확정하지 말고 needs_agent_selection=true로 두고, reason에 외부 일정 조회가 "
+            "실패해 확정할 수 없다는 점과 사용자 확인이 필요하다는 점을 남긴다.\n"
             "- 도구 결과에 없는 시간이나 일정을 만들어내지 않는다."
         ),
     ]
@@ -270,7 +277,11 @@ def supervisor_system_prompt() -> str:
             (
                 "supervisor로서 반드시 nana_agent 또는 kana_agent 중 하나를 호출한 뒤, "
                 "그 결과의 answer만 근거로 최종 답변을 만든다. 하위 agent를 부르지 않고 "
-                "직접 추측으로 답하지 않는다."
+                "직접 추측으로 답하지 않는다.\n"
+                "이전 주차 지시 중 '여러 사람의 최종 회의 시간 확정은 이번 주차 범위가 아니다'는 "
+                "Week 6부터 더 이상 적용되지 않는다 — 최종 시간 확정은 이제 Kana의 범위다. "
+                "kana_agent가 돌려준 final_slot_payload에 final_slot이 있고 needs_agent_selection이 "
+                "false라면, 되묻지 말고 그 시간을 최종 확정된 시간으로 그대로 안내한다."
             ),
         ]
     )
@@ -577,13 +588,25 @@ def nana_agent(query: str) -> str:
         )
     try:
         result = _NANA_SUBAGENT.invoke({"messages": [{"role": "user", "content": query}]})
-    except Exception as exc:
-        print(f"[nana_agent] 하위 agent 실행 실패: {type(exc).__name__}: {exc}")
+    except (OpenAIError, GraphRecursionError) as exc:
+        print(f"[nana_agent] 하위 agent 실행 실패(외부 요인): {type(exc).__name__}: {exc}")
         return json.dumps(
             {
                 "ok": False,
                 "tool_name": "nana_agent",
                 "answer": "개인 agent 실행 중 오류가 발생했습니다.",
+                "trace": {"events": []},
+                "inner_tool_names": [],
+            },
+            ensure_ascii=False,
+        )
+    except Exception as exc:
+        print(f"[nana_agent] 하위 agent 실행 중 예기치 못한 오류: {type(exc).__name__}: {exc}")
+        return json.dumps(
+            {
+                "ok": False,
+                "tool_name": "nana_agent",
+                "answer": "개인 agent 실행 중 예기치 못한 오류가 발생했습니다.",
                 "trace": {"events": []},
                 "inner_tool_names": [],
             },
@@ -613,13 +636,27 @@ def kana_agent(query: str) -> str:
         )
     try:
         result = _KANA_SUBAGENT.invoke({"messages": [{"role": "user", "content": query}]})
-    except Exception as exc:
-        print(f"[kana_agent] 하위 agent 실행 실패: {type(exc).__name__}: {exc}")
+    except (OpenAIError, GraphRecursionError) as exc:
+        print(f"[kana_agent] 하위 agent 실행 실패(외부 요인): {type(exc).__name__}: {exc}")
         return json.dumps(
             {
                 "ok": False,
                 "tool_name": "kana_agent",
                 "answer": "그룹 일정 조율 agent 실행 중 오류가 발생했습니다.",
+                "trace": {"events": []},
+                "inner_tool_names": [],
+                "final_slot_payload": None,
+                "final_decision_payload": None,
+            },
+            ensure_ascii=False,
+        )
+    except Exception as exc:
+        print(f"[kana_agent] 하위 agent 실행 중 예기치 못한 오류: {type(exc).__name__}: {exc}")
+        return json.dumps(
+            {
+                "ok": False,
+                "tool_name": "kana_agent",
+                "answer": "그룹 일정 조율 agent 실행 중 예기치 못한 오류가 발생했습니다.",
                 "trace": {"events": []},
                 "inner_tool_names": [],
                 "final_slot_payload": None,
