@@ -477,8 +477,6 @@ def find_common_available_slots_dict(
     """멤버별 busy-time rows와 LLM이 고른 후보 payload를 검증 결과로 바꿉니다."""
 
     members = normalize_external_member_names(member_names)
-    if PERSONAL_SHARED_MEMBER_NAME not in members:
-        members = [PERSONAL_SHARED_MEMBER_NAME, *members]
     bound_from = normalize_date_bound(date_from)
     bound_to = normalize_date_bound(date_to)
 
@@ -490,8 +488,13 @@ def find_common_available_slots_dict(
         )
         busy_rows = collected.get("rows") or []
 
+    # 수집 인자는 정규화한 목록 그대로 넘기고, "나"는 결과 payload의 멤버 목록에만 붙입니다.
+    payload_members = members
+    if PERSONAL_SHARED_MEMBER_NAME not in payload_members:
+        payload_members = [PERSONAL_SHARED_MEMBER_NAME, *payload_members]
+
     return find_common_available_slots_payload(
-        member_names=members,
+        member_names=payload_members,
         date_from=bound_from,
         date_to=bound_to,
         busy_rows=busy_rows,
