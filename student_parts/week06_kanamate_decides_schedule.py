@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from langchain.agents import create_agent
@@ -33,6 +34,27 @@ from student_parts.week05_load_kanas_past_conversations import (
 _NANA_SUBAGENT: Any | None = None
 _KANA_SUBAGENT: Any | None = None
 _SUPERVISOR_AGENT: Any | None = None
+
+
+AUTO_SELECT_PATTERN = re.compile(
+    "|".join(
+        [
+            "아무\\s*때나", "아무\\s*시간", "아무\\s*거나", "아무\\s*걸로",
+            "편한\\s*(대로|시간|걸로)", "그냥\\s*아무", "그냥\\s*알아서", "알아서\\s*(잡아|정해|골라)",
+        ]
+    )
+)
+
+
+def has_auto_select_hint(query: str) -> bool:
+    """사용자 발화에 자동 선택을 허용하는 표현이 있는지 키워드로 판별합니다.
+
+    "아무 때나 괜찮다" 같은 자동 선택 허용 여부를 매번 LLM이 자연어에서 다시
+    추론하게 두면 판단이 흔들린다. 이 판별을 결정적 코드로 옮겨서 kana_agent가
+    Kana 하위 agent에게 넘기는 요청에 명시적인 힌트로 못박아 둔다.
+    """
+
+    return bool(AUTO_SELECT_PATTERN.search(query))
 
 
 # [6주차 수강생 구현 가이드]
@@ -609,7 +631,15 @@ def kana_agent(query: str) -> str:
             tools=kana_tools(),
             system_prompt=kana_system_prompt(),
         )
-    result = _KANA_SUBAGENT.invoke({"messages": [{"role": "user", "content": query}]})
+    subagent_query = query
+    if has_auto_select_hint(query):
+        subagent_query = (
+            f"{query}\n\n"
+            "[자동감지] 이 요청에 자동 선택 허용 표현이 감지됐다. 후보가 몇 개든 상관없이 "
+            "네가 후보 하나를 selected_index로 직접 골라 decide_final_slot을 그 자리에서 "
+            "확정 호출한다. 후보 목록만 보여주고 사용자에게 다시 묻지 않는다."
+        )
+    result = _KANA_SUBAGENT.invoke({"messages": [{"role": "user", "content": subagent_query}]})
     events = extract_agent_events(result)
     answer = extract_final_text(result)
     trace_info = extract_langchain_trace(result)
