@@ -46,3 +46,11 @@ search_personal_references 등의 raw 검색 결과가 top-level event에 직접
 노출되지 않는다(중첩된 tool_result 문자열 안에는 있지만). 이번 라운드는
 라우팅 정확도가 최우선 검증 대상이라 검색 품질형은 이번엔 생성하지 않았다 -
 불가능해서가 아니라 범위 밖으로 미룬 것.
+
+## 알려진 검증 공백
+
+이 세트는 라우팅(nana_agent vs kana_agent) 일치 여부만 PASS/FAIL로 집계한다.
+라우팅이 맞아도 하위 tool에 넘긴 인자 값(날짜 필터 범위, kind 분류 등)이
+틀리면 답변 내용은 틀려도 PASS로 잡힌다. 인자/답변 내용 정합성 검증은 이번
+세트의 expected_tool 방식으로는 커버되지 않으며, 별도 content-level assertion이
+필요하다.
