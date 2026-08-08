@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Callable
 
 from langchain.agents import create_agent
 from langchain_core.tools import tool
@@ -15,6 +15,7 @@ from fixed.external_people_store import (
     external_schedule_summary,
     normalize_external_member_names,
     normalize_external_schedule_date_bounds,
+    strip_parenthetical_text,
 )
 from fixed.llm import chat_model
 from fixed.mcp_client import (
@@ -208,6 +209,32 @@ def json_payload(payload: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False)
 
 
+def _call_external_mcp_tool_safely(
+    tool_name: str,
+    call: Callable[[], str],
+    fallback_error: str,
+    **extra_error_fields: Any,
+) -> str:
+    """외부 SQLite/MCP subprocess 호출을 감싸 실패해도 예외를 그대로 전파하지 않습니다.
+
+    원본 예외는 콘솔에만 남기고, LLM/사용자에게는 다듬은 안내 문구만 담은 ok=False payload를 돌려줍니다.
+    """
+
+    try:
+        return call()
+    except Exception as exc:
+        print(f"[{tool_name}] 호출 실패: {type(exc).__name__}: {exc}")
+        return json_payload(
+            {
+                "ok": False,
+                "tool_name": tool_name,
+                "rows": [],
+                "error": fallback_error,
+                **extra_error_fields,
+            }
+        )
+
+
 class SearchPreviousConversationsInput(BaseModel):
     """외부 이전 대화 검색 입력입니다."""
 
@@ -269,10 +296,14 @@ class CollectMemberSchedulesInput(BaseModel):
 
 
 def _structured_request_from_schedule_row(row: dict[str, Any]) -> StructuredRequest:
-    """앱 일정 row를 Week 2 StructuredRequest 기준으로 읽습니다."""
+    """앱 일정 row를 Week 2 StructuredRequest 기준으로 읽습니다.
+
+    SQLite row는 `request_kind`로 개인/그룹을 구분합니다. Week 1 임시 일정 row에는
+    이 값이 없으므로 개인 일정으로 봅니다.
+    """
 
     return StructuredRequest(
-        kind="personal_schedule",
+        kind="group_schedule" if row.get("request_kind") == "group_schedule" else "personal_schedule",
         title=row.get("title"),
         date=row.get("date"),
         start_time=row.get("start_time"),
@@ -280,7 +311,38 @@ def _structured_request_from_schedule_row(row: dict[str, Any]) -> StructuredRequ
         members=row.get("attendees") or row.get("members") or [],
         original_text=str(row.get("title") or ""),
     )
+    
+def _dedupe_schedule_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """같은 일정이 앱 DB와 공유 저장소 양쪽에서 들어와도 한 번만 남깁니다.
 
+    앱 DB에 저장된 내 일정은 공유 저장소에도 자동 동기화되므로, member_names에 "나"가
+    들어온 호출에서는 같은 일정이 두 경로로 들어옵니다. 앞에 오는 앱 DB row를 남깁니다.
+
+    두 경로가 같은 일정을 서로 다르게 다듬기 때문에 값을 그대로 비교하면 안 됩니다.
+    - 공유 저장소는 제목에서 소괄호를 지우고 공백을 하나로 줄입니다. 앱 DB는 원문을 둡니다.
+    - 앱 DB 경로만 end_time "미정"을 "18:00"으로 바꿉니다. 그래서 end_time은 키에서 뺍니다.
+        같은 사람이 같은 날 같은 시각에 시작하는 같은 제목의 일정은 하나로 봅니다.
+    - start_time이 비어 있으면 공유 저장소는 "미정"으로 저장하므로 같은 값으로 맞춥니다.
+    """
+
+    deduped: dict[tuple[str, ...], dict[str, Any]] = {}
+    for row in rows:
+        key = (
+            str(row.get("member_name") or "").strip(),
+            str(row.get("date") or "").strip(),
+            str(row.get("start_time") or "").strip() or "미정",
+            strip_parenthetical_text(str(row.get("title") or "")),
+        )
+        deduped.setdefault(key, row)
+    return list(deduped.values())
+
+def _my_schedule_notes(request: StructuredRequest) -> str:
+    """내 일정 row가 개인 일정인지, 참석자가 있는 그룹 일정인지 설명합니다."""
+
+    if request.kind != "group_schedule":
+        return "Nana 개인 일정"
+    members = [str(member).strip() for member in (request.members or []) if str(member).strip()]
+    return f"Nana 그룹 일정 · 참석자: {', '.join(members)}" if members else "Nana 그룹 일정"
 
 def _collect_member_schedules(
     *,
@@ -306,9 +368,6 @@ def _collect_member_schedules(
             continue
         if normalized_date_to and schedule_date > normalized_date_to:
             continue
-        notes = "앱에 저장된 내 일정" if schedule.get("schedule_id") else "현재 대화 임시 일정"
-        if request.members:
-            notes += f" · 참석자: {', '.join(request.members)}"
         my_rows.append(
             {
                 "member_name": PERSONAL_SHARED_MEMBER_NAME,
@@ -316,7 +375,7 @@ def _collect_member_schedules(
                 "date": schedule_date,
                 "start_time": request.start_time or "미정",
                 "end_time": request.end_time or "미정",
-                "notes": notes,
+                "notes": _my_schedule_notes(request),
                 "source_conversation_id": "",
             }
         )
@@ -336,13 +395,17 @@ def _collect_member_schedules(
                     "date_to": normalized_date_to,
                 },
             )
-            external_rows = json.loads(raw).get("rows") or []
         except Exception as exc:
             external_lookup_ok = False
-            external_lookup_error = f"{type(exc).__name__}: {exc}"
+            external_lookup_error = "외부 일정 조회에 실패했습니다."
+            print(f"[collect_member_schedules] extract_schedules_from_history 호출 실패: {type(exc).__name__}: {exc}")
+        else:
+            external_rows = json.loads(raw).get("rows") or []
 
-    rows = [*my_rows, *external_rows]
+    rows = _dedupe_schedule_rows([*my_rows, *external_rows])
     return {
+        "ok": True,
+        "tool_name": "collect_member_schedules",
         "members": [PERSONAL_SHARED_MEMBER_NAME, *external_member_names],
         "rows": rows,
         "schedule_summary": external_schedule_summary(rows),
@@ -364,7 +427,11 @@ def search_previous_conversations(
     query에는 LLM이 고른 짧은 핵심 명사나 구를 넣습니다."""
 
     args = {"query": query, "member_names": member_names, "limit": limit}
-    return call_mcp_tool_sync("search_previous_conversations", args)
+    return _call_external_mcp_tool_safely(
+        "search_previous_conversations",
+        lambda: call_mcp_tool_sync("search_previous_conversations", args),
+        "외부 이전 대화 검색에 실패했습니다.",
+    )
 
 
 @tool(args_schema=LoadConversationMessagesInput)
@@ -372,8 +439,14 @@ def load_conversation_messages(conversation_id: str) -> str:
     """search_previous_conversations로 찾은 conversation_id 하나의 전체 메시지를 시간순 그대로 불러옵니다.
     검색(search_previous_conversations)과 달리 이건 특정 대화 하나의 원문 전문을 읽을 때만 사용합니다."""
 
-    payload = call_external_tool_payload("load_conversation_messages", {"conversation_id": conversation_id})
-    return json_payload(payload)
+    return _call_external_mcp_tool_safely(
+        "load_conversation_messages",
+        lambda: json_payload(
+            call_external_tool_payload("load_conversation_messages", {"conversation_id": conversation_id})
+        ),
+        "외부 대화 메시지 조회에 실패했습니다.",
+        conversation_id=conversation_id,
+    )
 
 
 @tool(args_schema=ExtractSchedulesFromHistoryInput)
@@ -383,7 +456,11 @@ def extract_schedules_from_history(member_names: list[str], date_from: str, date
     이 tool은 외부 멤버 원자 조회 전용입니다."""
 
     args = {"member_names": member_names, "date_from": date_from, "date_to": date_to}
-    return call_mcp_tool_sync("extract_schedules_from_history", args)
+    return _call_external_mcp_tool_safely(
+        "extract_schedules_from_history",
+        lambda: call_mcp_tool_sync("extract_schedules_from_history", args),
+        "외부 멤버 일정 조회에 실패했습니다.",
+    )
 
 
 @tool(args_schema=CreateSharedScheduleInput)
@@ -434,7 +511,11 @@ def list_shared_schedules(
         "source_conversation_id": source_conversation_id,
         "limit": limit,
     }
-    return call_mcp_tool_sync("list_shared_schedules", args)
+    return _call_external_mcp_tool_safely(
+        "list_shared_schedules",
+        lambda: call_mcp_tool_sync("list_shared_schedules", args),
+        "공유 일정 저장소 조회에 실패했습니다.",
+    )
 
 
 @tool(args_schema=CollectMemberSchedulesInput)
