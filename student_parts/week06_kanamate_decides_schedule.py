@@ -27,6 +27,9 @@ from student_parts.week05_load_kanas_past_conversations import (
 )
 
 
+NANA_AGENT_NAME = "nana_agent"
+KANA_AGENT_NAME = "kana_agent"
+
 _NANA_SUBAGENT: Any | None = None
 _KANA_SUBAGENT: Any | None = None
 _SUPERVISOR_AGENT: Any | None = None
@@ -197,8 +200,8 @@ def week06_prompt_parts() -> list[str]:
         (
             "[Week6] 너는 사용자 업무를 직접 처리하는 단일 agent가 아니라 Nana와 Kana에게 "
             "업무를 위임하는 supervisor다. 개인 일정 CRUD, 할 일·알림 저장, 개인 참고자료와 "
-            "앱 내부 대화 RAG는 nana_agent에 위임한다. 외부 멤버의 이전 대화·일정, 공유 일정 "
-            "row, 내 일정과 외부 일정의 통합 조회는 kana_agent에 위임한다. 이미 날짜와 시간이 "
+            f"앱 내부 대화 RAG는 {NANA_AGENT_NAME}에 위임한다. 외부 멤버의 이전 대화·일정, 공유 일정 "
+            f"row, 내 일정과 외부 일정의 통합 조회는 {KANA_AGENT_NAME}에 위임한다. 이미 날짜와 시간이 "
             "정해진 일정의 앱 DB 저장은 Nana 담당이다. 공통 가능 시간 계산과 최종 시간 확정은 "
             "이번 구현 범위가 아니다. 외부 멤버의 busy-time 조회는 Kana가 별도로 담당한다."
         ),
@@ -261,7 +264,7 @@ def supervisor_system_prompt() -> str:
             *week06_prompt_parts(),
             (
                 "사용자 요청을 직접 해결하거나 이전 주차 내부 tool을 직접 호출하지 않는다. 매 요청에서 "
-                "역할을 판단해 반드시 nana_agent 또는 kana_agent 중 알맞은 하나를 호출한다. 두 wrapper를 "
+                f"역할을 판단해 반드시 {NANA_AGENT_NAME} 또는 {KANA_AGENT_NAME} 중 알맞은 하나를 호출한다. 두 wrapper를 "
                 "호출할 때는 query 하나만 사용하고, 그 값에는 사용자의 최신 메시지 전체를 빠짐없이 포함한다. "
                 "요약하거나 검색어로 대체하지 말고, 사람 이름·날짜·검색 대상을 member_names 같은 별도 "
                 "argument로 분리하지 않는다. '방금', '그 일정'처럼 이전 대화가 필요한 표현이 있으면 원문을 "
@@ -269,7 +272,7 @@ def supervisor_system_prompt() -> str:
                 "지시는 위임 대상을 판단하는 참고일 뿐 supervisor가 wrapper argument를 가공하라는 뜻이 "
                 "아니다. 반환된 answer와 payload만 근거로 최종 답변하며, "
                 "표현을 정리할 수는 있지만 새로운 사실·조회 결과·성공 여부를 추가하지 않는다. 공통 후보 "
-                "계산·최종 시간 확정 요청은 kana_agent에 위임해 지원 범위 안내를 전달한다. 하위 결과가 "
+                f"계산·최종 시간 확정 요청은 {KANA_AGENT_NAME}에 위임해 지원 범위 안내를 전달한다. 하위 결과가 "
                 "실패·빈 결과·추가 정보 필요 상태이면 성공으로 바꾸거나 값을 만들어내지 않는다."
             ),
         ]
@@ -295,8 +298,8 @@ def extract_langchain_trace(result: dict[str, Any]) -> dict[str, Any]:
 
     for event in events:
         if event.get("event") == "tool_call" and event.get("tool_name") in {
-            "nana_agent",
-            "kana_agent",
+            NANA_AGENT_NAME,
+            KANA_AGENT_NAME,
         }:
             selected_agent = event["tool_name"]
         content = event.get("content")
@@ -515,9 +518,9 @@ def supervisor_tools() -> list[Any]:
 
 
 def agent_tool_names(agent_name: str) -> list[str]:
-    if agent_name == "nana_agent":
+    if agent_name == NANA_AGENT_NAME:
         return [tool_name(item) for item in week04_tools()]
-    if agent_name == "kana_agent":
+    if agent_name == KANA_AGENT_NAME:
         return [tool_name(item) for item in kana_tools()]
     if agent_name == "supervisor":
         return [tool_name(item) for item in supervisor_tools()]
@@ -572,7 +575,7 @@ def nana_agent(query: str) -> str:
     result = _NANA_SUBAGENT.invoke({"messages": [{"role": "user", "content": query}]})
     events = extract_agent_events(result)
     payload = {
-        "selected_agent": "nana_agent",
+        "selected_agent": NANA_AGENT_NAME,
         "answer": extract_final_text(result),
         "trace": events,
         "inner_tool_names": _tool_call_names(events),
@@ -607,7 +610,7 @@ def kana_agent(query: str) -> str:
             final_decision_payload = content["final_decision"]
 
     payload = {
-        "selected_agent": "kana_agent",
+        "selected_agent": KANA_AGENT_NAME,
         "answer": extract_final_text(result),
         "trace": events,
         "inner_tool_names": _tool_call_names(events),
