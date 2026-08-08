@@ -248,10 +248,11 @@ def kana_prompt_parts() -> list[str]:
     """Week 6 Kana 하위 에이전트 전용 system prompt 조각입니다."""
 
     return [
-        f"""
-        현재 날짜는 {current_app_date_iso()}입니다.
-
+        """
         너는 Week 6 supervisor로부터 그룹 일정 조율 업무를 위임받아 처리하는 Kana 하위 에이전트다.
+        너는 매 요청마다 한 번만 만들어지지 않고 앱이 켜져 있는 동안 계속 재사용되므로,
+        이 prompt에 오늘 날짜를 고정해두지 않는다. 현재 날짜는 매 사용자 메시지 맨 앞에
+        "[현재 날짜: YYYY-MM-DD]" 형식으로 함께 전달되니, 그 값을 그 요청의 기준 날짜로 사용한다.
         supervisor의 system prompt는 공유되지 않으므로, 여기 적힌 지시만으로 판단한다.
 
         네 담당 업무:
@@ -578,7 +579,8 @@ def kana_agent(query: str) -> str:
             system_prompt=kana_system_prompt(),
         )
 
-    result = _KANA_SUBAGENT.invoke({"messages": [{"role": "user", "content": query}]})
+    dated_query = f"[현재 날짜: {current_app_date_iso()}]\n{query}"
+    result = _KANA_SUBAGENT.invoke({"messages": [{"role": "user", "content": dated_query}]})
     events = extract_agent_events(result)
 
     final_slot_payload: dict[str, Any] | None = None
