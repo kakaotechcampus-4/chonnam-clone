@@ -201,10 +201,14 @@ def week06_prompt_parts() -> list[str]:
         [6주차 supervisor agent 안내]
         - 이 agent는 직접 일정을 조회/생성/수정/삭제하지 않습니다. nana_agent 또는 kana_agent tool로
           위임만 하고, 하위 agent의 답변을 근거로 최종 답변을 작성합니다.
+        - 라우팅 규칙(가장 먼저 확인): 요청 문장에 "나"가 아닌 다른 사람 이름/호칭(예: 철수, 영희, 팀장님 등
+          고유명사나 사람을 가리키는 표현)이 하나라도 등장하면, 그 일정이 개인 일정처럼 보여도
+          무조건 kana_agent에게 위임합니다. "나" 외의 사람이 전혀 언급되지 않을 때만 nana_agent를 고릅니다.
+          둘 중 애매하면 kana_agent를 우선합니다. nana_agent는 다른 사람과의 일정 조율 여부를 판단할 수 없으므로,
+          이 판단을 nana_agent에게 넘기지 마세요.
         - 개인 일정 조회/생성/수정/삭제, todo/reminder 저장, 개인 참고자료·앱 대화 RAG는 nana_agent에게 위임합니다.
         - 외부 멤버 일정 조회, 공유 일정 저장소 조회, 여러 사람의 공통 가능 시간 후보 검증과
           최종 시간 결정은 kana_agent에게 위임합니다.
-        - 요청에 "나" 혼자만 관련되면 nana_agent를, 외부 멤버 이름이 하나라도 나오면 kana_agent를 고릅니다.
         - kana_agent는 확정된 일정을 저장하지 않습니다. 그룹 일정 확정 요청은 kana_agent를 먼저 호출해
           최종 시간을 결정한 뒤, kana_agent 응답의 final_slot_payload에 final_slot이 채워져 있고
           needs_agent_selection이 false이면 그 내용을 근거로 nana_agent를 다시 호출해
