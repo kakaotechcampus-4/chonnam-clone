@@ -17,8 +17,16 @@ from fixed.schedule_decision import (
     find_common_available_slots_payload,
     normalize_date_bound,
 )
-from student_parts.week01_wake_up_nana import join_system_prompt
+from student_parts.week01_wake_up_nana import (
+    join_system_prompt,
+    personal_create_schedule as week01_personal_create_schedule,
+)
 from student_parts.week02_structure_natural_language_requests import extract_schedule_request
+from student_parts.week03_build_nanas_logbook import (
+    SavedScheduleListInput,
+    personal_list_saved_schedules as week03_personal_list_saved_schedules,
+    save_structured_request_payload,
+)
 from student_parts.week04_retrieve_nanas_memory import week04_prompt_parts, week04_tools
 from student_parts.week05_load_kanas_past_conversations import (
     collect_member_schedules,
@@ -544,6 +552,84 @@ def decide_final_slot(
     return json.dumps(result, ensure_ascii=False)
 
 
+@tool("personal_create_schedule")
+def personal_create_schedule(
+    title: str,
+    date: str,
+    start_time: str,
+    end_time: str = "미정",
+    attendees: list[str] | None = None,
+) -> str:
+    """Nana의 개인 일정을 생성하고 SQLite에도 저장합니다. 참석자가 있으면 group_schedule로 분류합니다."""
+
+    created_raw = week01_personal_create_schedule.invoke(
+        {"title": title, "date": date, "start_time": start_time, "end_time": end_time, "attendees": attendees}
+    )
+    created = json.loads(created_raw)
+    schedule = created["created_schedule"]
+    members = schedule.get("attendees") or []
+    sqlite_save = save_structured_request_payload(
+        {
+            "kind": "group_schedule" if members else "personal_schedule",
+            "title": schedule.get("title"),
+            "date": schedule.get("date"),
+            "start_time": schedule.get("start_time"),
+            "end_time": schedule.get("end_time"),
+            "members": members,
+            "source_schedule_id": schedule.get("id"),
+        }
+    )
+    return json.dumps({**created, "sqlite_save": sqlite_save}, ensure_ascii=False)
+
+
+@tool("personal_list_saved_schedules", args_schema=SavedScheduleListInput)
+def personal_list_saved_schedules(
+    limit: int = 50,
+    kind: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> str:
+    """앱 DB에 저장된 일정 목록을 날짜/종류 필터로 반환합니다. kind 미지정 시 personal/group 모두 조회합니다."""
+
+    if kind:
+        return week03_personal_list_saved_schedules.invoke(
+            {"limit": limit, "kind": kind, "date_from": date_from, "date_to": date_to}
+        )
+    personal = json.loads(
+        week03_personal_list_saved_schedules.invoke(
+            {"limit": limit, "kind": "personal_schedule", "date_from": date_from, "date_to": date_to}
+        )
+    )
+    group = json.loads(
+        week03_personal_list_saved_schedules.invoke(
+            {"limit": limit, "kind": "group_schedule", "date_from": date_from, "date_to": date_to}
+        )
+    )
+    merged = sorted(
+        [*personal["schedules"], *group["schedules"]],
+        key=lambda row: (row.get("date") is None, row.get("date"), row.get("start_time") is None, row.get("start_time")),
+    )[:limit]
+    return json.dumps(
+        {
+            "ok": True,
+            "tool_name": "personal_list_saved_schedules",
+            "filters": {"limit": limit, "kind": None, "date_from": date_from, "date_to": date_to},
+            "schedules": merged,
+        },
+        ensure_ascii=False,
+    )
+
+
+def nana_tools() -> list[Any]:
+    """week04_tools()의 personal_create_schedule/personal_list_saved_schedules를
+    참석자 유무 기반 kind 분류 규칙과 kind 필터 없는 조회로 보강한 버전으로 교체합니다."""
+    replacements = {
+        "personal_create_schedule": personal_create_schedule,
+        "personal_list_saved_schedules": personal_list_saved_schedules,
+    }
+    return [replacements.get(tool_name(item), item) for item in week04_tools()]
+
+
 def kana_tools() -> list[Any]:
     return [
         extract_schedule_request,
@@ -563,7 +649,7 @@ def supervisor_tools() -> list[Any]:
 
 def agent_tool_names(agent_name: str) -> list[str]:
     if agent_name == "nana_agent":
-        return [tool_name(item) for item in week04_tools()]
+        return [tool_name(item) for item in nana_tools()]
     if agent_name == "kana_agent":
         return [tool_name(item) for item in kana_tools()]
     if agent_name == "supervisor":
@@ -608,7 +694,7 @@ def nana_agent(query: str) -> str:
     if _NANA_SUBAGENT is None:
         _NANA_SUBAGENT = create_agent(
             model=chat_model(),
-            tools=week04_tools(),
+            tools=nana_tools(),
             system_prompt=nana_system_prompt(),
         )
     result = _NANA_SUBAGENT.invoke({"messages": [{"role": "user", "content": query}]})
