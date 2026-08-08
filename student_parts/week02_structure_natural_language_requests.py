@@ -144,23 +144,52 @@ class StructuredRequestBatch(BaseModel):
     base_date: str = Field(default_factory=current_app_date_iso, description="상대 날짜 해석 기준일. YYYY-MM-DD 형식")
 
 
-def _coerce_structured_request(value: Any) -> StructuredRequest:
-    """이후 회차에서 사용할 StructuredRequest 정규화 예약 함수입니다."""
-
-    ...
+_EXTRACTION_SYSTEM_PROMPT = (
+    f"현재 날짜는 {current_app_date_iso()}이다. 상대 날짜 표현(내일/다음 주 화요일 등)은 이 날짜를 "
+    "기준으로 YYYY-MM-DD로 변환한다. 아래 자연어 요청을 읽고 StructuredRequest 필드(kind/title/date/"
+    "start_time/end_time/members/priority/reason)를 채운다. 확실하지 않은 값은 지어내지 말고 None 또는 "
+    "빈 list로 둔다."
+)
 
 
 def extract_structured_request(text: str) -> StructuredRequest:
-    """이후 회차에서 사용할 단건 구조화 예약 함수입니다."""
+    """자연어 한 건을 LLM structured output으로 StructuredRequest 하나로 구조화합니다."""
 
-    ...
+    extractor = chat_model().with_structured_output(StructuredRequest)
+    structured = extractor.invoke(
+        [
+            {"role": "system", "content": _EXTRACTION_SYSTEM_PROMPT},
+            {"role": "user", "content": text},
+        ]
+    )
+    if not structured.original_text:
+        structured.original_text = text
+    return structured
+
+
+def _coerce_structured_request(value: Any) -> StructuredRequest:
+    """dict/JSON 문자열/StructuredRequest를 StructuredRequest 하나로 정규화합니다."""
+
+    if isinstance(value, StructuredRequest):
+        return value
+    if isinstance(value, dict):
+        return StructuredRequest.model_validate(value)
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except (TypeError, ValueError):
+            parsed = None
+        if isinstance(parsed, dict):
+            return StructuredRequest.model_validate(parsed)
+    return extract_structured_request(str(value))
 
 
 @tool
 def extract_schedule_request(query: str) -> str:
-    """이후 회차에서 저장 흐름과 연결할 예약 tool입니다."""
+    """자연어 일정/할 일/알림 요청을 StructuredRequest JSON 문자열로 구조화합니다."""
 
-    ...
+    structured = extract_structured_request(query)
+    return structured.model_dump_json()
 
 
 def week02_tools() -> list[Any]:
