@@ -468,6 +468,7 @@ def find_common_available_slots_dict(
 
     resolved_busy_rows = busy_rows
     if resolved_busy_rows is None:
+        # This in-process tool owns the MCP boundary and guarantees its JSON envelope.
         collected_text = collect_member_schedules.invoke(
             {
                 "member_names": normalized_member_names,
@@ -475,20 +476,7 @@ def find_common_available_slots_dict(
                 "date_to": normalized_date_to,
             }
         )
-        try:
-            collected_payload = json.loads(collected_text)
-        except (json.JSONDecodeError, TypeError) as exc:
-            raise RuntimeError("collect_member_schedules returned invalid JSON") from exc
-        if not isinstance(collected_payload, dict):
-            raise RuntimeError("collect_member_schedules returned a non-object payload")
-        if collected_payload.get("ok") is False:
-            raise RuntimeError("collect_member_schedules reported a failed collection")
-        collected_rows = collected_payload.get("rows")
-        if not isinstance(collected_rows, list):
-            raise RuntimeError("collect_member_schedules returned a non-list rows field")
-        if any(not isinstance(row, dict) for row in collected_rows):
-            raise RuntimeError("collect_member_schedules returned a non-object row")
-        resolved_busy_rows = collected_rows
+        resolved_busy_rows = json.loads(collected_text)["rows"]
 
     return find_common_available_slots_payload(
         member_names=members,

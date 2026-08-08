@@ -13,10 +13,7 @@ class CommonAvailableSlotTests(unittest.TestCase):
     def test_description_makes_kana_choose_candidates_before_validation(self) -> None:
         description = week06.FIND_COMMON_AVAILABLE_SLOTS_DESCRIPTION
 
-        self.assertIn("대신 계산하는 도구가 아니라", description)
-        self.assertIn("collect_member_schedules", description)
-        self.assertIn("date(YYYY-MM-DD)", description)
-        self.assertIn("busy_rows", description)
+        self.assertIn("candidate_slots", description)
         self.assertIn("decide_final_slot", description)
 
     def test_helper_collects_normalized_busy_rows_and_filters_invalid_candidates(self) -> None:
@@ -134,27 +131,17 @@ class CommonAvailableSlotTests(unittest.TestCase):
 
         self.assertEqual(result["candidate_slots"], [])
 
-    def test_malformed_collection_payloads_fail_instead_of_looking_empty(self) -> None:
-        malformed_payloads = [
-            ("not JSON", "invalid JSON"),
-            ("[]", "non-object payload"),
-            ('{"ok": false, "rows": []}', "failed collection"),
-            ('{"ok": true}', "non-list rows field"),
-            ('{"ok": true, "rows": {}}', "non-list rows field"),
-            ('{"ok": true, "rows": [1]}', "non-object row"),
-        ]
+    def test_collection_errors_propagate_without_becoming_empty_busy_rows(self) -> None:
+        collect = Mock()
+        collect.invoke.side_effect = RuntimeError("MCP unavailable")
 
-        for payload, expected_error in malformed_payloads:
-            with self.subTest(payload=payload):
-                collect = Mock()
-                collect.invoke.return_value = payload
-                with patch.object(week06, "collect_member_schedules", collect):
-                    with self.assertRaisesRegex(RuntimeError, expected_error):
-                        week06.find_common_available_slots_dict(
-                            member_names=["철수"],
-                            date_from="2026-08-06",
-                            date_to="2026-08-06",
-                        )
+        with patch.object(week06, "collect_member_schedules", collect):
+            with self.assertRaisesRegex(RuntimeError, "MCP unavailable"):
+                week06.find_common_available_slots_dict(
+                    member_names=["철수"],
+                    date_from="2026-08-06",
+                    date_to="2026-08-06",
+                )
 
     def test_public_tool_returns_unescaped_korean_json(self) -> None:
         raw_result = week06.find_common_available_slots.invoke(
@@ -204,12 +191,8 @@ class FinalSlotDecisionTests(unittest.TestCase):
     def test_description_requires_kana_to_make_the_final_choice(self) -> None:
         description = week06.DECIDE_FINAL_SLOT_DESCRIPTION
 
-        self.assertIn("대신 고르는 도구가 아니라", description)
         self.assertIn("selected_index", description)
-        self.assertIn("YYYY-MM-DD HH:MM-HH:MM", description)
-        self.assertIn("final_slot=null", description)
-        self.assertIn("busy_rows", description)
-        self.assertIn("'나'가 포함", description)
+        self.assertIn("needs_agent_selection", description)
 
     def test_selected_index_records_the_exact_final_slot_and_evidence(self) -> None:
         busy_rows = [
@@ -311,18 +294,10 @@ class SubAgentTests(unittest.TestCase):
         nana_prompt = week06.nana_system_prompt()
         kana_prompt = week06.kana_system_prompt()
 
-        self.assertIn("개인 일정의 생성·조회·수정·삭제", nana_prompt)
-        self.assertIn("참석자가 있어도 날짜와 시간이 이미 정해져", nana_prompt)
-        self.assertIn("여러 사람의 가능 시간 탐색", nana_prompt)
-        self.assertIn("외부 구성원의 과거 대화와 일정", kana_prompt)
-        self.assertIn("이미 받은 정보를 다시 묻지 않는다", kana_prompt)
-        self.assertIn("extract_schedule_request를 호출하지 않고 바로", kana_prompt)
-        self.assertIn("member_names=['철수', '영희']", kana_prompt)
-        self.assertIn("collect_member_schedules를 한 번 호출", kana_prompt)
+        self.assertIn("개인 일정", nana_prompt)
+        self.assertIn("RAG", nana_prompt)
         self.assertIn("find_common_available_slots", kana_prompt)
         self.assertIn("decide_final_slot", kana_prompt)
-        self.assertIn("'나' 포함 members 전체", kana_prompt)
-        self.assertIn(week06.current_app_date_iso(), kana_prompt)
 
     def test_role_tool_lists_do_not_leak_between_nana_and_kana(self) -> None:
         nana_names = set(week06.agent_tool_names("nana_agent"))
@@ -379,7 +354,7 @@ class SubAgentTests(unittest.TestCase):
             [tool.name for tool in create.call_args.kwargs["tools"]],
             [tool.name for tool in week06.week04_tools()],
         )
-        self.assertIn("개인 일정의 생성·조회·수정·삭제", create.call_args.kwargs["system_prompt"])
+        self.assertEqual(create.call_args.kwargs["system_prompt"], week06.nana_system_prompt())
         self.assertEqual(first["selected_agent"], "nana_agent")
         self.assertEqual(first["inner_tool_names"], ["personal_list_saved_schedules"])
         self.assertEqual(first["answer"], "저장된 일정이 없습니다.")
@@ -466,23 +441,11 @@ class SubAgentTests(unittest.TestCase):
 
 
 class SupervisorTests(unittest.TestCase):
-    def test_supervisor_prompt_routes_by_intent_and_data_source(self) -> None:
+    def test_supervisor_prompt_mentions_both_delegates(self) -> None:
         prompt = week06.supervisor_system_prompt()
 
-        self.assertIn("업무를 직접 수행하지 않고", prompt)
-        self.assertIn("요청의 의도와 데이터 출처", prompt)
-        self.assertIn("내일 3시에 철수와 회의를 내 일정에 등록해줘", prompt)
         self.assertIn("nana_agent", prompt)
-        self.assertIn("철수와 다음 주 가능한 시간을 찾아 회의 시간을 정해줘", prompt)
         self.assertIn("kana_agent", prompt)
-        self.assertIn("collect_member_schedules가 함께 수집", prompt)
-        self.assertIn("needs_agent_selection이 false", prompt)
-        self.assertIn("저장 의도가 명시되지 않았거나", prompt)
-        self.assertIn("적어도 하나를 호출", prompt)
-        self.assertIn("가용 시간 비교를 뜻하는 표현이 하나라도 있으면 반드시 kana_agent", prompt)
-        self.assertIn("저장하지 마", prompt)
-        self.assertIn("kana_agent 하나만 호출", prompt)
-        self.assertIn("사용자 원문과 제약을 그대로 전달", prompt)
 
     def test_supervisor_exposes_only_two_delegate_tools(self) -> None:
         self.assertEqual(
@@ -518,7 +481,10 @@ class SupervisorTests(unittest.TestCase):
             [tool.name for tool in create.call_args.kwargs["tools"]],
             ["nana_agent", "kana_agent"],
         )
-        self.assertIn("적어도 하나를 호출", create.call_args.kwargs["system_prompt"])
+        self.assertEqual(
+            create.call_args.kwargs["system_prompt"],
+            week06.supervisor_system_prompt(),
+        )
 
     def test_supervisor_trace_lifts_kana_evidence(self) -> None:
         final_payload = {

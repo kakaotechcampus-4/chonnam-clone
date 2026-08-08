@@ -428,6 +428,8 @@ def _collect_member_schedules(
         "ok": True,
         "tool_name": "collect_member_schedules",
         "members": ["나", *[name for name in normalized_member_names if name != "나"]],
+        "date_from": normalized_date_from,
+        "date_to": normalized_date_to,
         "rows": rows,
         "schedule_summary": external_schedule_summary(rows),
     }

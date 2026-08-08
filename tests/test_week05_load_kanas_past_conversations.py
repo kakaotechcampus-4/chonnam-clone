@@ -516,6 +516,8 @@ class MemberScheduleAggregationTests(unittest.TestCase):
         ]
         self.assertEqual(result["rows"], expected_rows)
         self.assertEqual(result["members"], ["나", "민아"])
+        self.assertEqual(result["date_from"], "2026-07-29")
+        self.assertEqual(result["date_to"], "2026-08-02")
         self.assertEqual(
             result["schedule_summary"],
             week05.external_schedule_summary(expected_rows),
