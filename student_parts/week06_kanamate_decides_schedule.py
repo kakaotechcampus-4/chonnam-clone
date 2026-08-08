@@ -274,8 +274,8 @@ def kana_prompt_parts() -> list[str]:
             "이미 받은 정보를 다시 묻지 않는다. 이 정보가 모두 있으면 extract_schedule_request를 호출하지 않고 바로 "
             "collect_member_schedules를 호출한다. 상대 날짜처럼 해석이 꼭 필요해 extract_schedule_request를 사용하더라도 "
             "그 결과가 원문에 명시된 멤버를 빠뜨렸다는 이유로 멤버가 없다고 판단하거나 다시 질문하지 않는다. 예를 들어 "
-            "'2026년 7월 9일에 철수와 영희가 모두 가능한 60분 회의 시간을 찾아줘'는 member_names=['철수', '영희']로 "
-            "collect_member_schedules부터 호출한다."
+            "'지정한 날짜에 철수와 영희가 모두 가능한 60분 회의 시간을 찾아줘'는 member_names=['철수', '영희']와 "
+            "현재 사용자 원문의 날짜 범위를 그대로 사용해 collect_member_schedules부터 호출한다."
         ),
         (
             "공통 시간을 조율할 때는 collect_member_schedules를 한 번 호출해 내 일정과 외부 멤버의 busy rows를 "
@@ -317,9 +317,10 @@ def supervisor_system_prompt() -> str:
                 "'조율', '후보', '최종 결정'처럼 가용 시간 비교를 뜻하는 표현이 하나라도 있으면 반드시 kana_agent를 "
                 "호출하고 nana_agent를 호출하지 않는다. 요청 끝의 '저장하지 마'는 저장 작업을 제거하는 부정 조건이지 "
                 "Nana를 호출하라는 뜻이 아니다. 날짜와 시간이 이미 확정됐고 가용 시간 비교 표현이 없을 때만 등록·저장 "
-                "요청을 nana_agent로 보낸다. 예시 입력 '2026년 7월 9일에 철수와 영희가 모두 가능한 60분 회의 시간을 "
-                "찾아 하나를 최종 결정해줘. 저장은 하지 마.'에는 kana_agent 하나만 호출한다. 하위 agent의 query에는 "
-                "사용자 원문과 제약을 그대로 전달하고 다른 일정으로 요약하거나 바꾸지 않는다. 하위 tool JSON을 그대로 "
+                "요청을 nana_agent로 보낸다. 예시 입력 '철수와 영희가 모두 가능한 60분 회의 시간을 찾아 하나를 최종 "
+                "결정해줘. 저장은 하지 마.'에는 kana_agent 하나만 호출한다. 하위 agent의 query에는 사용자 원문의 날짜, "
+                "시간, 멤버와 제약을 그대로 전달하고 prompt 예시의 값을 복사하거나 다른 일정으로 바꾸지 않는다. "
+                "하위 tool JSON을 그대로 "
                 "노출하지 말고 수행 여부, 확인된 근거, 최종 결정 또는 미확정 이유를 사용자가 이해할 수 있는 문장으로 "
                 "설명한다."
             ),
@@ -468,7 +469,7 @@ def find_common_available_slots_dict(
 
     resolved_busy_rows = busy_rows
     if resolved_busy_rows is None:
-        # This in-process tool owns the MCP boundary and guarantees its JSON envelope.
+        # collect_member_schedules owns the MCP boundary and guarantees this JSON envelope.
         collected_text = collect_member_schedules.invoke(
             {
                 "member_names": normalized_member_names,
@@ -604,7 +605,14 @@ def propose_group_schedule(
     return json.dumps({"ok": True, "tool_name": "propose_group_schedule", "final_decision": payload}, ensure_ascii=False)
 
 
-@tool(args_schema=AgentQueryInput)
+@tool(
+    description=(
+        "Nana 앱 내부의 개인 일정 CRUD, todo/reminder, 개인 참고자료와 앱 대화 RAG를 처리한다. 날짜와 시간이 "
+        "이미 확정된 등록 요청에만 사용한다. 가능한 시간·공통 시간·빈 시간 탐색, 일정 맞추기·조율, 후보 또는 "
+        "최종 시간 결정이 포함된 요청에는 사용하지 않는다. '저장하지 마' 같은 부정문도 Nana 호출 근거가 아니다."
+    ),
+    args_schema=AgentQueryInput,
+)
 def nana_agent(query: str) -> str:
     """개인 일정과 개인 RAG 작업을 프롬프트 기반 Nana 하위 에이전트에게 위임합니다."""
 
@@ -627,7 +635,14 @@ def nana_agent(query: str) -> str:
     return json.dumps(payload, ensure_ascii=False)
 
 
-@tool(args_schema=AgentQueryInput)
+@tool(
+    description=(
+        "외부 구성원 대화·일정과 그룹 가용 시간 조율을 처리한다. 가능한 시간, 모두 가능한, 빈 시간, 시간을 찾아, "
+        "일정 맞추기, 조율, 후보, 최종 결정 중 하나라도 포함되면 날짜와 시간이 명시돼 있어도 이 도구를 사용한다. "
+        "'저장하지 마'가 붙어도 이 도구를 사용하며 사용자 원문의 날짜·시간·멤버·제약을 query에 그대로 전달한다."
+    ),
+    args_schema=AgentQueryInput,
+)
 def kana_agent(query: str) -> str:
     """그룹 일정 종합 작업을 프롬프트 기반 Kana 하위 에이전트에게 위임합니다."""
 

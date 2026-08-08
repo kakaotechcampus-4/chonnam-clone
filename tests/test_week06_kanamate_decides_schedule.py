@@ -446,12 +446,15 @@ class SupervisorTests(unittest.TestCase):
 
         self.assertIn("nana_agent", prompt)
         self.assertIn("kana_agent", prompt)
+        self.assertNotIn("2026년 7월 9일", prompt)
 
     def test_supervisor_exposes_only_two_delegate_tools(self) -> None:
         self.assertEqual(
             [tool.name for tool in week06.supervisor_tools()],
             ["nana_agent", "kana_agent"],
         )
+        self.assertIn("개인 일정 CRUD", week06.nana_agent.description)
+        self.assertIn("그룹 가용 시간 조율", week06.kana_agent.description)
         self.assertEqual(
             week06.agent_tool_names("supervisor"),
             ["nana_agent", "kana_agent"],
