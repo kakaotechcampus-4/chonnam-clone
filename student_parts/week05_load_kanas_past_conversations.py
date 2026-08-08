@@ -306,13 +306,20 @@ def _structured_request_from_schedule_row(row: dict[str, Any]) -> StructuredRequ
     )
 
 
-def _my_schedule_notes(request: StructuredRequest) -> str:
-    """내 일정 row가 개인 일정인지, 참석자가 있는 그룹 일정인지 설명합니다."""
+def _my_schedule_notes(request: StructuredRequest, original_notes: str | None = None) -> str:
+    """내 일정 row가 개인 일정인지, 참석자가 있는 그룹 일정인지 설명합니다.
+
+    원본 row에 이미 notes가 있으면 지우지 않고 뒤에 구분 라벨만 덧붙입니다.
+    """
 
     if request.kind != "group_schedule":
-        return "Nana 개인 일정"
-    members = [str(member).strip() for member in (request.members or []) if str(member).strip()]
-    return f"Nana 그룹 일정 · 참석자: {', '.join(members)}" if members else "Nana 그룹 일정"
+        label = "Nana 개인 일정"
+    else:
+        members = [str(member).strip() for member in (request.members or []) if str(member).strip()]
+        label = f"Nana 그룹 일정 · 참석자: {', '.join(members)}" if members else "Nana 그룹 일정"
+
+    original = str(original_notes or "").strip()
+    return f"{original} · {label}" if original else label
 
 
 def _merge_schedule_rows(
@@ -343,7 +350,7 @@ def _merge_schedule_rows(
                 "date": schedule_date,
                 "start_time": request.start_time or "미정",
                 "end_time": request.end_time or "미정",
-                "notes": _my_schedule_notes(request),
+                "notes": _my_schedule_notes(request, schedule.get("notes")),
             }
         )
 
