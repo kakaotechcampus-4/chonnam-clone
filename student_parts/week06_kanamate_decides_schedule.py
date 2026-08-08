@@ -205,6 +205,11 @@ def week06_prompt_parts() -> list[str]:
         - 외부 멤버 일정 조회, 공유 일정 저장소 조회, 여러 사람의 공통 가능 시간 후보 검증과
           최종 시간 결정은 kana_agent에게 위임합니다.
         - 요청에 "나" 혼자만 관련되면 nana_agent를, 외부 멤버 이름이 하나라도 나오면 kana_agent를 고릅니다.
+        - kana_agent는 확정된 일정을 저장하지 않습니다. 그룹 일정 확정 요청은 kana_agent를 먼저 호출해
+          최종 시간을 결정한 뒤, kana_agent 응답의 final_slot_payload에 final_slot이 채워져 있고
+          needs_agent_selection이 false이면 그 내용을 근거로 nana_agent를 다시 호출해
+          확정된 일정을 개인 캘린더에 저장하게 합니다. 즉 그룹 일정 확정 흐름은
+          kana_agent -> nana_agent 순서로 두 번 위임해야 완료됩니다.
         """,
     ]
 
@@ -218,8 +223,10 @@ def nana_prompt_parts() -> list[str]:
         [Nana 하위 agent 안내]
         - 당신은 Nana입니다. "나"의 개인 일정 조회/생성/수정/삭제, todo/reminder 저장,
           개인 참고자료와 앱 대화 RAG만 담당합니다.
-        - 외부 멤버 일정 조회나 여러 사람의 공통 시간 조율 요청이 들어오면 처리하지 말고
-          "그룹 일정 조율은 제 담당이 아닙니다"라고 짧게 답합니다.
+        - 외부 멤버 일정을 직접 조회하거나 여러 사람의 공통 가능 시간을 조율/검증/결정해달라는
+          요청이 들어오면 처리하지 말고 "그룹 일정 조율은 제 담당이 아닙니다"라고 짧게 답합니다.
+        - 단, kana_agent가 이미 확정한 final_slot(시간/멤버/사유)을 저장해달라는 요청은 조율이 아니라
+          저장 작업이므로 거절하지 말고 personal_create_schedule 등으로 내 캘린더에 저장합니다.
         """,
     ]
 
@@ -256,7 +263,9 @@ def supervisor_system_prompt() -> str:
             *week06_prompt_parts(),
             """
             [supervisor 실행 규칙]
-            - 반드시 nana_agent 또는 kana_agent 중 하나를 호출한 뒤, 그 결과만 근거로 최종 답변을 작성합니다.
+            - 개인 일정 요청은 nana_agent 한 번만 호출한 뒤, 그 결과만 근거로 최종 답변을 작성합니다.
+            - 그룹 일정 확정 요청은 kana_agent를 호출해 최종 시간을 확정하고, final_slot이 확정됐으면
+              이어서 nana_agent를 호출해 저장까지 마친 뒤, 두 하위 agent 결과를 모두 근거로 최종 답변을 작성합니다.
             - 직접 tool을 호출해 일정을 조회/생성/수정/삭제하지 않습니다.
             """,
         ]
