@@ -17,15 +17,11 @@ from fixed.schedule_decision import (
     find_common_available_slots_payload,
     normalize_date_bound,
 )
-from student_parts.week01_wake_up_nana import (
-    join_system_prompt,
-    personal_create_schedule as week01_personal_create_schedule,
-)
+from student_parts.week01_wake_up_nana import join_system_prompt
 from student_parts.week02_structure_natural_language_requests import extract_schedule_request
 from student_parts.week03_build_nanas_logbook import (
     SavedScheduleListInput,
     personal_list_saved_schedules as week03_personal_list_saved_schedules,
-    save_structured_request_payload,
 )
 from student_parts.week04_retrieve_nanas_memory import week04_prompt_parts, week04_tools
 from student_parts.week05_load_kanas_past_conversations import (
@@ -250,6 +246,9 @@ def nana_prompt_parts() -> list[str]:
         "참석자를 조건으로 저장된 일정을 찾아야 하는데 tool에 참석자 필터 인자가 없다고 해서 조회를 포기하지 "
         "않는다. personal_list_saved_schedules를 date_from/date_to 없이 호출해 전체 목록을 받은 뒤, 그 결과의 "
         "attendees 필드를 직접 확인해 조건에 맞는 일정을 찾는다.",
+        "너에게는 personal_create_schedule tool이 없다. 우선순위·긴급도 신호가 있든 없든 새 일정/할 일/"
+        "알림을 만들 땐 항상 extract_schedule_request로 원문을 그대로 구조화한 뒤, 그 결과 필드를 "
+        "save_structured_request 인자로 그대로 넘겨 저장한다.",
     ]
     _assert_no_foreign_tool_mentions(
         owner="nana_prompt_parts",
@@ -554,36 +553,6 @@ def decide_final_slot(
     return json.dumps(result, ensure_ascii=False)
 
 
-@tool("personal_create_schedule")
-def personal_create_schedule(
-    title: str,
-    date: str,
-    start_time: str,
-    end_time: str = "미정",
-    attendees: list[str] | None = None,
-) -> str:
-    """Nana의 개인 일정을 생성하고 SQLite에도 저장합니다. 참석자가 있으면 group_schedule로 분류합니다."""
-
-    created_raw = week01_personal_create_schedule.invoke(
-        {"title": title, "date": date, "start_time": start_time, "end_time": end_time, "attendees": attendees}
-    )
-    created = json.loads(created_raw)
-    schedule = created["created_schedule"]
-    members = schedule.get("attendees") or []
-    sqlite_save = save_structured_request_payload(
-        {
-            "kind": "group_schedule" if members else "personal_schedule",
-            "title": schedule.get("title"),
-            "date": schedule.get("date"),
-            "start_time": schedule.get("start_time"),
-            "end_time": schedule.get("end_time"),
-            "members": members,
-            "source_schedule_id": schedule.get("id"),
-        }
-    )
-    return json.dumps({**created, "sqlite_save": sqlite_save}, ensure_ascii=False)
-
-
 @tool("personal_list_saved_schedules", args_schema=SavedScheduleListInput)
 def personal_list_saved_schedules(
     limit: int = 50,
@@ -623,13 +592,17 @@ def personal_list_saved_schedules(
 
 
 def nana_tools() -> list[Any]:
-    """week04_tools()의 personal_create_schedule/personal_list_saved_schedules를
-    참석자 유무 기반 kind 분류 규칙과 kind 필터 없는 조회로 보강한 버전으로 교체합니다."""
+    """week04_tools()에서 personal_create_schedule을 제거해 모든 일정 생성이
+    extract_schedule_request -> save_structured_request 경로로만 가도록 강제하고,
+    personal_list_saved_schedules는 kind 필터 없는 조회로 보강한 버전으로 교체합니다."""
     replacements = {
-        "personal_create_schedule": personal_create_schedule,
         "personal_list_saved_schedules": personal_list_saved_schedules,
     }
-    return [replacements.get(tool_name(item), item) for item in week04_tools()]
+    return [
+        replacements.get(tool_name(item), item)
+        for item in week04_tools()
+        if tool_name(item) != "personal_create_schedule"
+    ]
 
 
 def kana_tools() -> list[Any]:
