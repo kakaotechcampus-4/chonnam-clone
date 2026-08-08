@@ -203,8 +203,7 @@ def week06_system_prompt() -> str:
 def week06_prompt_parts() -> list[str]:
     """1~6주차 supervisor system prompt 조각을 누적합니다."""
 
-    return [
-        *week05_prompt_parts(),
+    week06_own_parts = [
         "너는 카나메이트 supervisor다. 개인 일정 생성/조회/수정/삭제, 할 일/알림 저장, "
         "개인 참고자료 검색, 앱 대화 RAG 검색은 전부 nana_agent에게 위임한다. "
         "외부 멤버와의 이전 대화 검색, 외부 멤버 일정 조회, 공유 일정 저장소 조회, "
@@ -225,13 +224,18 @@ def week06_prompt_parts() -> list[str]:
         "상대가 외부 멤버면 마찬가지로 kana_agent다 — 표현이 아니라 정보의 출처(외부 멤버와 나눈 대화인지)로 "
         "판단한다.",
     ]
+    _assert_no_foreign_tool_mentions(
+        owner="week06_prompt_parts (supervisor)",
+        new_parts=week06_own_parts,
+        foreign=_tool_names(nana_tools()) | _tool_names(kana_tools()),
+    )
+    return [*week05_prompt_parts(), *week06_own_parts]
 
 
 def nana_prompt_parts() -> list[str]:
     """Week 6 Nana 하위 에이전트 전용 system prompt 조각입니다."""
 
-    return [
-        *week04_prompt_parts(),
+    nana_own_parts = [
         "너는 개인 메이트 Nana다. 개인 일정 생성/조회/수정/삭제, 할 일/알림 저장, "
         "개인 참고자료 검색, 앱 대화 RAG 검색을 담당한다. "
         "너에게는 외부 멤버와 나눈 대화를 검색하거나, 외부 멤버의 개인 일정을 조회하거나, 공유 일정 "
@@ -247,12 +251,18 @@ def nana_prompt_parts() -> list[str]:
         "않는다. personal_list_saved_schedules를 date_from/date_to 없이 호출해 전체 목록을 받은 뒤, 그 결과의 "
         "attendees 필드를 직접 확인해 조건에 맞는 일정을 찾는다.",
     ]
+    _assert_no_foreign_tool_mentions(
+        owner="nana_prompt_parts",
+        new_parts=nana_own_parts,
+        foreign=_tool_names(kana_tools()) - _tool_names(nana_tools()),
+    )
+    return [*week04_prompt_parts(), *nana_own_parts]
 
 
 def kana_prompt_parts() -> list[str]:
     """Week 6 Kana 하위 에이전트 전용 system prompt 조각입니다."""
 
-    return [
+    kana_own_parts = [
         f"너는 그룹 메이트 Kana다. 오늘 날짜는 반드시 {current_app_date_iso()}로 사용한다. "
         "다른 날짜를 추측하지 않는다. 상대 날짜는 현재 날짜 기준으로 YYYY-MM-DD로 바꾼다. "
         "외부 멤버와의 이전 대화 검색·로드, 외부 멤버 일정 추출, 공유 일정 저장소 조회, "
@@ -275,6 +285,12 @@ def kana_prompt_parts() -> list[str]:
         "extract_schedules_from_history를 호출하지 않는다. 어떤 멤버들인지 먼저 되묻는다. 집합 표현이 없어도 "
         "문장에 특정 멤버 이름이 전혀 없이 외부 busy-time을 물으면 마찬가지로 먼저 되묻는다.",
     ]
+    _assert_no_foreign_tool_mentions(
+        owner="kana_prompt_parts",
+        new_parts=kana_own_parts,
+        foreign=_tool_names(nana_tools()) - _tool_names(kana_tools()),
+    )
+    return kana_own_parts
 
 
 def nana_system_prompt() -> str:
@@ -332,6 +348,26 @@ def extract_langchain_trace(result: dict[str, Any]) -> dict[str, Any]:
 
 def tool_name(tool_object: Any) -> str:
     return getattr(tool_object, "name", getattr(tool_object, "__name__", str(tool_object)))
+
+
+def _tool_names(tools: list[Any]) -> set[str]:
+    return {tool_name(item) for item in tools}
+
+
+def _assert_no_foreign_tool_mentions(*, owner: str, new_parts: list[str], foreign: set[str]) -> None:
+    """새로 추가한 프롬프트 문장에 담당 아닌 tool 이름이 있으면 즉시 실패시킵니다.
+
+    이 함수가 걸리면 대개 "규칙을 엉뚱한 *_prompt_parts()에 넣었다"는 뜻이다 — supervisor
+    프롬프트에 collect_member_schedules(Kana 전용 tool)가 잘못 들어갔던 실제 사고를
+    재실행 없이 함수 호출 시점에 즉시 잡기 위한 가드. 이전 주차부터 누적된 문장은 검사
+    대상이 아니다 — 이번에 새로 쓴 문장만 본다.
+    """
+    text = " ".join(new_parts)
+    leaked = {name for name in foreign if name in text}
+    assert not leaked, (
+        f"{owner}에 새로 추가한 문장에 담당 아닌 tool 이름이 등장합니다: {sorted(leaked)}. "
+        "이 규칙이 실제로 필요한 agent의 prompt_parts()로 옮기세요."
+    )
 
 
 FIND_COMMON_AVAILABLE_SLOTS_DESCRIPTION = (
