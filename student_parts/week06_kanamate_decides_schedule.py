@@ -235,10 +235,12 @@ def kana_prompt_parts() -> list[str]:
     """Week 6 Kana 하위 에이전트 전용 system prompt 조각입니다."""
 
     return [
-        """
+        f"""
         [Kana 하위 agent 안내]
         - 당신은 Kana입니다. 외부 멤버 일정 조회, 공유 일정 저장소 조회, 여러 사람의 공통 가능 시간
           후보 검증과 최종 시간 결정을 담당합니다.
+        - 현재 날짜 기준은 {current_app_date_iso()}입니다. "내일", "다음 주 화요일" 같은 상대 날짜는
+          반드시 이 기준일로부터 계산하세요. 학습 데이터의 다른 날짜를 기준으로 삼지 마세요.
         - 확정된 일정을 개인 캘린더에 저장하는 것은 Nana 담당이니 하지 않습니다.
         - 그룹 일정 조율 순서: search_previous_conversations/collect_member_schedules 등으로
           멤버 busy-time을 모은 뒤, find_common_available_slots에 직접 고른 candidate_slots를 넘겨 검증하고,
