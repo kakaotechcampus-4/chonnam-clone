@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import date, timedelta
 from typing import Any
 
 from langchain.agents import create_agent
@@ -31,9 +32,11 @@ from student_parts.week04_retrieve_nanas_memory import week04_prompt_parts, week
 
 
 _WEEK05_AGENT: Any | None = None
-# 공유 일정 저장소가 한 번에 200건까지만 돌려준다. 이 값을 그보다 크게 잡으면 아래 "꽉 찼다" 판정이
-# 영원히 안 걸려서 누락 경고가 조용히 사라진다.
+# 공유 일정 저장소가 한 번에 200건까지만 돌려준다. 아래에서는 "받은 건수가 이 값과 같으면
+# 뒤에 더 있다"고 보고 누락 경고를 띄우는데, 이 값을 200보다 크게 잡으면 그 조건이 영원히
+# 참이 되지 않는다. 그러면 실제로 명단이 잘려도 경고 없이 넘어간다.
 _ROSTER_LIMIT = 200
+EXTERNAL_LOOKUP_FAILURE_NOTICE = "외부 일정 조회에 실패해, 외부 구성원의 일정이 빠진 채로 계산됐습니다."
 
 
 # [5주차 수강생 구현 가이드]
@@ -196,7 +199,9 @@ def _personal_schedules_for_current_scope() -> list[dict[str, Any]]:
     # 기본 limit 12로는 조율 대상 일정이 잘린다. SQL 날짜 필터는 일부러 안 쓴다 — 아래 임시분이
     # SQL을 안 타 날짜 의미가 두 층이 되므로, 날짜 거르기는 _collect_member_schedules가 맡는다.
     stored = AppSQLiteStore(CONFIG.app_db_path).list_schedules(limit=200)
-    # 저장분 schedule_id와 임시분 id가 맞물린다 — week03이 임시 id를 물려준다(app_store.py:353).
+    # 저장된 일정의 schedule_id와 임시 일정의 id는 같은 값일 수 있다. week03에서 저장할 때
+    # 임시 id를 그대로 물려주기 때문이다(fixed/app_store.py의 save_structured_request).
+    # 그래서 아래에서 이 id 집합으로 임시분 중 이미 저장된 것을 걸러 중복을 막는다.
     stored_ids = {str(row["schedule_id"]) for row in stored if row.get("schedule_id")}
     scope = current_session_scope()
     pending = [
@@ -276,10 +281,18 @@ class CollectMemberSchedulesInput(BaseModel):
 
 
 def _structured_request_from_schedule_row(row: dict[str, Any]) -> StructuredRequest:
-    """앱 일정 row를 Week 2 StructuredRequest 기준으로 읽습니다."""
+    """앱 일정 row를 Week 2 StructuredRequest 기준으로 읽습니다.
+
+    SQLite row는 `request_kind`로 개인/그룹을 구분합니다. Week 1 임시 일정 row에는
+    이 값이 없으므로 개인 일정으로 봅니다.
+    """
 
     return StructuredRequest(
-        kind="personal_schedule",
+        kind=(
+            "group_schedule"
+            if row.get("request_kind") == "group_schedule"
+            else "personal_schedule"
+        ),
         title=row.get("title"),
         date=row.get("date"),
         start_time=row.get("start_time"),
@@ -289,26 +302,87 @@ def _structured_request_from_schedule_row(row: dict[str, Any]) -> StructuredRequ
     )
 
 
+def _my_schedule_notes(request: StructuredRequest) -> str:
+    """내 일정 row가 개인 일정인지, 참석자가 있는 그룹 일정인지 설명합니다."""
+
+    if request.kind != "group_schedule":
+        return "Nana 개인 일정"
+    members = [str(member).strip() for member in (request.members or []) if str(member).strip()]
+    return f"Nana 그룹 일정 · 참석자: {', '.join(members)}" if members else "Nana 그룹 일정"
+
+
+def unique_member_names(member_names: list[Any] | None) -> list[str]:
+    """이름을 정규화한 뒤 중복을 없애고, 처음 나온 순서를 지킵니다.
+
+    "나"는 빼지 않습니다. "나"까지 뺀 목록이 필요하면 external_member_names를 씁니다.
+    같은 사람이 두 번 들어오면 그 사람 일정을 두 번 세게 되므로 여기서 걸러 둡니다.
+    """
+
+    return list(dict.fromkeys(normalize_external_member_names(member_names)))
+
+
+def external_member_names(member_names: list[Any] | None) -> list[str]:
+    """외부 멤버 이름만 남깁니다. "나"는 사용자 자신이라 외부 멤버가 아니므로 뺍니다.
+
+    외부 저장소를 조회할 이름 목록을 만들 때 씁니다. "나"의 일정은 외부가 아니라
+    앱 DB에서 따로 읽으므로, 이 목록에 "나"가 섞이면 같은 일정을 두 번 세게 됩니다.
+    """
+
+    return [
+        name
+        for name in unique_member_names(member_names)
+        if name != PERSONAL_SHARED_MEMBER_NAME
+    ]
+
+
 def _external_member_roster(date_from: str, date_to: str) -> tuple[list[str], bool]:
     """조회 구간에 일정이 있는 외부 멤버 이름을 등장 순서대로 모읍니다."""
 
     # 여기서는 이름 명단만 얻는다. 일정 자체는 extract_schedules_from_history가 계속 맡는다
-    # (이 파일 맨 위 구현 가이드 :96).
-    # 저장소는 날짜가 이른 것부터 줄 세운 뒤 앞에서 200건만 잘라 준다. 그래서 구간이 길면 뒤쪽 날짜에만
-    # 나오는 사람이 명단에서 통째로 빠진다. 전체가 몇 건이었는지는 안 알려주므로, 200건을 꽉 채워 왔으면
-    # 뒤가 더 있었다고 보고 두 번째 반환값으로 알린다.
-    payload = json.loads(
-        call_mcp_tool_sync(
-            "list_shared_schedules",
-            {"date_from": date_from, "date_to": date_to, "limit": _ROSTER_LIMIT},
+    # (이 파일 맨 위 구현 가이드 "외부 멤버 일정은 ... extract_schedules_from_history 결과를
+    #  이 tool 안에서 읽습니다").
+    # 저장소는 날짜가 이른 것부터 줄 세운 뒤 앞에서 _ROSTER_LIMIT건만 잘라 준다. 전체가 몇 건이었는지는
+    # 안 알려주므로, 꽉 채워 오면 뒤가 더 있다고 보고 구간을 반으로 쪼개 다시 부른다. 그래야 뒤쪽
+    # 날짜에만 나오는 사람이 명단에서 빠지지 않는다.
+    # 하루까지 쪼갰는데도 꽉 차면 그 하루는 정말 다 못 담은 것이므로, 두 번째 반환값으로 알린다.
+    def _lookup_once(start: str, end: str) -> tuple[list[dict[str, Any]], bool]:
+        payload = json.loads(
+            call_mcp_tool_sync(
+                "list_shared_schedules",
+                {"date_from": start, "date_to": end, "limit": _ROSTER_LIMIT},
+            )
         )
-    )
-    rows = payload.get("rows") or []
-    roster: list[str] = []
-    for name in normalize_external_member_names([row.get("member_name") for row in rows]):
-        if name != PERSONAL_SHARED_MEMBER_NAME and name not in roster:
-            roster.append(name)
-    return roster, len(rows) >= _ROSTER_LIMIT
+        rows = payload.get("rows") or []
+        return rows, len(rows) >= _ROSTER_LIMIT
+
+    def _lookup_range(start: date, end: date) -> tuple[list[dict[str, Any]], bool]:
+        if start > end:
+            return [], False
+
+        rows, limit_reached = _lookup_once(start.isoformat(), end.isoformat())
+        if not limit_reached or start == end:
+            return rows, limit_reached
+
+        midpoint = start + (end - start) // 2
+        left_rows, left_limit_reached = _lookup_range(start, midpoint)
+        right_rows, right_limit_reached = _lookup_range(
+            midpoint + timedelta(days=1), end
+        )
+        return [*left_rows, *right_rows], left_limit_reached or right_limit_reached
+
+    try:
+        start_date = date.fromisoformat(date_from)
+        end_date = date.fromisoformat(date_to)
+    except (TypeError, ValueError):
+        # 날짜를 못 읽으면 구간을 쪼갤 수 없다. 쪼개기 이전처럼 받은 문자열 그대로 한 번만 조회한다.
+        # 여기서 빈 명단([])을 돌려주는 쪽이 안전해 보이지만 그러면 안 된다. 빈 명단은 "전원"이
+        # 아니라 "아무도 없음"으로 읽히고, 뒤이은 일정 조회(fixed/external_people_store.py의
+        # extract_schedules_from_history)는 찾을 이름이 없다며 곧바로 빈 목록을 돌려준다.
+        # 그러면 오류 메시지 하나 없이 "일정이 하나도 없다"는 답이 사용자에게 나가 버린다.
+        rows, limit_reached = _lookup_once(date_from, date_to)
+    else:
+        rows, limit_reached = _lookup_range(start_date, end_date)
+    return external_member_names([row.get("member_name") for row in rows]), limit_reached
 
 
 def _collect_member_schedules(
@@ -324,8 +398,11 @@ def _collect_member_schedules(
     normalized_from, normalized_to = normalize_external_schedule_date_bounds(
         member_names, date_from, date_to
     )
-    # 미기동·타임아웃·JSON 파손은 전부 "외부 조회 실패"라는 같은 처분을 받는다. 좁혀 잡으면
-    # 새 실패 유형이 다시 채팅 턴을 죽인다 — 명단 조회가 이 안에 있는 것도 같은 이유다.
+    # 아래 try는 예외 종류를 가리지 않고 전부 "외부 조회 실패" 하나로 묶는다.
+    # 외부 조회는 MCP 서버를 별도 프로세스로 띄워 주고받는 일이라 실패 모양이 여럿이다 —
+    # 프로세스를 못 띄우는 경우, 응답이 JSON이 아닌 경우, JSON이 dict가 아니라 .get이 터지는 경우.
+    # 종류를 좁혀 잡으면 미처 예상 못 한 실패 하나가 그대로 올라와 채팅 턴 전체를 죽인다.
+    # 외부 멤버 명단 조회를 이 try 안에 같이 둔 것도 같은 이유다.
     external_members: list[str] = []
     roster_payload: dict[str, Any] | None = None
     try:
@@ -335,11 +412,7 @@ def _collect_member_schedules(
             # limit_reached는 이름을 안 준 이 경우에만 생긴다. 아래에서 읽을 때 같은 조건을 다시 본다.
         else:
             # 정규화 뒤에 거른다 — 공백·별칭으로 "나"가 되는 이름을 놓치면 내 일정이 두 번 온다.
-            external_members = [
-                name
-                for name in normalize_external_member_names(member_names)
-                if name != PERSONAL_SHARED_MEMBER_NAME
-            ]
+            external_members = external_member_names(member_names)
         external_payload = json.loads(
             call_mcp_tool_sync(
                 "extract_schedules_from_history",
@@ -360,8 +433,10 @@ def _collect_member_schedules(
                 "limit": _ROSTER_LIMIT,
             }
             if limit_reached:
+                # "하루"라고 쓰지 않는다. 날짜를 못 읽어 구간을 못 쪼갠 경우(_external_member_roster의
+                # except 갈래)에도 이 경고가 나가는데, 그때는 하루가 아니라 받은 구간 전체다.
                 roster_payload["notice"] = (
-                    f"명단 조회는 {_ROSTER_LIMIT}건까지만 읽어 일부 멤버가 빠졌을 수 있습니다."
+                    f"명단 조회가 {_ROSTER_LIMIT}건 상한에 닿아, 일부 구성원이 이번 조회 전체에서 빠졌을 수 있습니다."
                 )
     except Exception:
         external_ok = False
@@ -383,13 +458,17 @@ def _collect_member_schedules(
                 "date": request.date,
                 "start_time": request.start_time,
                 "end_time": request.end_time or "미정",
-                "notes": "",
+                "notes": _my_schedule_notes(request),
             }
         )
 
+    # 공지 (D)의 _dedupe_schedule_rows는 두지 않는다. 그 중복은 "나"가 외부 조회에 섞여야
+    # 생기는데, 이 구현은 조회 전에 "나"를 뺀다 (이름을 준 경우 external_member_names,
+    # 전원인 경우 _external_member_roster). 그래서 같은 일정이 두 경로로 들어오지 않는다.
     rows = [*my_rows, *external_rows]
     payload = {
-        # 실패하면 rows에 내 일정만 남는다. ok=True로 고정하면 "다 모았다"로 새어 나간다.
+        # 외부 조회가 실패하면 rows에는 내 일정만 남는다. 그런데도 ok=True로 고정해 두면
+        # 읽는 쪽은 "전원 일정을 다 모았다"고 믿고 답을 만든다. 그래서 실패를 그대로 싣는다.
         "ok": external_ok,
         "tool_name": "collect_member_schedules",
         # 실제로 MCP에 보낸 값이다. LLM이 보낸 원본은 같은 trace의 tool_call에 이미 있다.
@@ -403,6 +482,11 @@ def _collect_member_schedules(
     }
     if roster_payload is not None:
         payload["roster"] = roster_payload
+    if not external_ok:
+        payload["external_lookup"] = {
+            "ok": False,
+            "notice": EXTERNAL_LOOKUP_FAILURE_NOTICE,
+        }
     return payload
 
 
@@ -454,7 +538,8 @@ def create_shared_schedule(
 ) -> str:
     """외부 MCP 공유 일정 저장소에 일정을 등록하거나 갱신합니다."""
 
-    # 이 파일 맨 위 구현 가이드 :105("결과를 그대로 전달")에서 벗어난다. 전달할 payload 자체가 없는 실패다.
+    # 이 파일 맨 위 구현 가이드의 "MCP tool 결과를 그대로 전달합니다"에서 벗어난다.
+    # 전달할 payload 자체가 없는 실패다.
     try:
         return call_mcp_tool_sync(
             "create_shared_schedule",
@@ -480,8 +565,9 @@ def delete_shared_schedule(
 ) -> str:
     """외부 MCP 공유 일정 저장소에서 일정을 삭제합니다."""
 
-    # 이 파일 맨 위 구현 가이드 :105에서 벗어난다. 서버는 삭제 건수와 무관하게 ok=true를 싣는데
-    # (sqlite_mcp_server.py:126), ok는 "요청한 효과가 일어났다"는 뜻이어야 한다.
+    # 이 파일 맨 위 구현 가이드의 "MCP tool 결과를 그대로 전달합니다"에서 벗어난다.
+    # 서버는 실제로 지운 건수와 무관하게 ok=true를 싣는데(mcp_server/sqlite_mcp_server.py의
+    # delete_shared_schedule), ok는 "요청한 효과가 일어났다"는 뜻이어야 한다.
     try:
         payload = json.loads(
             call_mcp_tool_sync(
