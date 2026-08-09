@@ -337,7 +337,7 @@ class Week05MCPWrapperTests(unittest.TestCase):
             ],
         )
 
-    def test_collect_member_schedules_excludes_non_attendee_group_schedule(self) -> None:
+    def test_collect_member_schedules_includes_stored_group_schedule_without_me_attendee(self) -> None:
         tomorrow = "2026-08-05"
 
         with tempfile.TemporaryDirectory() as directory:
@@ -375,7 +375,7 @@ class Week05MCPWrapperTests(unittest.TestCase):
                 actual = json.loads(
                     week05.collect_member_schedules.invoke(
                         {
-                            "member_names": ["철수", "영희"],
+                            "member_names": ["민준"],
                             "date_from": tomorrow,
                             "date_to": tomorrow,
                         }
@@ -386,8 +386,11 @@ class Week05MCPWrapperTests(unittest.TestCase):
             del store
             gc.collect()
 
-        self.assertEqual(actual["personal_schedule_count"], 0)
-        self.assertEqual(actual["rows"], [])
+        self.assertEqual(actual["personal_schedule_count"], 1)
+        self.assertEqual(len(actual["rows"]), 1)
+        self.assertEqual(actual["rows"][0]["member_name"], "나")
+        self.assertEqual(actual["rows"][0]["title"], "철수와 영희 회의")
+        self.assertEqual(actual["rows"][0]["notes"], "Nana 그룹 일정 · 참석자: 철수, 영희")
 
     def test_collect_member_schedules_includes_group_schedule_when_current_user_attends(self) -> None:
         tomorrow = "2026-08-05"
@@ -441,6 +444,63 @@ class Week05MCPWrapperTests(unittest.TestCase):
         self.assertEqual(len(actual["rows"]), 1)
         self.assertEqual(actual["rows"][0]["member_name"], "나")
         self.assertEqual(actual["rows"][0]["title"], "나와 철수와 영희 회의")
+        self.assertEqual(actual["rows"][0]["notes"], "Nana 그룹 일정 · 참석자: 나, 철수, 영희")
+
+    def test_collect_member_schedules_dedupes_shared_copy_and_member_names(self) -> None:
+        personal_schedule = {
+            "request_kind": "personal_schedule",
+            "title": "팀 회의 (온라인)",
+            "date": "2026-07-14",
+            "start_time": "15:00",
+            "end_time": "미정",
+        }
+        shared_copy = {
+            "member_name": "나",
+            "title": "팀 회의",
+            "date": "2026-07-14",
+            "start_time": "15:00",
+            "end_time": "미정",
+            "notes": "앱 개인 일정 자동 동기화",
+        }
+
+        with (
+            patch.object(
+                week05,
+                "_personal_schedules_for_current_scope",
+                return_value=[personal_schedule],
+            ),
+            patch.object(
+                week05,
+                "call_mcp_tool_sync",
+                return_value=json.dumps({"ok": True, "rows": [shared_copy]}, ensure_ascii=False),
+            ),
+        ):
+            actual = json.loads(
+                week05.collect_member_schedules.invoke(
+                    {
+                        "member_names": ["나", "민준"],
+                        "date_from": "2026-07-14",
+                        "date_to": "2026-07-14",
+                    }
+                )
+            )
+
+        self.assertEqual(actual["members"], ["나", "민준"])
+        self.assertEqual(actual["personal_schedule_count"], 1)
+        self.assertEqual(actual["external_schedule_count"], 1)
+        self.assertEqual(
+            actual["rows"],
+            [
+                {
+                    "member_name": "나",
+                    "title": "팀 회의 (온라인)",
+                    "date": "2026-07-14",
+                    "start_time": "15:00",
+                    "end_time": "18:00",
+                    "notes": "Nana 개인 일정",
+                }
+            ],
+        )
 
     def test_collect_member_schedules_keeps_personal_rows_with_iso_datetime_bounds(self) -> None:
         personal_schedule = {
@@ -484,7 +544,7 @@ class Week05MCPWrapperTests(unittest.TestCase):
                 "date": "2026-07-08",
                 "start_time": "10:00",
                 "end_time": "11:00",
-                "notes": None,
+                "notes": "Nana 개인 일정",
             },
             external_row,
         ])
