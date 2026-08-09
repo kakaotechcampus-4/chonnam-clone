@@ -67,7 +67,8 @@ WEEK06_SUBAGENT_QUERY_PROMPT = (
     "사용자가 '다음 주'처럼 상대적인 기간을 말했으면 query에는 YYYY-MM-DD 형식으로 바꿔 적는다. "
     "'그거', '아까 말한 일정'처럼 이전 메시지를 가리키는 표현은 query에 그대로 넣지 않고, "
     "이전 메시지에서 확인한 실제 값으로 바꿔 적는다. "
-    "하위 agent는 사용자에게 되물을 수 없으므로, 값이 부족하면 위임하기 전에 사용자에게 먼저 확인한다."
+    "값이 부족해 보여도 위임 전에 사용자에게 되묻지 않고, 대화에서 확인한 값까지만 담아 위임한다. "
+    "어떤 값이 더 필요한지는 하위 agent가 답변으로 알린다."
 )
 
 WEEK06_SUPERVISOR_EXECUTION_PROMPT = (
@@ -77,6 +78,8 @@ WEEK06_SUPERVISOR_EXECUTION_PROMPT = (
     "하위 agent는 JSON 문자열을 반환하고, 그 안의 answer가 사용자에게 전달할 내용이다. "
     "answer에 없는 날짜·시간·일정을 덧붙이지 않는다. "
     "trace와 inner_tool_names는 어떤 tool이 실행됐는지 확인하는 근거이므로 사용자 답변에 옮기지 않는다. "
+    "answer가 값이 부족해 작업을 끝내지 못했다고 알리면, 그 값을 사용자에게 묻고 "
+    "답을 받은 뒤 같은 하위 agent에 다시 위임한다. 사용자 답을 받기 전에 값을 임의로 정하지 않는다. "
     "위임 결과가 JSON이 아닌 오류 메시지이거나 answer가 비어 있으면 위임한 작업이 끝나지 않았다는 "
     "뜻이므로, 무엇이 처리되지 않았는지 사용자에게 알린다."
 )
@@ -395,6 +398,27 @@ def kana_system_prompt() -> str:
 
 
 def supervisor_system_prompt() -> str:
+    """supervisor system prompt를 파트 순서대로 합칩니다."""
+
+    """되묻기 시점을 두 파트가 다르게 지시하던 문제와 처리 방식.
+
+    1. 파트 순서는 뒤에 오는 지시가 우선한다.
+       join_system_prompt가 붙이는 header에 "더 뒤에 있는 지시를 우선한다"가 있다.
+       이 함수가 만드는 순서는 (1) week05_prompt_parts(), (2) WEEK06_DELEGATION_PROMPT,
+       (3) WEEK06_SUBAGENT_QUERY_PROMPT, (4) 기준 날짜 파트,
+       (5) WEEK06_SUPERVISOR_EXECUTION_PROMPT다.
+
+    2. 두 파트가 되묻기 시점을 다르게 지시했다.
+       (3)은 값이 부족하면 위임 전에 사용자에게 확인하라고 했고,
+       (5)는 어떤 요청이든 하위 agent를 최소 한 번 호출한 뒤에 답하라고 했다.
+       (3)을 따르면 tool 호출 없이 답하게 되어 (5)를 위반한다.
+
+    3. 뒤 파트인 (5)를 기준으로 (3)을 맞췄다.
+       supervisor는 하위 agent에 어떤 값이 필요한지 모른다. AgentQueryInput의 필드는
+       query 하나뿐이라 tool 스키마로도 알 수 없다. 그래서 (3)에서 위임 전 되묻기를
+       빼고, 값이 부족하다는 판단은 하위 agent 답변으로 받아 (5)에서 사용자에게
+       확인한 뒤 다시 위임하도록 옮겼다.
+    """
     return join_system_prompt(
         [
             *week06_prompt_parts(),
