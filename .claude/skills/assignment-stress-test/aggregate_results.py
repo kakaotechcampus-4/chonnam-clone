@@ -55,6 +55,41 @@ def returned_fixtures(events: list[dict], id_to_fid: dict[str, str] | None = Non
     return ranked
 
 
+def _iter_all_tool_calls(events: list[dict]) -> list[dict]:
+    """최상위 events와 그 안에 중첩된 tool_result.content.trace를 재귀적으로 훑어
+    모든 tool_call 이벤트를 평탄화해서 반환한다."""
+
+    found: list[dict] = []
+    for ev in events or []:
+        if ev.get("event") == "tool_call":
+            found.append(ev)
+        if ev.get("event") == "tool_result":
+            content = ev.get("content")
+            if isinstance(content, dict) and isinstance(content.get("trace"), list):
+                found.extend(_iter_all_tool_calls(content["trace"]))
+    return found
+
+
+def check_inner_args(events: list[dict], expected_inner_args: list[dict]) -> list[dict]:
+    """expected_inner_args 각 항목({tool_name, args_equal})에 대해, 해당 tool_name으로 실제
+    호출된 이벤트 중 하나라도 args_equal의 모든 key/value와 일치하면 통과.
+    호출 자체가 없거나 전부 값이 다르면 위반으로 기록한다."""
+
+    all_calls = _iter_all_tool_calls(events)
+    violations = []
+    for spec in expected_inner_args:
+        name = spec["tool_name"]
+        want = spec.get("args_equal") or {}
+        matching = [c for c in all_calls if c.get("tool_name") == name]
+        if not matching:
+            violations.append({**spec, "problem": "tool_call_not_found"})
+            continue
+        actual_list = [c.get("arguments") or {} for c in matching]
+        if not any(all(a.get(k) == v for k, v in want.items()) for a in actual_list):
+            violations.append({**spec, "problem": "args_mismatch", "actual_calls": actual_list})
+    return violations
+
+
 def load_fixture_map(path: Path) -> dict[str, str]:
     """fixture_map_*.json을 {id 값: fixture_id} 역매핑으로 뒤집는다."""
 
@@ -112,6 +147,7 @@ def main() -> None:
     forbidden_violations: list[tuple] = []
     empty_expected_violations: list[tuple] = []
     retrieval_regressions: list[tuple] = []
+    content_violations: list[tuple] = []
 
     for pid, p in prompts.items():
         r = results.get(pid)
@@ -139,6 +175,13 @@ def main() -> None:
             prev_tools = prev_r.get("tool_calls") or []
             if prev_tools != tool_calls:
                 regressions.append((pid, p["text"], prev_tools, tool_calls))
+
+        # ── 내용 정합성 평가 (expected_inner_args 키가 있는 프롬프트만)
+        expected_inner_args = p.get("expected_inner_args")
+        if expected_inner_args and not r.get("error"):
+            violations = check_inner_args(r.get("events") or [], expected_inner_args)
+            if violations:
+                content_violations.append((pid, p["text"], violations))
 
         # ── 검색 품질 평가 (expected_hits 키가 있는 프롬프트만; None이면 평가 안 함)
         expected_hits = p.get("expected_hits")
@@ -183,6 +226,7 @@ def main() -> None:
     print(f"에러: {len(errors)}")
     if args.previous:
         print(f"회귀(이전 실행 대비 tool 선택 바뀜): {len(regressions)}")
+    print(f"내용 정합성 위반(expected_inner_args): {len(content_violations)}")
     print()
     print("카테고리별 전체/불일치:", dict(category_total), dict(category_mismatch))
 
@@ -208,6 +252,14 @@ def main() -> None:
         for pid, text, prev_tools, cur_tools in regressions:
             print(f"[{pid}] '{text}'")
             print(f"    이전: {prev_tools} / 이번: {cur_tools}")
+
+    if content_violations:
+        print("\n=== 내용 정합성 위반 (expected_inner_args) ===")
+        for pid, text, violations in content_violations:
+            print(f"[{pid}] '{text}'")
+            for item in violations:
+                print(f"    {item['tool_name']} 기대={item.get('args_equal')} 문제={item['problem']}"
+                      + (f" 실제호출={item['actual_calls']}" if item["problem"] == "args_mismatch" else ""))
 
     if retrieval_evaluated:
         print("\n=== 검색 품질 (expected_hits 라벨 기준) ===")

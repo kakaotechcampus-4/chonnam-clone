@@ -183,6 +183,14 @@ tool 개수를 N이라 할 때, 아래 5개 카테고리로 100개를 나눕니�
   걱정 없습니다. 검색 품질형은 별도 파일 `retrieval_prompts.jsonl`로 관리해도
   되고(기존 100줄 자산을 안 건드리는 장점), prompts.jsonl에 합쳐도 됩니다 —
   harness의 `--prompts`에 어느 파일을 주는지만 다릅니다.
+- **내용 정합성(하위 tool 인자 값)을 검증하고 싶으면** `expected_inner_args`를 씁니다:
+  `[{"tool_name": "...", "args_equal": {"인자명": 기대값}}]` 형식. 라우팅
+  (`expected_tool`)이 맞아도 그 안에서 호출한 하위 tool의 인자가 틀리면(예: 날짜
+  미지정 조회인데 date_from/date_to에 임의 값이 들어감) 라우팅 체크만으로는 못
+  잡습니다 — `expected_inner_args`는 top-level events뿐 아니라 nana_agent/
+  kana_agent처럼 중첩된 tool_result 안의 trace까지 재귀적으로 훑어 해당
+  tool_name 호출 중 하나라도 `args_equal`과 일치하면 통과시킵니다. 이 필드가
+  없는 프롬프트는 기존처럼 라우팅만 평가되므로 하위호환 걱정 없습니다.
 - **라벨을 나중에 고칠 때는 이력을 남깁니다**: 실행 결과를 보고 라벨이 틀렸다고
   판단해 수정하면(라벨 오류 기각), 그 프롬프트의 `reason` 필드에 "원래 라벨 →
   바뀐 라벨 + 근거 + 재검토 조건"을 적고 manifest.md에도 한 줄 기록하세요.
