@@ -34,6 +34,10 @@ _NANA_SUBAGENT: Any | None = None
 _KANA_SUBAGENT: Any | None = None
 _SUPERVISOR_AGENT: Any | None = None
 
+# payload/trace 여러 곳에서 반복되는 하위 agent tool 식별자를 한 곳에서만 관리한다.
+NANA_AGENT_NAME = "nana_agent"
+KANA_AGENT_NAME = "kana_agent"
+
 
 # [6주차 수강생 구현 가이드]
 #
@@ -229,6 +233,8 @@ def kana_prompt_parts() -> list[str]:
 
     return [
         (
+            f"오늘 날짜는 {current_app_date_iso()}이다. 이 날짜를 상대 날짜(내일, 이번 주, 다음 주 화요일 등) "
+            "해석 기준일로 사용한다.\n"
             "너는 Kana 하위 agent다. 외부 멤버의 이전 대화·일정 조회, 공유 일정 저장소 확인, "
             "여러 사람의 일정 조율을 담당한다. "
             "확정된 일정을 앱 SQLite에 저장하는 것은 네 담당이 아니라 Nana 담당이므로, "
@@ -274,7 +280,7 @@ def extract_langchain_trace(result: dict[str, Any]) -> dict[str, Any]:
     selected_agent: str | None = None
 
     for event in events:
-        if event.get("event") == "tool_call" and event.get("tool_name") in {"nana_agent", "kana_agent"}:
+        if event.get("event") == "tool_call" and event.get("tool_name") in {NANA_AGENT_NAME, KANA_AGENT_NAME}:
             selected_agent = event["tool_name"]
         content = event.get("content")
         if isinstance(content, dict):
@@ -511,9 +517,9 @@ def supervisor_tools() -> list[Any]:
 
 
 def agent_tool_names(agent_name: str) -> list[str]:
-    if agent_name == "nana_agent":
+    if agent_name == NANA_AGENT_NAME:
         return [tool_name(item) for item in week04_tools()]
-    if agent_name == "kana_agent":
+    if agent_name == KANA_AGENT_NAME:
         return [tool_name(item) for item in kana_tools()]
     if agent_name == "supervisor":
         return [tool_name(item) for item in supervisor_tools()]
@@ -543,7 +549,7 @@ def propose_group_schedule(
     return json.dumps({"ok": True, "tool_name": "propose_group_schedule", "final_decision": payload}, ensure_ascii=False)
 
 
-@tool(args_schema=AgentQueryInput)
+@tool(NANA_AGENT_NAME, args_schema=AgentQueryInput)
 def nana_agent(query: str) -> str:
     """개인 일정과 개인 RAG 작업을 프롬프트 기반 Nana 하위 에이전트에게 위임합니다."""
 
@@ -561,7 +567,7 @@ def nana_agent(query: str) -> str:
 
     payload = {
         "ok": True,
-        "tool_name": "nana_agent",
+        "tool_name": NANA_AGENT_NAME,
         "answer": answer,
         "trace": {"events": events},
         "inner_tool_names": _tool_call_names(events),
@@ -569,7 +575,7 @@ def nana_agent(query: str) -> str:
     return json.dumps(payload, ensure_ascii=False)
 
 
-@tool(args_schema=AgentQueryInput)
+@tool(KANA_AGENT_NAME, args_schema=AgentQueryInput)
 def kana_agent(query: str) -> str:
     """그룹 일정 종합 작업을 프롬프트 기반 Kana 하위 에이전트에게 위임합니다."""
 
@@ -607,7 +613,7 @@ def kana_agent(query: str) -> str:
 
     payload = {
         "ok": True,
-        "tool_name": "kana_agent",
+        "tool_name": KANA_AGENT_NAME,
         "answer": answer,
         "trace": {"events": events},
         "inner_tool_names": _tool_call_names(events),
