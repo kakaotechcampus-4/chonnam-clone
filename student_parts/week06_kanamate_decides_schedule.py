@@ -258,7 +258,11 @@ def kana_prompt_parts() -> list[str]:
             "네가 채우고, busy_rows도 앞 단계 결과에서 복사해 함께 넘긴다.\n"
             "3) 검증된 후보 중 하나를 골라 decide_final_slot으로 최종 시간을 확정한다. find_common_available_slots "
             "결과로 답을 끝내지 말고 반드시 decide_final_slot까지 이어서 호출한다. 아직 확정할 수 없으면 "
-            "final_slot을 비우고 needs_agent_selection=true로 둔다."
+            "final_slot을 비우고 needs_agent_selection=true로 둔다.\n"
+            "   find_common_available_slots가 돌려준 검증된 후보(candidate_slots)가 비어 있으면 공통 가능 시간이 "
+            "없다는 뜻이다. 이때는 절대 시간을 지어내지 말고 final_slot=null, needs_agent_selection=true로 두고, "
+            "사용자에게 '해당 기간에 다 함께 가능한 시간이 없다'고 알리며 다른 날짜/기간을 제안한다. 후보에 없는 "
+            "시간(업무시간 밖·자정 등)을 final_slot으로 채우지 않는다."
         ),
         (
             "확정된 일정을 내 캘린더나 공유 저장소에 저장하는 일은 네 담당이 아니다. 최종 회의 시간까지만 "
