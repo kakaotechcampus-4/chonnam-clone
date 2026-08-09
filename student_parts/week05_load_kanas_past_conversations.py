@@ -41,16 +41,6 @@ EXTERNAL_LOOKUP_FAILURE_NOTICE = "외부 일정 조회에 실패해, 외부 구�
 
 # [5주차 수강생 구현 가이드]
 #
-# 용어
-#   - MCP: 이 프로젝트에서 외부 SQLite 서버의 대화·일정 도구를 호출하는 연결 방식입니다.
-#   - wrapper tool: 외부 도구를 호출한 뒤, agent가 읽을 수 있는 JSON 결과로 감싸는 함수입니다.
-#   - agent: 사용자의 요청을 읽고 필요한 도구를 골라 호출하는 언어 모델 실행기입니다.
-#   - LLM: agent가 사용하는 언어 모델입니다.
-#   - RAG: 저장된 대화나 참고자료에서 관련 내용을 찾아 답변 근거로 사용하는 방식입니다.
-#   - row / rows: 일정 한 건을 나타내는 dict / 일정 dict 목록입니다.
-#   - busy-time: 이미 일정이 잡혀 있어 회의에 사용할 수 없는 시간입니다.
-#   - roster: 조회된 외부 멤버 이름 목록입니다.
-#
 # 목표
 #   외부 SQLite/MCP 서버에 있는 Kana의 이전 대화와 공유 일정을 LangChain agent가 사용할 수 있게 감쌉니다.
 #   학생이 직접 SQL을 작성하는 주차가 아니라, MCP tool을 호출하고 그 결과를 agent용 JSON으로 전달하는
@@ -58,7 +48,7 @@ EXTERNAL_LOOKUP_FAILURE_NOTICE = "외부 일정 조회에 실패해, 외부 구�
 #
 # 과제 구성
 #   - 메인과제: 외부 SQLite/MCP 서버의 이전 대화를 검색·로드하고 그 대화에서 일정을 추출하는
-#     MCP 입력 수신부터 외부 도구 호출과 JSON 반환까지의 한 흐름에 더해, 공유 일정 조회(list_shared_schedules)와
+#     MCP wrapper 세로 슬라이스에 더해, 공유 일정 조회(list_shared_schedules)와
 #     내 일정·외부 멤버 busy-time을 한 rows로 합치는 collect_member_schedules까지 완성합니다.
 #     이 두 tool은 Week 6 Kana 하위 agent가 그대로 재사용하는 연결 지점이라 메인과제입니다.
 #   - 추가 과제: 공유 일정 저장소에 row를 직접 등록·삭제하는 create_shared_schedule/delete_shared_schedule
@@ -70,7 +60,7 @@ EXTERNAL_LOOKUP_FAILURE_NOTICE = "외부 일정 조회에 실패해, 외부 구�
 #   - MCP 호출은 fixed/mcp_client.py의 call_local_mcp_tool_sync를 이 파일에서 별칭으로 둔
 #     call_mcp_tool_sync(tool_name, args)를 사용합니다.
 #   - load_conversation_messages는 fixed/external_mcp.py의 call_external_tool_payload(...)를 사용해
-#     외부 도구 결과를 dict로 받은 뒤 json_payload()로 감쌉니다.
+#     외부 tool payload를 dict로 받은 뒤 json_payload()로 감쌉니다.
 #   - 멤버 이름/날짜 정규화와 요약은 fixed/external_people_store.py의
 #     normalize_external_member_names(), normalize_external_schedule_date_bounds(),
 #     external_schedule_summary()를 사용합니다.
@@ -81,7 +71,7 @@ EXTERNAL_LOOKUP_FAILURE_NOTICE = "외부 일정 조회에 실패해, 외부 구�
 #     list_shared_schedules wrapper(메인)는 공유 저장소 row를 직접 확인할 때,
 #     create/delete_shared_schedule wrapper(추가)는 row를 직접 등록/삭제해 보정할 때 사용합니다.
 #   - week05_tools()는 student_parts/week04_retrieve_nanas_memory.py의 week04_tools() 위에
-#     Week 5 MCP 연결 함수들을 누적해 Week 5 단일 agent에 공개합니다.
+#     Week 5 MCP wrapper tool들을 누적해 Week 5 단일 agent에 공개합니다.
 #     추가 과제(create/delete_shared_schedule)를 구현하지 않으려면 week05_tools() 목록에서 해당 tool을 빼면 됩니다.
 #
 # 메인과제 구현 대상
@@ -111,7 +101,7 @@ EXTERNAL_LOOKUP_FAILURE_NOTICE = "외부 일정 조회에 실패해, 외부 구�
 #      - 3주차 이후 저장된 내 일정은 앱 SQLite에서 읽고, 현재 대화의 임시 일정만 추가로 합칩니다.
 #      - 외부 멤버 일정은 call_mcp_tool_sync("extract_schedules_from_history", args) 결과를 이 tool 안에서 읽습니다.
 #      - 두 출처를 member_name/title/date/start_time/end_time/notes가 있는 rows 배열로 직접 합칩니다.
-#      - schedule_summary도 함께 반환해 언어 모델이 바쁜 시간을 자연어로 설명할 수 있게 합니다.
+#      - schedule_summary도 함께 반환해 LLM이 바쁜 시간을 자연어로 설명할 수 있게 합니다.
 #      - PERSONAL_SCHEDULES는 현재 대화 범위의 아직 DB에 없는 임시 일정만 합치고, SQLite에 이미 저장된 일정과 중복하지 않습니다.
 #      - Week 6 추가 과제(find_common_available_slots)가 이 tool의 rows를 busy_rows 근거로 사용합니다.
 #
@@ -174,20 +164,20 @@ EXTERNAL_LOOKUP_FAILURE_NOTICE = "외부 일정 조회에 실패해, 외부 구�
 #     외부 멤버의 이전 대화에서 일정 또는 바쁜 시간 row를 추출합니다.
 #
 #   - [메인] list_shared_schedules(...)
-#     공유 일정 저장소 row를 조회하는 MCP 연결 함수입니다. Week 6 Kana 하위 agent도 그대로 사용합니다.
+#     공유 일정 저장소 row를 조회하는 MCP wrapper입니다. Week 6 Kana 하위 agent도 그대로 사용합니다.
 #
 #   - [메인] collect_member_schedules(...)
 #     내 일정과 외부 멤버 busy-time을 한 번에 모으는 Week 5 핵심 tool입니다.
 #     Week 6의 공통 가능 시간 결정 tool(추가 과제)이 이 rows를 busy_rows 근거로 사용합니다.
 #
 #   - [추가] create_shared_schedule(...) / delete_shared_schedule(...)
-#     공유 일정 저장소에 row를 등록/삭제하는 MCP 연결 함수입니다. source_conversation_id와 schedule_id를 보존해 동기화 근거로 씁니다.
+#     공유 일정 저장소에 row를 등록/삭제하는 MCP wrapper입니다. source_conversation_id와 schedule_id를 보존해 동기화 근거로 씁니다.
 #
 #   - [공통] week05_tools()
 #     Week 4까지의 tool에 외부 대화/MCP/공유 일정 tool을 누적합니다.
 #
 #   - [공통] week05_system_prompt() / week05_prompt_parts()
-#     개인 저장/RAG는 이전 주차 도구로, 외부 멤버 대화와 일정은 MCP 연결 함수로 처리하도록 agent 역할을 설명합니다.
+#     개인 저장/RAG는 이전 주차 도구로, 외부 멤버 대화와 일정은 MCP wrapper로 처리하도록 agent 역할을 설명합니다.
 #
 #   - [공통] build_week05_agent() / build_week_agent()
 #     Week 1~5 tool을 가진 agent를 한 번만 만들고 재사용합니다.
@@ -209,8 +199,9 @@ def _personal_schedules_for_current_scope() -> list[dict[str, Any]]:
     # 기본 limit 12로는 조율 대상 일정이 잘린다. SQL 날짜 필터는 일부러 안 쓴다 — 아래 임시분이
     # SQL을 안 타 날짜 의미가 두 층이 되므로, 날짜 거르기는 _collect_member_schedules가 맡는다.
     stored = AppSQLiteStore(CONFIG.app_db_path).list_schedules(limit=200)
-    # Week 3가 임시 일정의 id를 SQLite의 schedule_id로 유지해 저장하므로 두 값은 같을 수 있다.
-    # 아래에서 두 id를 비교해 이미 저장된 임시 일정은 다시 반환하지 않는다.
+    # 저장된 일정의 schedule_id와 임시 일정의 id는 같은 값일 수 있다. week03에서 저장할 때
+    # 임시 id를 그대로 물려주기 때문이다(fixed/app_store.py의 save_structured_request).
+    # 그래서 아래에서 이 id 집합으로 임시분 중 이미 저장된 것을 걸러 중복을 막는다.
     stored_ids = {str(row["schedule_id"]) for row in stored if row.get("schedule_id")}
     scope = current_session_scope()
     pending = [
@@ -283,7 +274,7 @@ class ListSharedSchedulesInput(BaseModel):
 class CollectMemberSchedulesInput(BaseModel):
     """내 일정과 외부 멤버 busy-time 수집 입력입니다."""
 
-    # 필수로 두면 agent가 "전원" 요청을 표현할 자리가 없어 ["나"] 같은 값으로 슬롯을 채운다.
+    # 필수로 두면 LLM이 "전원"을 말할 자리가 없어 ["나"] 같은 값으로 슬롯을 채운다.
     member_names: list[str] | None = None
     date_from: str
     date_to: str
@@ -347,7 +338,9 @@ def external_member_names(member_names: list[Any] | None) -> list[str]:
 def _external_member_roster(date_from: str, date_to: str) -> tuple[list[str], bool]:
     """조회 구간에 일정이 있는 외부 멤버 이름을 등장 순서대로 모읍니다."""
 
-    # 여기서는 이름 명단만 얻고, 일정 상세는 아래의 extract_schedules_from_history 호출이 맡는다.
+    # 여기서는 이름 명단만 얻는다. 일정 자체는 extract_schedules_from_history가 계속 맡는다
+    # (이 파일 맨 위 구현 가이드 "외부 멤버 일정은 ... extract_schedules_from_history 결과를
+    #  이 tool 안에서 읽습니다").
     # 저장소는 날짜가 이른 것부터 줄 세운 뒤 앞에서 _ROSTER_LIMIT건만 잘라 준다. 전체가 몇 건이었는지는
     # 안 알려주므로, 꽉 채워 오면 뒤가 더 있다고 보고 구간을 반으로 쪼개 다시 부른다. 그래야 뒤쪽
     # 날짜에만 나오는 사람이 명단에서 빠지지 않는다.
@@ -414,7 +407,7 @@ def _collect_member_schedules(
     roster_payload: dict[str, Any] | None = None
     try:
         if not member_names:
-            # 비어 있으면 전원이다. 이름을 지정했지만 필터 뒤에 비는 경우(["나"])는 전원으로 넓히지 않는다.
+            # 비어 있으면 전원. 지목했다가 필터로 비는 경우(["나"])는 아래로 가서 안 넓어진다.
             external_members, limit_reached = _external_member_roster(normalized_from, normalized_to)
             # limit_reached는 이름을 안 준 이 경우에만 생긴다. 아래에서 읽을 때 같은 조건을 다시 본다.
         else:
@@ -469,17 +462,16 @@ def _collect_member_schedules(
             }
         )
 
-    # 합친 rows에서 중복을 걸러내는 단계는 두지 않는다. 그 중복은 "나"가 외부 조회 목록에 섞여
-    # 같은 일정이 앱 DB와 공유 저장소 양쪽에서 들어올 때 생기는데, 이 구현은 조회 전에 "나"를 뺀다
-    # (이름을 준 경우 external_member_names, 전원인 경우 _external_member_roster).
-    # 그래서 같은 일정이 두 경로로 들어오지 않는다.
+    # 공지 (D)의 _dedupe_schedule_rows는 두지 않는다. 그 중복은 "나"가 외부 조회에 섞여야
+    # 생기는데, 이 구현은 조회 전에 "나"를 뺀다 (이름을 준 경우 external_member_names,
+    # 전원인 경우 _external_member_roster). 그래서 같은 일정이 두 경로로 들어오지 않는다.
     rows = [*my_rows, *external_rows]
     payload = {
         # 외부 조회가 실패하면 rows에는 내 일정만 남는다. 그런데도 ok=True로 고정해 두면
         # 읽는 쪽은 "전원 일정을 다 모았다"고 믿고 답을 만든다. 그래서 실패를 그대로 싣는다.
         "ok": external_ok,
         "tool_name": "collect_member_schedules",
-        # 실제로 MCP에 보낸 값이다. agent가 보낸 원본은 같은 실행 기록의 tool_call에 이미 있다.
+        # 실제로 MCP에 보낸 값이다. LLM이 보낸 원본은 같은 trace의 tool_call에 이미 있다.
         "filters": {
             "member_names": external_members,
             "date_from": normalized_from,
@@ -504,7 +496,7 @@ def search_previous_conversations(
     member_names: list[str] | None = None,
     limit: int = 5,
 ) -> str:
-    """외부 SQLite 데이터베이스에 저장된 이전 대화를 검색합니다. query에는 agent가 고른 짧은 핵심 명사나 구를 넣습니다."""
+    """외부 SQLite 데이터베이스에 저장된 이전 대화를 검색합니다. query에는 LLM이 고른 짧은 핵심 명사나 구를 넣습니다."""
 
     return call_mcp_tool_sync(
         "search_previous_conversations",
@@ -546,8 +538,8 @@ def create_shared_schedule(
 ) -> str:
     """외부 MCP 공유 일정 저장소에 일정을 등록하거나 갱신합니다."""
 
-    # 정상 응답은 외부 MCP 결과를 그대로 전달하지만, 호출 자체가 실패하면 전달할 결과가 없다.
-    # 이때는 실패 여부만 담은 JSON 결과를 만들어 agent가 실패를 알 수 있게 한다.
+    # 이 파일 맨 위 구현 가이드의 "MCP tool 결과를 그대로 전달합니다"에서 벗어난다.
+    # 전달할 payload 자체가 없는 실패다.
     try:
         return call_mcp_tool_sync(
             "create_shared_schedule",
@@ -573,8 +565,9 @@ def delete_shared_schedule(
 ) -> str:
     """외부 MCP 공유 일정 저장소에서 일정을 삭제합니다."""
 
-    # 외부 서버의 ok 값만으로는 실제 삭제 여부를 알 수 없으므로 deleted_count를 다시 확인한다.
-    # ok는 "삭제 요청이 전달됐다"가 아니라 "실제로 한 건 이상 삭제됐다"는 뜻이어야 한다.
+    # 이 파일 맨 위 구현 가이드의 "MCP tool 결과를 그대로 전달합니다"에서 벗어난다.
+    # 서버는 실제로 지운 건수와 무관하게 ok=true를 싣는데(mcp_server/sqlite_mcp_server.py의
+    # delete_shared_schedule), ok는 "요청한 효과가 일어났다"는 뜻이어야 한다.
     try:
         payload = json.loads(
             call_mcp_tool_sync(
@@ -614,7 +607,7 @@ def list_shared_schedules(
 def collect_member_schedules(
     *, member_names: list[str] | None = None, date_from: str, date_to: str
 ) -> str:
-    """앱 저장 일정·현재 대화의 임시 일정·외부 멤버 busy-time을 같은 rows로 합칩니다."""
+    """내 일정과 다른 사람들의 일정을 MCP SQLite 기록에서 모읍니다."""
 
     return json_payload(
         _collect_member_schedules(
