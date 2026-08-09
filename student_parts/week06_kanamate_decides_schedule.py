@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from fixed.external_people_store import normalize_external_member_names
 from fixed.langchain_trace import extract_agent_events, extract_final_text
 from fixed.llm import chat_model
-from fixed.runtime_clock import current_app_date_iso
+from fixed.runtime_clock import current_app_date_iso, next_weekday_iso
 from fixed.schedule_decision import (
     CommonSlotCandidate,
     decide_final_slot_payload,
@@ -18,7 +18,6 @@ from fixed.schedule_decision import (
     normalize_date_bound,
 )
 from student_parts.week01_wake_up_nana import join_system_prompt
-from student_parts.week02_structure_natural_language_requests import extract_schedule_request
 from student_parts.week04_retrieve_nanas_memory import week04_prompt_parts, week04_tools
 from student_parts.week05_load_kanas_past_conversations import (
     collect_member_schedules,
@@ -54,8 +53,8 @@ _SUPERVISOR_AGENT: Any | None = None
 #   - 공통 가능 시간 검증/최종 선택 payload 생성은 fixed/schedule_decision.py의
 #     find_common_available_slots_payload(), decide_final_slot_payload(), normalize_date_bound()를 사용합니다.
 #   - Nana 하위 agent 도구는 student_parts/week04_retrieve_nanas_memory.py의 week04_tools()를 그대로 사용합니다.
-#   - Kana 하위 agent 도구는 이 파일의 kana_tools()에서 구성하며, Week 2 extract_schedule_request와
-#     Week 5 wrapper tool(search_previous_conversations, extract_schedules_from_history,
+#   - Kana 하위 agent 도구는 이 파일의 kana_tools()에서 구성하며, Week 5 wrapper tool
+#     (search_previous_conversations, extract_schedules_from_history,
 #     collect_member_schedules 등), find_common_available_slots, decide_final_slot을 포함합니다.
 #   - supervisor가 볼 수 있는 도구는 supervisor_tools()의 nana_agent, kana_agent 두 개뿐입니다.
 #   - nana_agent()/kana_agent()/build_langchain_supervisor_agent()는 create_agent(...)로 각각 필요한 agent를 만들고 재사용합니다.
@@ -219,14 +218,32 @@ def nana_prompt_parts() -> list[str]:
 def kana_prompt_parts() -> list[str]:
     """Week 6 Kana 하위 에이전트 전용 system prompt 조각입니다."""
 
+    next_week_date_from = next_weekday_iso(0)
+    next_week_date_to = next_weekday_iso(6)
     return [
-        "너는 그룹 메이트 Kana다. 다른 구성원의 과거 대화와 일정, 공유 일정, 그룹 조율 요청만 담당한다. "
-        "요청의 구성원이나 날짜 범위가 불명확하면 먼저 확인하고, 자연어 일정 요청을 구조화해야 하면 extract_schedule_request를 사용한다."
-        "과거 대화 주제를 찾을 때는 search_previous_conversations를 먼저 사용하고 상세 맥락이 필요하면 load_conversation_messages를 사용한다."
-        "외부 멤버의 바쁜 시간은 extract_schedules_from_history로 확인하고, 사용자와 외부 멤버 일정을 함께 비교할 때는 collect_member_schedules를 사용한다."
-        "이미 등록된 공유 일정은 list_shared_schedules로 확인한다."
-        "도구 결과에 없는 일정이나 가능 시간을 추측하지 않는다."
-        "개인 일정의 생성·수정·삭제, 개인 저장과 RAG, 확정된 일정 저장은 Nana 담당이라고 안내한다."
+        (
+            f"오늘 날짜는 {current_app_date_iso()}이다. 상대 날짜는 이 날짜를 기준으로 해석한다. "
+            f"'다음 주'는 {next_week_date_from}부터 {next_week_date_to}까지다."
+        ),
+        "너는 그룹 메이트 Kana다. 다른 구성원의 과거 대화와 일정, 공유 일정, 그룹 조율 요청만 담당한다.",
+        (
+            "오늘, 내일, 이번 주, 다음 주처럼 기준일로 계산할 수 있는 상대 날짜는 직접 YYYY-MM-DD "
+            "범위로 바꾸고 사용자에게 구체적인 날짜를 되묻지 않는다. 구성원이나 날짜 표현이 없거나 "
+            "하나의 범위로 해석할 수 없을 때만 확인한다."
+        ),
+        (
+            "과거 대화 주제를 찾을 때는 search_previous_conversations를 먼저 사용하고 상세 맥락이 필요하면 "
+            "load_conversation_messages를 사용한다."
+        ),
+        (
+            "외부 멤버의 일정만 조회하는 요청은 extract_schedules_from_history를 사용한다. '시간 맞춰줘', "
+            "'일정 조율해줘', '공통 시간을 찾아줘'처럼 사용자와 외부 멤버의 일정을 비교하는 요청은 반드시 "
+            "collect_member_schedules를 사용하고 extract_schedules_from_history만으로 답하지 않는다. 계산한 날짜 "
+            "범위는 date_from과 date_to에 YYYY-MM-DD 형식으로 넘긴다."
+        ),
+        "이미 등록된 공유 일정은 list_shared_schedules로 확인한다.",
+        "도구 결과에 없는 일정이나 가능 시간을 추측하지 않는다.",
+        "개인 일정의 생성·수정·삭제, 개인 저장과 RAG, 확정된 일정 저장은 Nana 담당이라고 안내한다.",
     ]
 
 
@@ -435,7 +452,6 @@ def decide_final_slot(
 
 def kana_tools() -> list[Any]:
     return [
-        extract_schedule_request,
         search_previous_conversations,
         load_conversation_messages,
         extract_schedules_from_history,

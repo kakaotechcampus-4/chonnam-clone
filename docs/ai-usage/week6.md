@@ -10,7 +10,7 @@
 
 - Supervisor prompt는 `week05_prompt_parts()`를 누적한다.
 - Nana prompt와 도구는 `week04_prompt_parts()`, `week04_tools()`를 재사용한다.
-- Kana는 Week 2의 `extract_schedule_request`와 Week 5의 외부 대화·공유 일정 도구를 역할에 맞게 조립한다.
+- Kana는 Week 5의 외부 대화·공유 일정 도구를 역할에 맞게 조립한다. 미구현 Week 2 `extract_schedule_request` bridge는 도구에서 제외한다.
 - 실행 trace는 `fixed.langchain_trace`의 `extract_agent_events()`, `extract_final_text()`를 사용한다.
 
 ## TODO 목록
@@ -40,7 +40,8 @@
 
 - Supervisor는 업무 도구를 직접 처리하지 않고 개인 업무는 `nana_agent`, 외부 멤버·그룹 업무는 `kana_agent`에 위임한다.
 - Nana는 `week04_tools()`를 가진 하위 agent를 최초 한 번만 만들고 재사용한다.
-- Kana는 구현이 끝난 Week 2/5 그룹 도구만 사용한다. 미구현 추가과제 도구는 `kana_tools()`에서 제외했다.
+- Kana는 구현이 끝난 Week 5 그룹 도구만 사용한다. 미구현 Week 2 bridge와 Week 6 추가과제 도구는 `kana_tools()`에서 제외했다.
+- Kana prompt는 앱 기준일과 다음 주의 월요일~일요일 범위를 명시해 계산 가능한 상대 날짜를 되묻지 않는다.
 - 두 wrapper는 최종 답변, 내부 trace, 실제 tool 호출 이름을 JSON으로 반환한다.
 - Kana wrapper는 trace에 최종 시간 또는 최종 결정 payload가 있으면 상위 supervisor가 사용할 수 있도록 끌어올린다.
 
@@ -48,5 +49,6 @@
 
 - `.venv\Scripts\python.exe`에서 import, prompt 조립, supervisor/Kana 도구 목록을 확인했다.
 - fake agent 단위 검증으로 하위 agent 생성 인자, 캐시 재사용, JSON 응답, trace 및 payload 추출을 확인했다. 결과: PASS.
-- `.venv\Scripts\python.exe -m unittest discover -s tests -v`로 공개 테스트 16개를 실행했다. 결과: 16개 모두 통과.
+- `.venv\Scripts\python.exe -m unittest discover -s tests -v`로 회귀 테스트 19개를 실행했다. 결과: 19개 모두 통과.
 - 실제 모델 연결 환경에서는 `./run.sh --week6`으로 supervisor 위임 trace를 확인한다.
+- `tests/test_week06_relative_dates.py`에서 Kana prompt의 다음 주 범위와 미구현 bridge 제외 여부를 확인한다.
