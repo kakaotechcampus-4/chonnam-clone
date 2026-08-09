@@ -7,10 +7,7 @@ from langchain.agents import create_agent
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
-from fixed.external_people_store import (
-    PERSONAL_SHARED_MEMBER_NAME,
-    normalize_external_member_names,
-)
+from fixed.external_people_store import normalize_external_member_names
 from fixed.langchain_trace import extract_agent_events, extract_final_text
 from fixed.llm import chat_model
 from fixed.runtime_clock import current_app_date_iso
@@ -19,16 +16,20 @@ from fixed.schedule_decision import (
     decide_final_slot_payload,
     find_common_available_slots_payload,
     normalize_date_bound,
+    slot_to_text,
 )
 from student_parts.week01_wake_up_nana import join_system_prompt
 from student_parts.week02_structure_natural_language_requests import extract_schedule_request
 from student_parts.week04_retrieve_nanas_memory import week04_prompt_parts, week04_tools
 from student_parts.week05_load_kanas_past_conversations import (
+    EXTERNAL_LOOKUP_FAILURE_NOTICE,
     collect_member_schedules,
+    external_member_names,
     extract_schedules_from_history,
     list_shared_schedules,
     load_conversation_messages,
     search_previous_conversations,
+    unique_member_names,
     week05_prompt_parts,
 )
 
@@ -226,6 +227,13 @@ def kana_prompt_parts() -> list[str]:
     """Week 6 Kana 하위 에이전트 전용 system prompt 조각입니다."""
 
     return [
+        # Kana 프롬프트만 이전 주차를 누적하지 않으므로(이 파일 맨 위 구현 가이드), Week 1의
+        # "오늘 날짜" 조각이 딸려 오지 않는다. 그런데 "8월 20일" 같은 사용자 표현을
+        # date_from/date_to 값으로 바꾸는 일은 Kana가 한다 — supervisor는 사용자 원문과 조건을
+        # 그대로 보존해 넘기기만 한다. 기준 날짜가 없으면 Kana가 연도를 지어낸다.
+        "## 날짜 해석 기준\n"
+        f"- 오늘 날짜는 {current_app_date_iso()}다.\n"
+        "- 상대/모호한 날짜는 이 기준으로 해석한다.",
         "## Week 6 Kana 그룹 일정 조율\n"
         "- Kana는 외부 구성원 일정 조회, 내 일정과 외부 일정의 busy-time 근거 수집, 그룹 공통 시간 조율을 담당한다.\n"
         "- collect_member_schedules의 member_names에는 외부 구성원 이름만 넣고 \"나\"는 넣지 않는다. member_names가 없거나 빈 목록이면 전체 구성원 요청으로 처리한다.\n"
@@ -237,7 +245,11 @@ def kana_prompt_parts() -> list[str]:
         "- 도구 결과의 24시간제 표기를 그대로 사용한다.\n"
         "- extract_schedule_request는 사용자의 자연어에서 일정 날짜·멤버·소요 시간을 구조화해야 할 때만 호출하고, 이미 구조화된 조회 조건이 있으면 생략한다.\n"
         "- find_common_available_slots는 후보를 계산하는 도구가 아니다. busy_rows를 근거로 candidate_slots를 직접 만들고, 각 후보에 date(YYYY-MM-DD), start_time(HH:MM), end_time(HH:MM), duration_minutes, reason을 채운다.\n"
-        "- 후보를 만든 뒤 반드시 find_common_available_slots를 호출하고, 그 결과에 실제로 남은 후보 중 하나를 selected_index 또는 selected_slot으로 골라 반드시 decide_final_slot을 이어서 호출한다. 후보가 없거나 고르지 못하면 시간을 지어내지 말고 final_slot=null, needs_agent_selection=true로 둔다.\n"
+        # 이 파일 맨 위 구현 가이드는 decide_final_slot이 "어떻게 동작하는가"만 정하고,
+        # "언제 부르는가"는 tool description과 이 프롬프트가 판단하도록 맡긴다. 그래서 세 경우를
+        # 나눠 적는다: ①후보를 골랐다 ②후보는 남았는데 못 고르겠다 ③남은 후보가 하나도 없다.
+        # ③은 확정할 대상 자체가 없으므로 호출하지 않고, 가능한 시간이 없다고 답한다.
+        "- 후보를 만든 뒤 반드시 find_common_available_slots를 호출하고, 그 결과에 실제로 남은 후보 중 하나를 selected_index 또는 selected_slot으로 골라 반드시 decide_final_slot을 이어서 호출한다. 남은 후보가 있는데 하나를 고를 수 없으면 시간을 지어내지 말고 decide_final_slot을 final_slot=null, needs_agent_selection=true로 호출한다. 검증 결과 남은 후보가 하나도 없으면 시간을 지어내지 말고 가능한 시간이 없다고 그대로 답한다.\n"
         "- 최종 답변에는 검증된 후보와 decide_final_slot의 최종 선택만 사용하며, busy_rows와 겹치거나 날짜·업무시간·소요 시간 조건을 벗어난 시간을 쓰지 않는다.\n"
         "- 일정 저장은 내(Kana) 담당이 아니며 이 하위 agent에는 Nana 위임 도구가 없다. 그룹 조율 턴에서는 저장 완료라고 말하지 않고 확정된 final_slot만 반환한다. 사용자가 확정된 그룹 일정 저장을 별도로 요청하면 supervisor가 Nana로 라우팅한다. 그룹 일정 저장 자체를 범위 밖이라고 말하지 않는다.",
     ]
@@ -274,6 +286,80 @@ def _tool_call_names(events: list[dict[str, Any]]) -> list[str]:
     return [event["tool_name"] for event in events if event.get("event") == "tool_call" and event.get("tool_name")]
 
 
+def _final_slot_payload_in(content: dict[str, Any]) -> dict[str, Any] | None:
+    """tool_result 하나에서 decide_final_slot payload를 꺼냅니다. 없으면 None.
+
+    decide_final_slot 결과는 그 자체가 찾는 payload다. 다만 이미 final_slot_payload라는
+    키로 한 번 감싸져 온 경우도 있어서, 그 키가 있으면 안쪽 값을 꺼내 쓴다.
+    아래 두 곳이 이 판정을 똑같이 하므로 여기 한 곳에만 둔다.
+    """
+
+    if content.get("final_slot_payload"):
+        return content["final_slot_payload"]
+    if "final_slot" in content:
+        return content
+    return None
+
+
+def _kana_trace_payloads(events: list[dict[str, Any]]) -> dict[str, Any]:
+    """Kana 하위 trace에서 supervisor가 읽을 payload를 끌어올립니다.
+
+    아래 extract_langchain_trace의 훑기와 일부러 합치지 않는다. 두 가지가 다르다.
+      - 보는 범위: 여기는 tool_result만, 저기는 모든 event
+      - final_decision 키는 여기서만 읽는다
+    하나로 묶으면 둘 중 하나가 바뀌거나, 그걸 막으려고 플래그 인자가 생긴다.
+    다만 final_slot payload를 고르는 판정만은 _final_slot_payload_in으로 함께 쓴다.
+    """
+
+    contents = [
+        event["content"]
+        for event in events
+        if event.get("event") == "tool_result" and isinstance(event.get("content"), dict)
+    ]
+
+    # 아래 네 루프는 같은 contents를 네 번 돌지만 합치지 않는다. 넷의 "무엇을 고르는가"가 다 다르다 —
+    # roster는 경고 붙은 것 우선, external_lookup은 마지막 것, final_slot은 마지막에 찾은 것,
+    # final_decision은 두 키 중 있는 쪽. 한 몸통에 넣으면 규칙 넷이 엉키고 각 루프의 이유 주석이
+    # 갈 자리를 잃는다. contents는 trace 한 건이라 순회 횟수는 비용이 아니다.
+
+    # roster는 여러 도구 결과에 들어 있을 수 있다. 그중 "명단이 잘렸을 수 있다"는 경고가 붙은
+    # 것이 하나라도 있으면 그것을 고른다 — 경고 없는 roster로 덮어써 경고를 잃으면 안 된다.
+    roster_payload: dict[str, Any] | None = None
+    for content in contents:
+        roster = content.get("roster")
+        if isinstance(roster, dict) and (
+            roster_payload is None or roster.get("limit_reached")
+        ):
+            roster_payload = roster
+
+    # 조회 실패 통지는 가장 나중 것을 쓴다. 같은 턴에 여러 번 조회했다면 마지막 상태가 현재 상태다.
+    external_lookup_payload: dict[str, Any] | None = None
+    for content in contents:
+        if isinstance(content.get("external_lookup"), dict):
+            external_lookup_payload = content["external_lookup"]
+
+    # 마지막에 찾은 것을 쓴다. 못 찾은 tool_result는 앞서 찾아 둔 값을 덮지 않는다.
+    final_slot_payload: dict[str, Any] | None = None
+    for content in contents:
+        final_slot_payload = _final_slot_payload_in(content) or final_slot_payload
+
+    # propose_group_schedule 결과는 final_decision 키 아래에 들어 있다. 위와 같은 이유로,
+    # final_decision_payload로 한 번 감싸져 온 경우에는 그 안쪽 값을 꺼내 쓴다.
+    final_decision_payload: dict[str, Any] | None = None
+    for content in contents:
+        if content.get("final_decision_payload"):
+            final_decision_payload = content["final_decision_payload"]
+        elif "final_decision" in content:
+            final_decision_payload = content["final_decision"]
+
+    return {
+        "final_slot_payload": final_slot_payload,
+        "final_decision_payload": final_decision_payload,
+        "roster": roster_payload,
+        "external_lookup": external_lookup_payload,
+    }
+
+
 def extract_langchain_trace(result: dict[str, Any]) -> dict[str, Any]:
     """Week 6 supervisor 실행 결과를 UI trace payload로 변환합니다."""
 
@@ -289,10 +375,7 @@ def extract_langchain_trace(result: dict[str, Any]) -> dict[str, Any]:
         content = event.get("content")
         if isinstance(content, dict):
             inner_tool_names.extend(content.get("inner_tool_names") or [])
-            if content.get("final_slot_payload"):
-                final_slot_payload = content["final_slot_payload"]
-            elif "final_slot" in content:
-                final_slot_payload = content
+            final_slot_payload = _final_slot_payload_in(content) or final_slot_payload
             if content.get("final_decision_payload"):
                 final_decision_payload = content["final_decision_payload"]
 
@@ -405,19 +488,24 @@ def find_common_available_slots_dict(
 ) -> dict[str, Any]:
     """멤버별 busy-time rows와 LLM이 고른 후보 payload를 검증 결과로 바꿉니다."""
 
-    normalized_external_names: list[str] = []
-    for name in normalize_external_member_names(member_names):
-        if name not in normalized_external_names:
-            normalized_external_names.append(name)
+    # 여기서 "나"를 빼면 안 된다. ["나"]만 온 요청이 빈 목록이 되는데, Week 5의
+    # _collect_member_schedules는 빈 목록을 "전원"으로 읽으므로 조회가 통째로 넓어진다.
+    # "나"를 빼는 일은 Week 5가 외부 저장소를 조회하는 경계에서 맡는다.
+    requested_member_names = unique_member_names(member_names)
 
     normalized_date_from = normalize_date_bound(date_from)
     normalized_date_to = normalize_date_bound(date_to)
     resolved_busy_rows = busy_rows
     roster: dict[str, Any] | None = None
     collected_payload: dict[str, Any] = {}
-    collected_ok: Any = None
     collection_failed = False
 
+    # 시작·끝 날짜가 뒤집혀 들어와도 후보 검사 쪽은 fixed의 date_range()가 알아서 흡수한다.
+    # 그런데 일정 조회 쪽은 그렇지 않다 — SQL 조건이 date >= 시작 AND date <= 끝이라
+    # (fixed/external_people_store.py의 list_shared_schedules) 뒤집힌 채로 넘기면 조건을
+    # 만족하는 날이 하나도 없다. 오류 없이 "일정 0건"이 돌아오므로 사용자는 정말 비어 있는 줄
+    # 안다. 그래서 여기서 앞뒤를 바로잡는다.
+    # 날짜로 해석하지 않고 글자 순서로만 비교한다 — 날짜가 아닌 값이 와도 터지지 않아야 한다.
     if normalized_date_from > normalized_date_to:
         normalized_date_from, normalized_date_to = (
             normalized_date_to,
@@ -429,7 +517,7 @@ def find_common_available_slots_dict(
             # .invoke() 인자 검증 실패와 Week 5 try 바깥에서 올라오는 예외도 이 도구의 실패 payload로 바꾼다.
             collected = collect_member_schedules.invoke(
                 {
-                    "member_names": normalized_external_names,
+                    "member_names": requested_member_names,
                     "date_from": normalized_date_from,
                     "date_to": normalized_date_to,
                 }
@@ -440,8 +528,7 @@ def find_common_available_slots_dict(
                 collected_payload = collected
             if not isinstance(collected_payload, dict):
                 collected_payload = {}
-            collected_ok = collected_payload.get("ok")
-            collection_failed = collected_ok is not True
+            collection_failed = collected_payload.get("ok") is not True
             resolved_busy_rows = collected_payload.get("rows") or []
             if isinstance(collected_payload.get("roster"), dict):
                 roster = collected_payload["roster"]
@@ -451,35 +538,33 @@ def find_common_available_slots_dict(
             collected_payload = {}
             roster = None
 
-    evidence_external_names = [
-        name
-        for name in normalized_external_names
-        if name != PERSONAL_SHARED_MEMBER_NAME
-    ]
+    # 근거 이름을 얻는 곳이 세 군데인 것은 세 경우가 실제로 다 있기 때문이다.
+    #   1단 requested_member_names — 요청이 전원([])이거나 "나"뿐이면 여기는 비어 있다.
+    #   2단 collected_payload["filters"] — 위 collect를 부른 경우에만 있다.
+    #   3단 busy_rows의 member_name — Kana가 busy_rows를 직접 넘기면 collect를 안 부르므로
+    #        (위 resolved_busy_rows is None 갈래 참조) 2단이 통째로 없다. 그때 이름이
+    #        남아 있는 곳은 여기뿐이다.
+    evidence_external_names = external_member_names(requested_member_names)
     if not evidence_external_names:
         filters = collected_payload.get("filters")
         if isinstance(filters, dict):
-            evidence_external_names = [
-                name
-                for name in normalize_external_member_names(
-                    filters.get("member_names")
-                )
-                if name != PERSONAL_SHARED_MEMBER_NAME
-            ]
+            evidence_external_names = external_member_names(filters.get("member_names"))
     if not evidence_external_names:
-        for row in resolved_busy_rows or []:
-            if not isinstance(row, dict):
-                continue
-            for name in normalize_external_member_names([row.get("member_name")]):
-                if (
-                    name != PERSONAL_SHARED_MEMBER_NAME
-                    and name not in evidence_external_names
-                ):
-                    evidence_external_names.append(name)
+        evidence_external_names = external_member_names(
+            [
+                row.get("member_name")
+                for row in resolved_busy_rows or []
+                if isinstance(row, dict)
+            ]
+        )
 
+    # 이 목록은 답변에 근거로 보여줄 이름이라 리터럴 "나"를 쓴다. 외부 저장소를 조회할 때 쓰는
+    # PERSONAL_SHARED_MEMBER_NAME과 지금은 값이 같지만, 일부러 그 상수를 쓰지 않는다. 상수로 묶으면
+    # "화면에 보일 이름"과 "저장소 조회에 쓸 이름"이 한 값이 되어, 저장소 쪽 사정으로 상수가
+    # 바뀌는 날 화면 표기까지 같이 바뀐다.
     evidence_member_names = [*evidence_external_names]
-    if PERSONAL_SHARED_MEMBER_NAME not in evidence_member_names:
-        evidence_member_names.append(PERSONAL_SHARED_MEMBER_NAME)
+    if "나" not in evidence_member_names:
+        evidence_member_names.append("나")
 
     payload = find_common_available_slots_payload(
         member_names=evidence_member_names,
@@ -499,12 +584,32 @@ def find_common_available_slots_dict(
     if roster is not None:
         payload["roster"] = roster
     if collection_failed:
+        # 수집 실패 원인은 최종 payload에 반드시 남긴다.
         payload["external_lookup"] = collected_payload.get(
             "external_lookup",
-            {"ok": False, "notice": "외부 일정 조회에 실패해, 외부 구성원의 일정이 빠진 채로 계산됐습니다."},
-        )  # 수집 실패 원인은 최종 payload에 반드시 남긴다.
+            {"ok": False, "notice": EXTERNAL_LOOKUP_FAILURE_NOTICE},
+        )
         payload["ok"] = False
+        # 외부 조회가 실패하면 외부 일정 근거 없이 통과한 후보도 믿을 수 없으므로 비운다.
+        # external_lookup.notice를 함께 남겨 "후보 없음"과 "조회 실패"를 구분한다.
         payload["candidate_slots"] = []
+    elif not candidate_slots:
+        # 여기서 보는 candidate_slots는 이 함수가 인자로 "받은 원본"이지 위 payload가 돌려준
+        # 검증 통과 목록이 아니다. 그래서 냈는데 전부 탈락한 경우는 이 분기에 안 걸린다 —
+        # 둘을 같은 값으로 읽으면, 후보를 냈는데 전부 탈락한 경우에도 "후보를 아직 안 냈다"는
+        # 아래 안내가 붙어 버린다.
+        # "후보를 아직 안 냈다"와 "낸 후보가 전부 탈락했다"가 fixed payload에서는 똑같이
+        # candidate_slots=[]로 나온다. 이 둘을 구분해 주지 않으면 Kana는 자기가 후보를 안 냈다는
+        # 사실을 모른 채 "가능한 시간이 없다"고 답해 버린다.
+        # 안내 문구에 업무시간 범위를 함께 적는 것이 중요하다 — 범위를 빼고 "직접 골라라"만
+        # 적었더니 Kana가 업무시간을 스스로 넓혀 그 밖의 시간을 후보로 지어냈다.
+        payload["needs_candidate_slots"] = True
+        payload["notice"] = (
+            f"candidate_slots를 받지 못했습니다. busy_rows와 겹치지 않는 후보를 "
+            f"{workday_start}~{workday_end} 안에서 직접 만들어 이 도구를 다시 호출하세요. "
+            f"업무시간을 넓히지 말고 그 범위 밖 시간은 후보로 넣지 마세요. "
+            f"범위 안에 {duration_minutes}분이 남지 않으면 후보 없이 시간이 없다고 답하세요."
+        )
     return payload
 
 
@@ -566,6 +671,65 @@ def decide_final_slot(
     """LLM이 직접 고른 후보/최종 시간을 course repo payload로 기록합니다."""
 
     normalized_candidates = [_slot_as_jsonable(slot) for slot in candidate_slots or []]
+    candidate_texts = {slot_to_text(slot) for slot in normalized_candidates}
+
+    # 지목(selected_slot·selected_index)은 final_slot이 후보 안에 있든 없든 똑같이 검사한다.
+    # 이 파일 맨 위 구현 가이드가 "selected_index나 selected_slot이 없으면 final_slot을 자동으로
+    # 고르지 말고 needs_agent_selection=True 상태를 유지합니다"라고 요구하는데, 그 조건은
+    # final_slot이 어떻게 들어왔는지와 무관하기 때문이다.
+    # selected_slot은 자유 형식 dict라 후보와 대조된 적이 없는데 decide_final_slot_payload가
+    # selected_index보다 먼저 쓴다. 그래서 후보에 없으면 여기서 지운다.
+    if selected_slot is not None and slot_to_text(_slot_as_jsonable(selected_slot)) not in candidate_texts:
+        selected_slot = None
+    # selected_index는 normalized_candidates 안만 가리킬 수 있을 때만 남긴다.
+    try:
+        index_in_range = 0 <= int(selected_index) < len(normalized_candidates)
+    except (TypeError, ValueError):
+        index_in_range = False
+    # 번호를 주긴 했는데 쓸 수 없는 경우를 따로 기억한다. 지우고 나면 아래 분기에서 "아예 지목이
+    # 없었다"와 구분되지 않는데, 그 둘은 Kana가 할 일이 다르다 — 없으면 고르라고 해야 하고,
+    # 잘못 짚었으면 번호를 다시 보라고 해야 한다. 지우기 전에 남겨 두지 않으면 이 구분이 사라진다.
+    unusable_index = selected_index is not None and not index_in_range
+    if not index_in_range:
+        selected_index = None
+
+    final_slot_outside_candidates = final_slot is not None and final_slot not in candidate_texts
+    if final_slot_outside_candidates:
+        # 후보 목록에 없는 final_slot 문자열은 버린다. 다만 "몇 번째 후보"라는 지목까지 같이
+        # 버리지는 않는다 — fixed/schedule_decision.py의 decide_final_slot_payload가 그 지목으로
+        # final_slot을 후보 안에서 다시 만들어 준다.
+        final_slot = None
+        if selected_slot is None and selected_index is None:
+            reason = "입력한 final_slot이 후보 목록에 없어 최종 확정하지 않았습니다."
+
+    # 위 가이드대로, 쓸 수 있는 지목이 하나도 없으면 확정하지 않는다. 이때 final_slot도 같이 비운다.
+    # 값을 남기면 "유효한 final_slot + needs_agent_selection=true"라는 payload가 나가는데,
+    # DECIDE_FINAL_SLOT_DESCRIPTION과 DecideFinalSlotInput이 둘 다 "미확정이면 final_slot=null"을
+    # 계약으로 적고 있어 서로 어긋난다. 그러면 supervisor가 final_slot만 보고 확정했다고 답할 수 있다.
+    if selected_slot is None and selected_index is None:
+        needs_agent_selection = True
+        if final_slot is not None:
+            final_slot = None
+            reason = "후보 지목(selected_index/selected_slot)이 없어 최종 확정하지 않았습니다."
+        if unusable_index and not final_slot_outside_candidates:
+            # 번호를 지운 뒤라 fixed/schedule_decision.py는 "번호가 범위를 벗어났다"를 더 이상
+            # 말할 수 없다. 그 진단을 여기서 대신 적는다. 고칠 방법까지 적어야 Kana가 다시 부른다.
+            # final_slot까지 후보 밖이면 그쪽 문구를 남긴다 — 먼저 고쳐야 할 것이 그것이다.
+            # final_slot은 위에서 이미 비웠으므로 여기서는 reason만 갈아 끼운다.
+            reason = (
+                f"selected_index가 후보 목록 범위를 벗어났습니다. "
+                f"후보 번호는 0부터 {len(normalized_candidates) - 1}까지입니다."
+                if normalized_candidates
+                else "selected_index를 받았지만 candidate_slots가 비어 있어 가리킬 후보가 없습니다."
+            )
+    else:
+        # 쓸 수 있는 지목이 있으면 agent가 보낸 needs_agent_selection을 그대로 믿지 않고 None으로
+        # 지운다. fixed/schedule_decision.py의 decide_final_slot_payload는 이 값이 None일 때만
+        # "final_slot이 비었나"를 보고 직접 정해 주기 때문이다. 그대로 넘기면 Kana가
+        # needs_agent_selection=true를 함께 보냈을 때 확정된 final_slot과 "선택이 더 필요하다"가
+        # 같이 나가, DecideFinalSlotInput의 needs_agent_selection 설명이 적은
+        # "final_slot을 확정했으면 false" 계약과 어긋난다.
+        needs_agent_selection = None
     payload = decide_final_slot_payload(
         candidate_slots=normalized_candidates,
         selected_slot=_slot_as_jsonable(selected_slot),
@@ -673,39 +837,19 @@ def kana_agent(query: str) -> str:
         {"messages": [{"role": "user", "content": query}]}
     )
     events = extract_agent_events(result)
-    final_slot_payload: dict[str, Any] | None = None
-    final_decision_payload: dict[str, Any] | None = None
-    roster_payload: dict[str, Any] | None = None
-    external_lookup_payload: dict[str, Any] | None = None
-    for event in events:
-        if event.get("event") != "tool_result":
-            continue
-        content = event.get("content")
-        if not isinstance(content, dict):
-            continue
-        if isinstance(content.get("roster"), dict):
-            if roster_payload is None or content["roster"].get("limit_reached"):
-                roster_payload = content["roster"]
-        if isinstance(content.get("external_lookup"), dict):
-            external_lookup_payload = content["external_lookup"]
-        if "final_slot" in content:
-            final_slot_payload = content
-        if content.get("final_slot_payload") is not None:
-            final_slot_payload = content["final_slot_payload"]
-        if "final_decision" in content:
-            final_decision_payload = content["final_decision"]
-        if content.get("final_decision_payload") is not None:
-            final_decision_payload = content["final_decision_payload"]
+    trace_payloads = _kana_trace_payloads(events)
 
     payload = {
+        # 아래 roster·external_lookup은 하위 trace 안쪽에도 들어 있지만, 여기 최상위에 한 번 더
+        # 올려 둔다. 안쪽에만 두면 supervisor가 trace를 파고들지 않아 그 경고를 답변에 못 싣는다.
         "selected_agent": "kana_agent",
         "answer": extract_final_text(result),
         "trace": events,
         "inner_tool_names": _tool_call_names(events),
-        "final_slot_payload": final_slot_payload,
-        "final_decision_payload": final_decision_payload,
-        "roster": roster_payload,
-        "external_lookup": external_lookup_payload,
+        "final_slot_payload": trace_payloads["final_slot_payload"],
+        "final_decision_payload": trace_payloads["final_decision_payload"],
+        "roster": trace_payloads["roster"],
+        "external_lookup": trace_payloads["external_lookup"],
     }
     return json.dumps(payload, ensure_ascii=False)
 
