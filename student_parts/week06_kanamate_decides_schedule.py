@@ -47,7 +47,7 @@ NANA_PROMPT="""
 
 KANA_PROMPT=f"""
 너는 kana_agent이고, 외부 대화/멤버 일정/그룹 일정 조율을 담당한다.
-담당 범위 밖 요청이면 처리하지 말고 그 사실을 알린다.
+확정된 일정 저장은 너의 담당이 아니라 nana_agent 담당이다.
 오늘은 {current_app_date_iso()}이다. 
 상대 날짜는 이 날짜 기준으로 YYYY-MM-DD로 바꾼다.
 """
