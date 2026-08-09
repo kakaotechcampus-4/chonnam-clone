@@ -35,3 +35,15 @@
 - 증상: 2026-08-04에 `내일 10시에 철수랑 영희 회의 잡아줘`라는 요청을 `members=["철수", "영희"]`인 그룹 일정으로 저장한 뒤 2026-08-05를 조회하면, 본인이 참석자에 없는데도 `personal_schedule_count=1`이고 해당 row의 `member_name`이 `"나"`로 반환된다.
 - 원인: 수정 전 `_personal_schedules_for_current_scope()`가 AppSQLiteStore의 개인·그룹 일정을 참석 여부와 관계없이 모두 반환하고, `_collect_member_schedules()`가 이 일정들을 전부 `member_name="나"`로 변환했다.
 - 해결: `student_parts/week05_load_kanas_past_conversations.py:190`에 `_is_current_user_busy_schedule()`을 추가해 개인 일정과 `"나"`가 참석자인 그룹 일정만 내 busy-time으로 선택했다. Week 2 구조화 프롬프트에도 사용자 참석 여부에 따른 `members` 규칙을 명시하고, 미참석 일정 제외 및 참석 일정 포함 테스트를 각각 추가했으며 Week 5 테스트 16개가 모두 통과했다.
+
+## 저장된 그룹 일정이 조율 대상 멤버에 따라 내 busy-time에서 빠짐
+
+- 증상: 하린과 저장해 둔 그룹 일정이 있어도 민준처럼 그 일정의 참석자가 아닌 사람과 조율하면 해당 시간이 `member_name="나"`인 busy row로 나오지 않아 빈 시간으로 추천될 수 있다.
+- 원인: `student_parts/week05_load_kanas_past_conversations.py:190`의 이전 `_is_current_user_busy_schedule()`이 그룹 일정의 `attendees`에 `"나"`가 명시된 경우만 남겼다. 하지만 앱 `schedules` 테이블의 row는 참석자 표현과 무관하게 모두 owner가 `"me"`인 내 일정이고, 그룹 공유 row는 참석자 이름으로만 생성되므로 이 필터가 두 조회 경로 사이의 사각지대를 만들었다.
+- 해결: 참석자 기반 필터를 제거하고 `_personal_schedules_for_current_scope()`가 앱 DB의 개인·그룹 일정을 모두 반환하도록 수정했다. `test_collect_member_schedules_includes_stored_group_schedule_without_me_attendee`로 다른 멤버와 조율할 때도 그룹 일정과 참석자 설명이 남는지 검증했으며 Week 5 테스트 17개가 모두 통과했다.
+
+## `"나"`를 포함해 조율하면 앱 일정과 공유 복사본이 두 번 표시됨
+
+- 증상: `"팀 회의 (온라인)"`을 저장한 뒤 `member_names=["나", "민준"]`으로 일정을 모으면 앱 DB의 원제목 row와 공유 저장소의 `"팀 회의"` row가 같은 시간에 함께 반환될 수 있고, 결과 멤버 목록에도 `"나"`가 중복될 수 있다.
+- 원인: `student_parts/week05_load_kanas_past_conversations.py:372`에서 앱 DB row와 외부 row를 그대로 이어 붙였다. 공유 저장소는 제목의 소괄호를 제거하고 빈 시간을 `"미정"`으로 정규화하는 반면 앱 DB 경로는 원제목과 보정된 종료 시간을 사용하므로 row 전체 값 비교로는 같은 일정을 식별할 수 없다.
+- 해결: `student_parts/week05_load_kanas_past_conversations.py:307`에 멤버·날짜·정규화한 시작 시간·소괄호를 제거한 제목을 키로 쓰는 `_dedupe_schedule_rows()`를 추가하고 앱 DB row를 먼저 넣어 원본 설명을 보존했다. `members`는 첫 `"나"` 뒤에 나머지 정규화 멤버만 붙이도록 만들었고, `test_collect_member_schedules_dedupes_shared_copy_and_member_names`를 포함한 Week 5 테스트 17개가 모두 통과했다.
