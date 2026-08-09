@@ -236,15 +236,21 @@ def _collect(members: list[str] | None, date_from: str, date_to: str,
 
 def section_b() -> None:
     print("\n== B. _collect_member_schedules (fake MCP) ==")
+    # request_kind는 SQLite row가 개인/그룹을 구분하는 값이다. 확정된 그룹 일정도 내 busy-time이므로
+    # kind로 걸러내지 않고, notes에서만 개인/그룹을 구분한다.
     MINE = [
         {"schedule_id": "m1", "title": "내 일정", "date": "2026-07-09",
-         "start_time": "10:00", "end_time": "11:00", "attendees": ["철수"]},
+         "start_time": "10:00", "end_time": "11:00", "attendees": ["철수"],
+         "request_kind": "group_schedule"},
         {"schedule_id": "m2", "title": "범위 밖", "date": "2026-07-30",
-         "start_time": "10:00", "end_time": None, "attendees": []},
+         "start_time": "10:00", "end_time": None, "attendees": [],
+         "request_kind": "personal_schedule"},
         {"schedule_id": "m3", "title": "날짜 없음", "date": None,
-         "start_time": None, "end_time": None, "attendees": []},
+         "start_time": None, "end_time": None, "attendees": [],
+         "request_kind": "personal_schedule"},
         {"schedule_id": "m4", "title": "종료 없음", "date": "2026-07-09",
-         "start_time": "16:00", "end_time": None, "attendees": []},
+         "start_time": "16:00", "end_time": None, "attendees": [],
+         "request_kind": "personal_schedule"},
     ]
     names = lambda r: sorted({str(x.get("member_name")) for x in r["rows"]})  # noqa: E731
 
@@ -274,20 +280,28 @@ def section_b() -> None:
               "나" not in names(result) and sent == [name],
               f"members={names(result)} sent={sent}")
 
-    # ★ 외부 조회 대상에서 "나"를 빼야 한다. 공유 저장소로 동기화된 "나" 사본이
-    #   외부 일정으로 또 잡히면 같은 일정이 두 번 집계된다.
+    # ★ 외부 조회 대상에 "나"도 넣어야 한다. create_shared_schedule로 공유 저장소에만 등록한
+    #   내 일정은 앱 DB에 row가 없어, "나"를 빼면 그 일정이 내 busy-time에서 통째로 빠진다.
+    #   앱 DB 일정이 공유 저장소로 동기화돼 두 경로로 들어오는 몫은 dedupe가 걸러낸다(B22).
     fake = FakeMCP()
     _collect(["나", "철수"], "2026-07-09", "2026-07-09", MINE, fake)
     sent = fake.calls[0][1].get("member_names") if fake.calls else None
-    check("B4. 외부 조회 인자에 \"나\"가 없음 (이중집계 방지)",
-          sent is not None and "나" not in sent, str(sent))
+    check("B4. 외부 조회 인자에 \"나\"도 포함 (공유 저장소만 있는 내 일정 확보)",
+          sent == ["나", "철수"], str(sent))
 
-    # 외부 대상이 없으면 MCP를 아예 부르지 않는다.
-    # (빈 목록을 None으로 바꿔 넘기면 store가 멤버 전체를 반환해 남의 일정이 딸려온다)
-    only_me = FakeMCP()
+    # "나"만 물어도 공유 저장소는 봐야 한다. 앱 DB에 없는 내 일정이 거기 있을 수 있다.
+    SHARED_ONLY = [{
+        "member_name": "나", "title": "공유 저장소에만 있는 일정", "date": "2026-07-09",
+        "start_time": "13:00", "end_time": "14:00", "notes": "공유 저장소 직접 등록",
+    }]
+    only_me = FakeMCP(rows=SHARED_ONLY)
     solo = _collect(["나"], "2026-07-09", "2026-07-09", MINE, only_me)
-    check("B5. 외부 대상 없으면 MCP 호출 0회", len(only_me.calls) == 0, f"{len(only_me.calls)}회")
+    sent_solo = only_me.calls[0][1].get("member_names") if only_me.calls else None
+    check("B5. \"나\"만 물어도 공유 저장소를 조회", sent_solo == ["나"], f"{len(only_me.calls)}회 {sent_solo}")
     check("B5b. 그때 rows는 내 일정만", names(solo) == ["나"], str(names(solo)))
+    check("B5c. 공유 저장소에만 있는 내 일정이 rows에 들어옴",
+          any(r.get("title") == "공유 저장소에만 있는 일정" for r in solo["rows"]),
+          str([r.get("title") for r in solo["rows"]]))
 
     empty = FakeMCP()
     none_asked = _collect([], "2026-07-09", "2026-07-09", MINE, empty)
@@ -309,9 +323,30 @@ def section_b() -> None:
           any(r.get("title") == "종료 없음" and r.get("end_time") == "미정" for r in mine_rows), str(ends))
     check("B8c. 실제 종료 시간은 보존",
           any(r.get("title") == "내 일정" and r.get("end_time") == "11:00" for r in mine_rows), str(ends))
-    check("B9. 참석자는 notes에 남김",
-          any(r.get("notes") == "참석자: 철수" for r in mine_rows),
+    # notes는 그 row가 어떤 종류의 내 일정인지 설명한다. 확정된 그룹 일정은 이미 잡아둔 약속이라
+    # Week 6이 후보를 고를 때 근거가 다르므로, 개인 일정과 구분해 남긴다.
+    check("B9. 그룹 일정은 참석자까지 notes에 남김",
+          any(r.get("notes") == "Nana 그룹 일정 · 참석자: 철수" for r in mine_rows),
           str([r.get("notes") for r in mine_rows]))
+    check("B9b. 개인 일정은 개인 일정으로 남김",
+          any(r.get("title") == "종료 없음" and r.get("notes") == "Nana 개인 일정"
+              for r in mine_rows),
+          str([(r.get("title"), r.get("notes")) for r in mine_rows]))
+
+    # 참석자가 없는 그룹 일정과, request_kind가 없는 Week 1 임시 row(개인으로 본다).
+    KIND_EDGE = [
+        {"schedule_id": "k1", "title": "참석자 없는 그룹", "date": "2026-07-09",
+         "start_time": "08:00", "end_time": "09:00", "attendees": [],
+         "request_kind": "group_schedule"},
+        {"id": "k2", "title": "임시 일정", "date": "2026-07-09",
+         "start_time": "07:00", "end_time": "07:30", "attendees": ["영희"]},
+    ]
+    kinds = _collect(["나"], "2026-07-09", "2026-07-09", KIND_EDGE, FakeMCP(rows=[]))
+    kind_notes = {str(r.get("title")): r.get("notes") for r in kinds["rows"]}
+    check("B9c. 참석자 없는 그룹 일정은 참석자 없이 남김",
+          kind_notes.get("참석자 없는 그룹") == "Nana 그룹 일정", str(kind_notes))
+    check("B9d. request_kind 없는 임시 row는 개인 일정으로 봄",
+          kind_notes.get("임시 일정") == "Nana 개인 일정", str(kind_notes))
 
     my_titles = sorted(str(r.get("title")) for r in mine_rows)
     check("B10. 날짜 없는 일정은 제외", "날짜 없음" not in my_titles, str(my_titles))
@@ -323,11 +358,15 @@ def section_b() -> None:
           f"{iso['date_from']}~{iso['date_to']}")
 
     # 빈 date_to 는 store의 date <= '' 와 같은 판정(아무것도 통과하지 않음)이어야 한다.
+    # 날짜 판정은 내 일정에만 적용된다(외부 rows는 store가 거른다). FakeMCP는 날짜를 안 거르므로
+    # 여기서는 내 rows만 세어 판정한다.
+    mine_only = lambda r: [x for x in r["rows"] if x.get("member_name") == "나"]  # noqa: E731
     blank_to = _collect(["나"], "2026-07-09", "", MINE, FakeMCP())
     check("B13. 빈 date_to는 store와 같은 판정 (내 rows 0건)",
-          blank_to["rows"] == [], str(len(blank_to["rows"])))
+          mine_only(blank_to) == [], str(len(mine_only(blank_to))))
     reversed_range = _collect(["나"], "2026-07-15", "2026-07-07", MINE, FakeMCP())
-    check("B14. 뒤집힌 범위는 0건", reversed_range["rows"] == [], str(len(reversed_range["rows"])))
+    check("B14. 뒤집힌 범위는 내 rows 0건",
+          mine_only(reversed_range) == [], str(len(mine_only(reversed_range))))
 
     # 정상/실패 payload 계약
     check("B15. 정상 payload에 ok=True, 실패 필드 없음",
@@ -423,7 +462,7 @@ def section_b() -> None:
     sent_all = next((a.get("member_names") for n, a in everyone_mcp.calls
                      if n == "extract_schedules_from_history"), None)
     check("B19b. 등록 멤버 이름으로 풀어서 외부 조회 (None을 그대로 넘기지 않음)",
-          sent_all == ["철수"], str(sent_all))
+          sent_all == ["나", "철수"], str(sent_all))
     check("B19c. member_scope에 전체 조회 근거가 남음",
           everyone.get("member_scope") == w5.MEMBER_SCOPE_ALL_REGISTERED,
           str(everyone.get("member_scope")))
@@ -466,6 +505,41 @@ def section_b() -> None:
     check("B21b. 그때도 warning으로 '한가하다'고 읽히지 않게 안내", bool(lost.get("warning")),
           str(lost.get("warning")))
     check("B21c. 실패해도 내 일정은 보존", names(lost) == ["나"], str(names(lost)))
+
+    # ★ B22. 같은 일정이 앱 DB와 공유 저장소 양쪽에서 들어오면 한 번만 남아야 한다.
+    #   두 경로가 같은 일정을 다르게 다듬으므로(공유 저장소는 소괄호 제거, 종료 시간 표기가 다름)
+    #   값을 그대로 비교하면 중복이 안 걸러진다.
+    DUP_MINE = [{
+        "schedule_id": "d1", "title": "팀 회의 (온라인)", "date": "2026-07-09",
+        "start_time": "10:00", "end_time": None, "attendees": [],
+        "request_kind": "personal_schedule",
+    }]
+    DUP_SHARED = [
+        {   # 앱 DB row가 공유 저장소로 자동 동기화된 사본 — 제목의 소괄호가 지워져 들어온다.
+            "member_name": "나", "title": "팀 회의", "date": "2026-07-09",
+            "start_time": "10:00", "end_time": "미정", "notes": "앱 개인 일정 자동 동기화",
+        },
+        {   # 공유 저장소에만 있는 별개 일정 — 이건 남아야 한다.
+            "member_name": "나", "title": "공유 회의", "date": "2026-07-09",
+            "start_time": "15:00", "end_time": "16:00", "notes": "공유 저장소 직접 등록",
+        },
+    ]
+    dup = _collect(["나"], "2026-07-09", "2026-07-09", DUP_MINE, FakeMCP(rows=DUP_SHARED))
+    dup_rows = [r for r in dup["rows"] if r.get("member_name") == "나"]
+    same_slot = [r for r in dup_rows if r.get("start_time") == "10:00"]
+    check("B22. 같은 일정이 두 경로로 들어와도 1건", len(same_slot) == 1,
+          str([(r.get("title"), r.get("notes")) for r in dup_rows]))
+    check("B22b. 남는 쪽은 앱 DB row (notes가 내 일정 근거)",
+          same_slot and same_slot[0].get("notes") == "Nana 개인 일정",
+          str(same_slot[0].get("notes")) if same_slot else "없음")
+    check("B22c. 공유 저장소에만 있는 별개 일정은 지워지지 않음",
+          any(r.get("title") == "공유 회의" for r in dup_rows),
+          str([r.get("title") for r in dup_rows]))
+
+    # ★ B23. member_names는 "실제로 누구를 조회했는지" 알리는 값이라 같은 이름이 두 번 담기면 안 된다.
+    dup_self = _collect(["나", "저", "철수"], "2026-07-09", "2026-07-09", MINE, FakeMCP())
+    check("B23. 자기 지칭이 겹쳐도 member_names에 \"나\"는 한 번만",
+          dup_self.get("member_names") == ["나", "철수"], str(dup_self.get("member_names")))
 
 
 # ── C. 위임 wrapper 계약 (실제 MCP) ──────────────────────────────────────────
