@@ -79,7 +79,7 @@ _SUPERVISOR_AGENT: Any | None = None
 #   3. kana_agent
 #      - supervisor가 넘긴 query로 Kana 하위 agent를 이 tool 안에서 만들거나 재사용해 실행합니다.
 #      - 하위 trace를 훑어 decide_final_slot 결과를 final_slot_payload로 끌어올립니다.
-#      - answer, trace, inner_tool_names, final_slot_payload, final_decision_payload를 JSON으로 반환합니다.
+#      - answer, trace, inner_tool_names, final_slot_payload를 JSON으로 반환합니다.
 #      - 외부 멤버 일정 조회, 공유 일정 row 조회, 공통 가능 시간 후보 검증과 최종 시간 결정은 Kana 담당입니다.
 #
 # 추가 과제 구현 대상 (구현하지 않으려면 kana_tools() 목록에서 해당 tool을 제거)
@@ -180,7 +180,7 @@ _SUPERVISOR_AGENT: Any | None = None
 #
 #   - [메인] kana_agent(query)
 #     supervisor가 외부 멤버/그룹 조율 업무를 위임할 때 호출하는 tool입니다. Kana 하위 agent trace에서
-#     final_slot_payload와 final_decision_payload를 끌어올려 supervisor가 최종 답변에 사용할 수 있게 합니다.
+#     final_slot_payload를 끌어올려 supervisor가 최종 답변에 사용할 수 있게 합니다.
 #
 #   - [공통] build_langchain_supervisor_agent() / build_week_agent()
 #     supervisor agent를 한 번만 만들고 재사용합니다. build_week_agent()는 실행기가 호출하는 표준 entry point입니다.
@@ -272,7 +272,6 @@ def extract_langchain_trace(result: dict[str, Any]) -> dict[str, Any]:
     events = extract_agent_events(result)
     inner_tool_names: list[str] = []
     final_slot_payload: dict[str, Any] | None = None
-    final_decision_payload: dict[str, Any] | None = None
     selected_agent: str | None = None
 
     for event in events:
@@ -285,15 +284,12 @@ def extract_langchain_trace(result: dict[str, Any]) -> dict[str, Any]:
                 final_slot_payload = content["final_slot_payload"]
             elif "final_slot" in content:
                 final_slot_payload = content
-            if content.get("final_decision_payload"):
-                final_decision_payload = content["final_decision_payload"]
 
     return {
         "events": events,
         "supervisor_selected_agent": selected_agent,
         "inner_tool_names": inner_tool_names,
         "final_slot_payload": final_slot_payload,
-        "final_decision_payload": final_decision_payload,
     }
 
 
@@ -577,17 +573,12 @@ def kana_agent(query: str) -> str:
     result = _KANA_SUBAGENT.invoke({"messages": [{"role": "user", "content": query}]})
     events = extract_agent_events(result)
     final_slot_payload: dict[str, Any] | None = None
-    final_decision_payload: dict[str, Any] | None = None
     for event in events:
         content = event.get("content")
         if not isinstance(content, dict):
             continue
         if "final_slot" in content:
             final_slot_payload = content
-        if content.get("final_decision"):
-            final_decision_payload = content["final_decision"]
-        elif content.get("tool_name") == "decide_final_slot":
-            final_decision_payload = content
     return json.dumps(
         {
             "selected_agent": "kana_agent",
@@ -595,7 +586,6 @@ def kana_agent(query: str) -> str:
             "trace": events,
             "inner_tool_names": _tool_call_names(events),
             "final_slot_payload": final_slot_payload,
-            "final_decision_payload": final_decision_payload,
         },
         ensure_ascii=False,
     )
