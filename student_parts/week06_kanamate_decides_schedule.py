@@ -214,6 +214,8 @@ def nana_prompt_parts() -> list[str]:
         (
             "너는 Week 6의 Nana 하위 agent다. 개인 일정 생성, 조회, 수정, 삭제와 할 일, 알림, 개인 기억 검색만 담당한다. "
             "외부 멤버 일정이나 그룹 회의 시간 조율은 담당하지 않는다. "
+            "일정 조회에는 Week 3 이후 SQLite 저장소를 읽는 personal_list_saved_schedules를 사용한다. "
+            "사용자가 날짜나 기간을 말하지 않은 일정 조회에서는 날짜를 추측하거나 오늘로 좁히지 말고 date_from과 date_to를 비워 전체 저장 일정에서 찾는다. "
             "답변은 호출한 tool 결과만 근거로 짧게 말한다."
         ),
     ]
@@ -230,9 +232,11 @@ def kana_prompt_parts() -> list[str]:
             "개인 일정 저장이나 확정 일정 등록은 Nana 담당이라고 답한다. "
             "그룹 회의 시간을 맞춰 달라는 요청은 먼저 extract_schedule_request로 요청을 구조화한다. "
             f"멤버 이름은 {', '.join(JULY_PRACTICE_MEMBER_NAMES)} 중 실제 이름만 사용하고, '민준이'처럼 붙은 조사는 떼어낸다. "
+            "그룹 회의 시간 조율은 extract_schedule_request, collect_member_schedules, find_common_available_slots, decide_final_slot을 이 순서로 모두 호출해야 끝난다. "
             "그다음 collect_member_schedules로 나와 멤버들의 busy_rows를 모은다. "
-            "busy_rows를 보고 겹치지 않는 후보를 직접 고른 뒤 find_common_available_slots로 검증한다. "
-            "검증된 candidate_slots 중 하나를 직접 골라 decide_final_slot을 호출한다. "
+            "일정 수집이나 후보 검증 결과가 ok=false이면 최종 시간을 정하지 말고 reason을 근거로 필요한 날짜 범위를 다시 물어본다. "
+            "수집이 성공하면 busy_rows를 보고 겹치지 않는 candidate_slots를 최소 하나 직접 채워 find_common_available_slots로 검증한다. "
+            "검증 결과가 ok=true이면 candidate_slots 중 하나를 직접 골라 decide_final_slot을 호출하기 전에는 답변을 끝내지 않는다. "
             "find_common_available_slots와 decide_final_slot은 시간을 대신 고르지 않으므로, 네가 argument를 직접 채운다."
         ),
     ]
@@ -300,7 +304,8 @@ def tool_name(tool_object: Any) -> str:
 FIND_COMMON_AVAILABLE_SLOTS_DESCRIPTION = (
     "Kana가 직접 고른 공통 가능 시간 후보를 검증한다. 이 tool은 후보를 대신 계산하지 않는다. "
     "먼저 collect_member_schedules 결과의 rows를 busy_rows에 그대로 복사한다. "
-    "candidate_slots에는 busy_rows와 겹치지 않는 후보만 넣는다. "
+    "결과가 ok=false이면 decide_final_slot을 호출하지 말고 reason을 근거로 사용자에게 날짜 범위를 다시 물어본다. "
+    "candidate_slots는 비워 두지 말고 busy_rows와 겹치지 않는 후보를 최소 하나 넣는다. "
     "각 후보는 date(YYYY-MM-DD), start_time(HH:MM), end_time(HH:MM), duration_minutes, reason을 포함한다. "
     "검증 후에는 결과의 candidate_slots 중 하나를 골라 decide_final_slot을 이어서 호출한다."
 )
@@ -396,6 +401,16 @@ def find_common_available_slots_dict(
                 {"member_names": members, "date_from": normalized_date_from, "date_to": normalized_date_to}
             )
         )
+        if not collect_payload.get("ok"):
+            return {
+                "ok": False,
+                "tool_name": "find_common_available_slots",
+                "members": members,
+                "busy_rows": [],
+                "candidate_slots": [],
+                "reason": collect_payload.get("reason") or "member_schedule_collection_failed",
+                "schedule_summary": collect_payload.get("schedule_summary") or "일정 수집에 실패했습니다.",
+            }
         busy_rows = collect_payload.get("rows") or []
     return find_common_available_slots_payload(
         member_names=members,
@@ -488,13 +503,20 @@ def kana_tools() -> list[Any]:
     ]
 
 
+def nana_tools() -> list[Any]:
+    """Week 1 임시 일정 조회/삭제 tool을 제외한 Nana 하위 agent 도구 목록입니다."""
+
+    legacy_tool_names = {"personal_list_schedules", "personal_delete_schedule"}
+    return [item for item in week04_tools() if tool_name(item) not in legacy_tool_names]
+
+
 def supervisor_tools() -> list[Any]:
     return [nana_agent, kana_agent]
 
 
 def agent_tool_names(agent_name: str) -> list[str]:
     if agent_name == "nana_agent":
-        return [tool_name(item) for item in week04_tools()]
+        return [tool_name(item) for item in nana_tools()]
     if agent_name == "kana_agent":
         return [tool_name(item) for item in kana_tools()]
     if agent_name == "supervisor":
@@ -531,7 +553,7 @@ def nana_agent(query: str) -> str:
 
     global _NANA_SUBAGENT
     if _NANA_SUBAGENT is None:
-        _NANA_SUBAGENT = create_agent(model=chat_model(), tools=week04_tools(), system_prompt=nana_system_prompt())
+        _NANA_SUBAGENT = create_agent(model=chat_model(), tools=nana_tools(), system_prompt=nana_system_prompt())
     result = _NANA_SUBAGENT.invoke({"messages": [{"role": "user", "content": query}]})
     events = extract_agent_events(result)
     return json.dumps(
