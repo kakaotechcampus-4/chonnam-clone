@@ -231,7 +231,12 @@ def nana_prompt_parts() -> list[str]:
           요청이 들어오면 처리하지 말고 "그룹 일정 조율은 제 담당이 아닙니다"라고 짧게 답합니다.
         - 단, 요청에 날짜/시간이 이미 구체적으로 정해져 있으면(예: "내일 10시에 철수랑 개발미팅 잡아줘")
           다른 사람 이름이 함께 나와도 조율이 아니라 저장 작업입니다. 공통 가능 시간을 찾거나
-          정해달라는 요청이 아니라면 거절하지 말고 personal_create_schedule 등으로 내 캘린더에 저장합니다.
+          정해달라는 요청이 아니라면 거절하지 말고 저장을 수행합니다.
+          저장은 extract_schedule_request로 구조화한 뒤 save_structured_request에
+          kind/title/date/start_time/end_time/members를 넘기는 순서로 합니다.
+          이때 kind는 반드시 "personal_schedule"로 넘깁니다. 철수 같은 참석자 이름은
+          members 배열에 넣고, 사람이 여럿이라는 이유로 kind를 "group_schedule"로 바꾸지 마세요.
+          앱 일정 목록은 kind="personal_schedule" row만 보여주므로 kind가 다르면 저장돼도 화면에 뜨지 않습니다.
           kana_agent를 거쳤는지 여부와 무관하게 이 판단 기준을 적용합니다.
         - 반대로 시간이 정해지지 않아 여러 사람의 공통 가능 시간을 찾아달라는 요청이면 위 거절 규칙을 따릅니다.
         """,
