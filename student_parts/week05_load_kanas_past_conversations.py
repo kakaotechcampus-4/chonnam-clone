@@ -281,6 +281,15 @@ def _structured_request_from_schedule_row(row: dict[str, Any]) -> StructuredRequ
     )
 
 
+def _my_schedule_notes(request: StructuredRequest) -> str:
+    """내 일정 row가 개인 일정인지, 참석자가 있는 그룹 일정인지 설명합니다."""
+
+    if request.kind != "group_schedule":
+        return "Nana 개인 일정"
+    members = [str(member).strip() for member in (request.members or []) if str(member).strip()]
+    return f"Nana 그룹 일정 · 참석자: {', '.join(members)}" if members else "Nana 그룹 일정"
+
+
 # LLM이 조회 경계를 빈 문자열로 넘겼을 때 "그 방향은 제한하지 않는다"를 뜻하는 값입니다.
 # MCP tool이 date_from/date_to를 필수 문자열로 받아 경계 생략을 표현할 수 없으므로,
 # 내 일정 비교와 MCP 인자가 같은 값을 쓰도록 여기서 한 번만 정합니다.
@@ -317,7 +326,7 @@ def _collect_member_schedules(
                 "date": request.date,
                 "start_time": request.start_time or "미정",
                 "end_time": request.end_time or "미정",
-                "notes": "앱에 저장된 내 일정",
+                "notes": _my_schedule_notes(request),
             }
         )
 
