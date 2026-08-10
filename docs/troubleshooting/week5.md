@@ -12,6 +12,12 @@ TODO를 구현하다가 막힌 문제와 해결 과정을 발생할 때마다 �
   2. `create_shared_schedule` 결과에 이미 있는 `schedule_id`를 같은 대화에서 재확인/삭제할 때 그대로 재사용하고, 굳이 `list_shared_schedules`를 다시 부르지 않는다.
   적용 후 동일 시나리오(등록→확인→삭제→재확인)를 실제 agent 대화로 재실행: 확인 단계에서 `list_shared_schedules(member_names=['철수'], date_from='2026-08-05', date_to='2026-08-05')`로 정확히 조회, 삭제 단계에서 올바른 `schedule_id`로 `delete_shared_schedule` 호출, 최종 확인에서 정상적으로 "빠져 있음" 확인. PASS.
 
+## `collect_member_schedules`를 실제로 실행하면 `AttributeError: 'list' object has no attribute 'get'`
+
+- 증상: Week6 `find_common_available_slots_dict`(추가과제)에서 처음으로 `collect_member_schedules.invoke(...)`를 실제 실행하자 `_dedupe_schedule_rows([*my_rows, *external_rows.get("rows", [])])` 줄에서 `AttributeError: 'list' object has no attribute 'get'` 발생. Week5 때는 이 경로가 agent 전체 대화로만 검증돼서 (`docs/evals/week5-tasks.md` G3/G4) 발견 못 했던 버그.
+- 원인: `_collect_member_schedules`(`student_parts/week05_load_kanas_past_conversations.py:387~389`)에서 `external_rows = result_dict["rows"]`로 받은 값을 dict로 착각하고 `external_rows.get("rows", [])`를 호출함. 실제로는 MCP 서버(`mcp_server/sqlite_mcp_server.py:53~69`)의 `extract_schedules_from_history`가 `{"ok":..., "rows": rows}` 형태로 반환하고, 그 `rows`는 이미 평평한 list임 — 그 안에 또 `"rows"` 키가 있는 게 아님. G3(2026-07-29 검증)는 agent가 `collect_member_schedules`를 통해서가 아니라 마침 이 함수를 안 거치는 경로로 답을 냈던 거라 이 버그를 못 잡았던 것.
+- 해결: `_collect_member_schedules` 389행을 `external_rows.get("rows", [])` → `external_rows`로 수정(이미 리스트이므로 그대로 펼쳐 씀). 수정 후 `find_common_available_slots_dict(member_names=['철수'], date_from='2026-07-07', date_to='2026-07-17')`를 직접 호출해 에러 없이 내 일정("나")과 철수 일정이 합쳐진 `busy_rows`가 정상 반환되는 것 확인. PASS. `collect_member_schedules`는 `kana_tools()`에도 그대로 들어있어 Kana가 직접 호출하는 경로(G4)도 같이 고쳐짐.
+
 <!-- 아래 형식으로 항목을 추가합니다.
 
 ## 문제 제목
