@@ -15,6 +15,7 @@ from fixed.external_people_store import (
     external_schedule_summary,
     normalize_external_member_names,
     normalize_external_schedule_date_bounds,
+    strip_parenthetical_text,
 )
 from fixed.llm import chat_model
 from fixed.mcp_client import (
@@ -269,10 +270,14 @@ class CollectMemberSchedulesInput(BaseModel):
 
 
 def _structured_request_from_schedule_row(row: dict[str, Any]) -> StructuredRequest:
-    """앱 일정 row를 Week 2 StructuredRequest 기준으로 읽습니다."""
+    """앱 일정 row를 Week 2 StructuredRequest 기준으로 읽습니다.
+
+    SQLite row는 `request_kind`로 개인/그룹을 구분합니다. Week 1 임시 일정 row에는
+    이 값이 없으므로 개인 일정으로 봅니다.
+    """
 
     return StructuredRequest(
-        kind="personal_schedule",
+        kind="group_schedule" if row.get("request_kind") == "group_schedule" else "personal_schedule",
         title=row.get("title"),
         date=row.get("date"),
         start_time=row.get("start_time"),
@@ -280,6 +285,58 @@ def _structured_request_from_schedule_row(row: dict[str, Any]) -> StructuredRequ
         members=row.get("attendees") or row.get("members") or [],
         original_text=str(row.get("title") or ""),
     )
+
+
+def _my_schedule_notes(request: StructuredRequest) -> str:
+    """내 일정 row가 개인 일정인지, 참석자가 있는 그룹 일정인지 설명합니다."""
+
+    if request.kind != "group_schedule":
+        return "Nana 개인 일정"
+    members = [str(member).strip() for member in (request.members or []) if str(member).strip()]
+    return f"Nana 그룹 일정 · 참석자: {', '.join(members)}" if members else "Nana 그룹 일정"
+
+
+def _schedule_row_identity(row: dict[str, Any]) -> str | tuple[str, str, str, str]:
+    """row가 어느 원본 일정에서 왔는지 식별하는 키를 만듭니다.
+
+    앱 DB에 저장된 내 일정은 저장 시점에 공유 저장소로 자동 동기화되며, 이때
+    `source_conversation_id`에 `app:{request_id}`(개인) / `group:{request_id}:{member}`
+    (그룹)를 새겨둡니다(`fixed/external_mcp.py`). 두 경로 모두 이 값을 그대로 들고
+    있으므로, 있으면 이걸로 "같은 원본 일정"을 정확히 식별합니다.
+
+    이 값이 없는 row(외부 멤버 자기 일정처럼 앱 DB에 짝이 없는 경우)만 내용 기반
+    폴백을 씁니다. 두 경로가 같은 일정을 서로 다르게 다듬기 때문에 값을 그대로
+    비교하면 안 됩니다.
+      - 공유 저장소는 제목에서 소괄호를 지우고 공백을 하나로 줄입니다. 앱 DB는 원문을 둡니다.
+      - 앱 DB 경로만 end_time "미정"을 "18:00"으로 바꾸므로 end_time은 키에서 뺍니다.
+      - start_time이 비어 있으면 공유 저장소는 "미정"으로 저장하므로 같은 값으로 맞춥니다.
+    """
+
+    return row.get("source_conversation_id") or (
+        str(row.get("member_name") or "").strip(),
+        str(row.get("date") or "").strip(),
+        str(row.get("start_time") or "").strip() or "미정",
+        strip_parenthetical_text(str(row.get("title") or "")),
+    )
+
+
+def _dedupe_schedule_rows(
+    authoritative_rows: list[dict[str, Any]],
+    supplementary_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """같은 일정이 앱 DB와 공유 저장소 양쪽에서 들어와도 한 번만 남깁니다.
+
+    authoritative_rows(앱 DB 경로)가 항상 이깁니다. 리스트를 합쳐서 순서로 우선순위를
+    암시하던 예전 방식은 호출부가 순서를 잘못 짜면 조용히 깨지므로, 인자를 아예 둘로
+    나눠 우선순위를 시그니처로 강제합니다.
+    """
+
+    deduped: dict[str | tuple[str, str, str, str], dict[str, Any]] = {}
+    for row in authoritative_rows:
+        deduped[_schedule_row_identity(row)] = row
+    for row in supplementary_rows:
+        deduped.setdefault(_schedule_row_identity(row), row)
+    return list(deduped.values())
 
 
 def _collect_member_schedules(
@@ -304,21 +361,24 @@ def _collect_member_schedules(
             "date": structured.date,
             "start_time": structured.start_time,
             "end_time": structured.end_time,
-            "notes": None,
+            "notes": _my_schedule_notes(structured),
+            "source_conversation_id": f"app:{row['request_id']}" if row.get("request_id") else None,
         }
-        for structured in (_structured_request_from_schedule_row(row) for row in personal_schedules)
+        for row, structured in (
+            (row, _structured_request_from_schedule_row(row)) for row in personal_schedules
+        )
         if structured.date and normalized_from <= structured.date <= normalized_to
     ]
 
     external_payload = json.loads(
         call_mcp_tool_sync(
             "extract_schedules_from_history",
-            {"member_names": member_names, "date_from": date_from, "date_to": date_to},
+            {"member_names": member_names, "date_from": normalized_from, "date_to": normalized_to},
         )
     )
     external_rows = external_payload.get("rows", [])
 
-    rows = [*personal_rows, *external_rows]
+    rows = _dedupe_schedule_rows(personal_rows, external_rows)
     return {"rows": rows, "schedule_summary": external_schedule_summary(rows)}
 
 

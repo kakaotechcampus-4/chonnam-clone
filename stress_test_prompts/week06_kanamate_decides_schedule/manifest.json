@@ -1,0 +1,11 @@
+{
+  "source_file": "student_parts/week06_kanamate_decides_schedule.py",
+  "generated_at": "2026-08-05T19:40:00+09:00",
+  "tool_signatures": {
+    "nana_agent": "sha256:b3ef5e7a92574a902513f99db99e979989cd7478d946503ba2b2e38242dff5cc",
+    "kana_agent": "sha256:04784c87f32683a7e89fa6abac93da542791ab59aa02f291a0c4c59914156be7"
+  },
+  "prompt_files": [
+    "stress_test_prompts/week06_kanamate_decides_schedule/prompts.jsonl"
+  ]
+}
