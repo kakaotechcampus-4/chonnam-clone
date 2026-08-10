@@ -33,3 +33,6 @@ tests/
 
 # 개인 확인용 실행 trace 기록 (리뷰 대상 아님)
 docs/pr-evidence/**/answer*.md
+
+# 개인 학습 기록 (팀 공유 안 함)
+week*_학습일지.md
