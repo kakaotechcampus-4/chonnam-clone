@@ -118,7 +118,7 @@ _SUPERVISOR_AGENT: Any | None = None
 #   find_common_available_slots/decide_final_slot의 실제 겹침 검증과 payload 정리는 fixed/schedule_decision.py가 맡습니다.
 #
 # Compatibility helper
-#   propose_group_schedule은 기존 흐름을 위해 구현된 상태로 유지하며 kna_tools()에는 들어가지 않습니다.
+#   propose_group_schedule은 기존 흐름을 위해 구현된 상태로 유지하며 kana_tools()에는 들어가지 않습니다.
 #   현재 supervisor/kana_tools() 경로의 구현 대상은 prompt 함수 4개와 nana_agent, kana_agent(메인),
 #   tool description 상수 2개와 find_common_available_slots_dict, find_common_available_slots,
 #   decide_final_slot(추가)입니다.
