@@ -199,12 +199,15 @@ class PersonalScheduleCollectionTests(unittest.TestCase):
                 )
 
         mcp_call.assert_not_called()
-        self.assertEqual(result["member_names"], [])
+        self.assertEqual(result["members"], ["나"])
         self.assertEqual(
             [(row["member_name"], row["title"]) for row in result["rows"]],
             [("나", "개인 운동"), ("나", "그룹 회의")],
         )
-        self.assertTrue(all(row["notes"] == "내 일정" for row in result["rows"]))
+        self.assertEqual(
+            [row["notes"] for row in result["rows"]],
+            ["Nana 개인 일정", "Nana 그룹 일정 · 참석자: 철수"],
+        )
 
 
 class HistoryMCPWrapperTests(unittest.TestCase):
@@ -500,7 +503,7 @@ class MemberScheduleAggregationTests(unittest.TestCase):
                 "date": "2026-07-30",
                 "start_time": "09:00",
                 "end_time": "10:00",
-                "notes": "내 일정",
+                "notes": "Nana 개인 일정",
             },
             {
                 "member_name": "민아",
@@ -512,7 +515,7 @@ class MemberScheduleAggregationTests(unittest.TestCase):
             },
         ]
         self.assertEqual(result["rows"], expected_rows)
-        self.assertEqual(result["member_names"], ["민아"])
+        self.assertEqual(result["members"], ["나", "민아"])
         self.assertEqual(result["date_from"], "2026-07-29")
         self.assertEqual(result["date_to"], "2026-08-02")
         self.assertEqual(
@@ -546,8 +549,72 @@ class MemberScheduleAggregationTests(unittest.TestCase):
             )
 
         mcp_call.assert_not_called()
-        self.assertEqual(result["member_names"], [])
+        self.assertEqual(result["members"], ["나"])
         self.assertEqual([row["title"] for row in result["rows"]], ["첫날", "마지막 날"])
+
+    def test_my_schedule_notes_distinguish_personal_and_group_rows(self) -> None:
+        personal = week05.StructuredRequest(kind="personal_schedule")
+        group = week05.StructuredRequest(
+            kind="group_schedule",
+            members=[" 하린 ", "", "민준"],
+        )
+        group_without_members = week05.StructuredRequest(kind="group_schedule")
+
+        self.assertEqual(week05._my_schedule_notes(personal), "Nana 개인 일정")
+        self.assertEqual(
+            week05._my_schedule_notes(group),
+            "Nana 그룹 일정 · 참석자: 하린, 민준",
+        )
+        self.assertEqual(week05._my_schedule_notes(group_without_members), "Nana 그룹 일정")
+
+    def test_duplicate_my_schedule_from_shared_store_keeps_app_row(self) -> None:
+        personal_schedules = [
+            {
+                "request_kind": "personal_schedule",
+                "title": "팀 회의 (온라인)",
+                "date": "2026-07-14",
+                "start_time": "",
+                "end_time": "18:00",
+            }
+        ]
+        external_payload = {
+            "ok": True,
+            "rows": [
+                {
+                    "member_name": "나",
+                    "title": "팀 회의",
+                    "date": "2026-07-14",
+                    "start_time": "미정",
+                    "end_time": "미정",
+                    "notes": "앱 개인 일정 자동 동기화",
+                },
+                {
+                    "member_name": "민준",
+                    "title": "운영 회의",
+                    "date": "2026-07-14",
+                    "start_time": "15:00",
+                    "end_time": "16:30",
+                    "notes": "외부 일정",
+                },
+            ],
+        }
+
+        with patch.object(
+            week05,
+            "call_mcp_tool_sync",
+            return_value=json.dumps(external_payload, ensure_ascii=False),
+        ):
+            result = week05._collect_member_schedules(
+                member_names=["나", "민준"],
+                date_from="2026-07-14",
+                date_to="2026-07-14",
+                personal_schedules=personal_schedules,
+            )
+
+        self.assertEqual(result["members"], ["나", "민준"])
+        self.assertEqual(len(result["rows"]), 2)
+        self.assertEqual(result["rows"][0]["title"], "팀 회의 (온라인)")
+        self.assertEqual(result["rows"][0]["notes"], "Nana 개인 일정")
 
     def test_malformed_external_payloads_are_not_treated_as_empty_results(self) -> None:
         malformed_payloads = [
