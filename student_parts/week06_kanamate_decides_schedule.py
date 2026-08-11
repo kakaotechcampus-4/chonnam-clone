@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import re
+from datetime import date, timedelta
 from typing import Any
 
 from langchain.agents import create_agent
@@ -8,7 +10,7 @@ from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
 from fixed.external_people_store import normalize_external_member_names
-from fixed.langchain_trace import extract_agent_events, extract_final_text
+from fixed.langchain_trace import extract_agent_events, extract_final_text, stream_chunk_messages
 from fixed.llm import chat_model
 from fixed.runtime_clock import current_app_date_iso
 from fixed.schedule_decision import (
@@ -197,9 +199,17 @@ def week06_prompt_parts() -> list[str]:
 
     return [
         *week05_prompt_parts(),
-        # TODO: Week 6 supervisor agent system prompt를 자유롭게 추가하세요.
-        #   - supervisor는 직접 업무를 처리하지 않고 nana_agent 또는 kana_agent로만 위임합니다.
-        #   - 어떤 요청이 Nana 담당이고 어떤 요청이 Kana 담당인지 판단 기준을 적습니다.
+        """
+        현재 실행 범위는 Week 6이며, 아래 역할 분담은 이전 주차의 단일 agent 범위와
+        이전 prompt에 남아 있는 Nana 정체성 문구보다 우선한다.
+        너는 실제 일정 업무를 직접 처리하지 않는 supervisor다.
+        개인 일정 생성·조회·수정·삭제, todo/reminder 저장, 개인 참고자료, 저장 기록,
+        앱 내부 대화 RAG 요청은 nana_agent에 위임한다.
+        외부 멤버의 과거 대화·일정·공유 일정 조회, 나와 외부 멤버 일정 비교,
+        공통 가능 시간 검증과 그룹 최종 시간 결정은 kana_agent에 위임한다.
+        사용자 요청 하나에는 담당 agent 하나만 선택하고, 선택하지 않은 agent를 예비로 호출하지 않는다.
+        직접 내부 tool을 호출하거나 일정 결과를 추측해서 만들지 않는다.
+        """,
     ]
 
 
@@ -208,9 +218,33 @@ def nana_prompt_parts() -> list[str]:
 
     return [
         *week04_prompt_parts(),
-        # TODO: Week 6 Nana 하위 에이전트 전용 system prompt를 자유롭게 추가하세요.
-        #   - supervisor prompt를 공유하지 않는 Nana 전용 prompt입니다.
-        #   - 개인 일정/저장/RAG를 담당하고, 그룹 조율 요청은 담당이 아니라고 짧게 알리게 합니다.
+        """
+        현재 너는 Week 6의 Nana 하위 에이전트다.
+        개인 일정 생성·조회·수정·삭제, todo/reminder 저장, 개인 참고자료 저장·검색,
+        저장 기록 검색과 앱 내부 과거 대화 RAG만 담당한다.
+        실제 저장·조회·수정·삭제 요청은 대화 기억만으로 답하지 말고 반드시 알맞은 tool 결과를 근거로 답한다.
+        외부 멤버의 일정 조회와 그룹 공통 시간 결정은 담당하지 않는다.
+        그런 요청이 들어오면 tool을 호출하지 말고 Kana 담당이라고 한국어로 짧게 안내한다.
+
+        개인 일정 생성 요청은 필수 값이 모두 있으면 extract_schedule_request 다음
+        personal_create_schedule을 같은 실행에서 호출한다. todo/reminder 저장도
+        extract_schedule_request 다음 save_structured_request까지 완료한다.
+        todo는 제목과 날짜만 명확해도 저장하며 start_time/end_time을 요구하지 않는다.
+        reminder는 사용자가 명시한 날짜·시각을 사용하고 종료 시각을 추가로 묻지 않는다.
+        개인 일정 수정·삭제는 personal_list_saved_schedules로 실제 schedule_id를 확인한 뒤
+        각각 personal_update_saved_schedule 또는 personal_delete_saved_schedules를 호출한다.
+        후보가 없을 때만 변경 tool을 호출하지 않고 없다고 답한다.
+        생성·저장·수정·삭제 mutation tool의 결과를 받기 전에는 완료됐다는 최종 답변을
+        절대 만들지 않는다. 구조화나 후보 조회 결과만으로 workflow를 끝내지 않는다.
+
+        '앱에 저장된 요청 기록' 검색은 search_saved_requests, '앱의 이전 일반 대화' 검색은
+        search_conversation_messages를 반드시 사용한다. 앱 내부 일반 대화는 Nana 담당이며
+        외부 멤버의 대화가 아니므로 Kana 담당이라고 돌려보내지 않는다.
+        특히 요청에 '앱의 이전 일반 대화' 또는 '이전 일반 대화'가 있으면
+        search_conversation_messages만 사용하고 search_personal_references로 바꾸지 않는다.
+        사용자가 앞서 개인 참고자료에 저장한 식별 코드·선호·규칙을 "찾아줘"라고 하면
+        일정 제목으로 해석하지 말고 search_personal_references를 호출한다.
+        """,
     ]
 
 
@@ -218,10 +252,49 @@ def kana_prompt_parts() -> list[str]:
     """Week 6 Kana 하위 에이전트 전용 system prompt 조각입니다."""
 
     return [
-        # TODO: Week 6 Kana 하위 에이전트 전용 system prompt를 자유롭게 추가하세요.
-        #   - 다른 주차 prompt를 누적하지 않으므로 Kana 역할을 처음부터 작성해야 합니다.
-        #   - 외부 멤버 일정/공통 가능 시간/그룹 조율을 담당하고, 확정된 일정 저장은 Nana 담당이라고 답하게 합니다.
-        #   - 추가 과제를 구현했다면 find_common_available_slots와 decide_final_slot까지 이어서 호출하도록 지시합니다.
+        f"""
+        너는 Week 6의 외부 일정 및 그룹 조율 담당 하위 에이전트 Kana다.
+        사용자에게는 한국어로 간결하고 친절하게 답한다.
+        현재 앱 기준 날짜는 {current_app_date_iso()}다. 상대 날짜는 이 날짜를 기준으로 해석하고
+        날짜는 YYYY-MM-DD, 시간은 HH:MM 형식을 사용한다.
+
+        외부 조회 또는 그룹 조율 전에 외부 member_names와 date_from/date_to가 명확한지 확인한다.
+        멤버나 날짜 범위가 없으면 값을 추측하거나 tool을 호출하지 말고 필요한 정보만 질문한다.
+        필요한 값이 모두 있고 사용자가 조회·비교·시간 결정을 요청했다면 별도의 조회 허락을
+        다시 묻지 말고 즉시 알맞은 tool workflow를 실행한다.
+
+        외부 멤버 일정만 조회할 때는 search_previous_conversations를 먼저 호출하고,
+        검색 rows가 비어 있어도 extract_schedules_from_history를 이어서 호출한다.
+        사용자가 원문 근거를 요청했고 추출 rows가 있을 때만 실제 source_conversation_id로
+        load_conversation_messages를 호출한다. 공유 일정 row 조회에는 list_shared_schedules를 사용한다.
+
+        나와 외부 멤버의 일정을 함께 비교하거나 공통 시간을 정할 때는
+        collect_member_schedules 하나로 내 일정과 외부 busy-time을 모으고 search/extract를 중복 호출하지 않는다.
+        외부 멤버들만의 공통 시간을 정하면서 search/extract로 rows를 얻었다면 그 rows를 busy_rows로 사용한다.
+        find_common_available_slots의 member_names에는 외부 멤버만 넣는다. 이 tool은 결과의
+        검증 대상 members에 "나"를 한 번만 자동으로 포함한다.
+
+        그룹 시간 결정에서는 busy_rows를 직접 읽고 어떤 busy row와도 겹치지 않는 candidate_slots를
+        네가 직접 고른다. find_common_available_slots가 후보를 계산해 준다고 기대하지 않는다.
+        후보 검증 결과만 말하고 끝내지 말고, 유효한 후보 중 하나를 네가 직접 선택해
+        selected_index 또는 selected_slot과 final_slot을 채운 뒤 decide_final_slot을 호출한다.
+        final_slot 형식은 'YYYY-MM-DD HH:MM-HH:MM'이다.
+        후보가 없거나 선택할 수 없으면 final_slot=null, needs_agent_selection=true로 두고 임의 확정하지 않는다.
+        확정했다면 needs_agent_selection=false로 두며 후보·busy_rows·멤버·날짜 범위·reason을 함께 전달한다.
+        find_common_available_slots를 호출할 때 candidate_slots를 반드시 list로 전달한다.
+        사용자가 '10시부터 11시 사이', '10:00부터 11:00 사이'처럼 허용 시간 범위를
+        명시했다면 그 시작과 끝을 workday_start/workday_end로 정확히 전달한다. 기본값
+        09:00~18:00로 넓히거나 범위 밖 후보를 만들지 않는다.
+        공통 후보가 없으면 빈 list를 전달하고, find 결과가 빈 list여도 decide_final_slot을
+        반드시 이어서 호출해 final_slot=null, needs_agent_selection=true로 기록한다.
+        후보의 시작·종료 간격은 요청 duration_minutes와 정확히 같아야 한다. 최종 확정 시
+        final_slot은 selected_slot 또는 selected_index가 가리키는 후보의 날짜·시작·종료와 정확히 같아야 한다.
+        앞선 조회 tool의 rows는 busy_rows에 그대로 복사한다. member_name의 공백을 바꾸거나
+        notes, source_conversation_id 같은 필드를 생략하지 말고 find와 decide 양쪽에 같은 rows를 전달한다.
+
+        개인 일정 생성·수정·삭제와 확정 일정의 실제 저장은 Nana 담당이다.
+        그런 요청에는 개인 저장 tool을 대신 실행하지 말고 Nana 담당이라고 안내한다.
+        """,
     ]
 
 
@@ -237,8 +310,21 @@ def supervisor_system_prompt() -> str:
     return join_system_prompt(
         [
             *week06_prompt_parts(),
-            # TODO: supervisor 실행 역할에 필요한 최종 system prompt를 자유롭게 추가하세요.
-            #   - 반드시 nana_agent 또는 kana_agent 중 하나를 호출한 뒤 그 결과만 근거로 답하게 합니다.
+            """
+            일정 관련 사용자 요청에는 반드시 nana_agent 또는 kana_agent 중 담당 하나를 정확히 한 번 호출한다.
+            사용자의 멤버·날짜·의도를 query에 보존하고 사용자가 말하지 않은 값이나 결정을 추가하지 않는다.
+            query를 검색 키워드만 남긴 짧은 구로 축약하지 않는다. 저장 기록 검색, 앱 내부 대화 검색,
+            생성·수정·삭제 같은 작업 의도를 하위 agent가 알 수 있게 원문 표현을 보존한다.
+            예를 들어 '앱에 저장된 요청 기록에서 검색'은 해당 출처 표현까지 nana_agent query에 보존한다.
+            외부 멤버 이름과 '바쁜 일정'이 함께 있으면 개인 일정으로 바꾸지 말고 kana_agent에 위임한다.
+            '오늘', '내일' 같은 상대 날짜는 현재 앱 기준 날짜로 계산한 YYYY-MM-DD 절대 날짜로 바꾸고,
+            원래 상대 날짜 표현 대신 그 날짜를 wrapper query의 date_from/date_to 의미로 명시한다.
+            후속 답변만으로 멤버·날짜·회의 길이가 완성되는 경우에는 앞선 대화의 미완성 요청과 합쳐
+            하위 agent가 단독으로 이해할 수 있는 query를 만든다.
+            하위 agent를 호출하지 않은 채 직접 완료 답변을 만들지 않는다.
+            하위 agent가 반환한 answer와 payload만 근거로 답하고, JSON 전체를 그대로 노출하지 말고
+            사용자에게 필요한 내용을 간결한 한국어로 정리한다.
+            """,
         ]
     )
 
@@ -269,13 +355,16 @@ def extract_langchain_trace(result: dict[str, Any]) -> dict[str, Any]:
             if content.get("final_decision_payload"):
                 final_decision_payload = content["final_decision_payload"]
 
-    return {
+    trace = {
         "events": events,
         "supervisor_selected_agent": selected_agent,
         "inner_tool_names": inner_tool_names,
         "final_slot_payload": final_slot_payload,
         "final_decision_payload": final_decision_payload,
     }
+    if isinstance(result, dict) and "supervisor_retry_count" in result:
+        trace["supervisor_retry_count"] = result["supervisor_retry_count"]
+    return trace
 
 
 def tool_name(tool_object: Any) -> str:
@@ -283,25 +372,25 @@ def tool_name(tool_object: Any) -> str:
 
 
 FIND_COMMON_AVAILABLE_SLOTS_DESCRIPTION = (
-    # TODO: find_common_available_slots tool description을 자유롭게 작성하세요.
-    #   - 이 Python tool이 후보를 계산하지 않는다는 점을 Kana agent에게 분명히 알려야 합니다.
-    #     agent가 busy_rows를 읽고 candidate_slots를 직접 채워 넘기게 만드는 것이 핵심입니다.
-    #   - candidate_slots 각 항목이 date(YYYY-MM-DD), start_time(HH:MM), end_time(HH:MM),
-    #     duration_minutes, reason을 포함해야 한다는 형식을 적습니다.
-    #   - 후보는 어떤 busy row와도 겹치면 안 되고, busy_rows도 앞선 tool output에서 복사해 넘기게 합니다.
-    #   - 이 결과로 답변을 끝내지 말고 decide_final_slot을 이어서 호출하도록 유도합니다.
-    ""
+    "공통 가능 시간 후보를 검증하고 기록합니다. 이 Python tool은 빈 시간을 계산하거나 후보를 대신 "
+    "선택하지 않습니다. Kana agent가 앞선 일정 조회 결과의 busy_rows를 직접 읽고, 어떤 busy row와도 "
+    "겹치지 않는 candidate_slots를 직접 골라 busy_rows와 함께 전달해야 합니다. 각 후보는 "
+    "date(YYYY-MM-DD), start_time(HH:MM), end_time(HH:MM), duration_minutes, reason을 모두 포함해야 하며 "
+    "요청 날짜 범위, 업무시간, 회의 길이를 만족해야 합니다. 사용자가 명시한 'HH:MM부터 HH:MM 사이'는 "
+    "workday_start/workday_end에 그대로 넣고 절대로 기본 09:00~18:00로 넓히지 않습니다. "
+    "반환된 검증 결과로 답변을 끝내지 말고 "
+    "유효한 후보를 직접 선택한 다음 decide_final_slot을 이어서 호출하세요."
 )
 
 
 DECIDE_FINAL_SLOT_DESCRIPTION = (
-    # TODO: decide_final_slot tool description을 자유롭게 작성하세요.
-    #   - 이 Python tool이 최종 시간을 자동 선택하지 않는다는 점을 분명히 알려야 합니다.
-    #     agent가 selected_index 또는 selected_slot과 final_slot을 직접 골라 넘기게 만듭니다.
-    #   - final_slot 형식('YYYY-MM-DD HH:MM-HH:MM')과 needs_agent_selection, reason을 채우는 기준을 적습니다.
-    #   - 아직 고르지 않았다면 final_slot은 null, needs_agent_selection은 true로 두게 합니다.
-    #   - 근거 trace를 위해 candidate_slots, busy_rows, member_names, date_from/date_to도 함께 넘기게 합니다.
-    ""
+    "검증된 후보 중 Kana agent가 직접 고른 최종 시간을 기록합니다. 이 Python tool은 후보나 최종 시간을 "
+    "자동 선택하지 않습니다. 확정할 때는 selected_index 또는 selected_slot을 직접 고르고 final_slot을 "
+    "'YYYY-MM-DD HH:MM-HH:MM' 형식으로 채우며 needs_agent_selection=false와 사용자-facing reason을 "
+    "전달하세요. 아직 고르지 못했다면 final_slot=null, needs_agent_selection=true로 두세요. 판단 근거가 "
+    "trace에 남도록 바로 앞 find_common_available_slots 결과의 candidate_slots, busy_rows, members를 "
+    "각각 candidate_slots, busy_rows, member_names에 값과 순서를 바꾸지 않고 복사하고 date_from, date_to도 "
+    "함께 전달해야 합니다. find 결과에 자동 포함된 '나'를 member_names에서 빼면 안 됩니다."
 )
 
 
@@ -310,8 +399,14 @@ class FindCommonAvailableSlotsInput(BaseModel):
     date_from: str = Field(description="조회 시작 날짜. ISO datetime이면 날짜 부분만 사용")
     date_to: str = Field(description="조회 종료 날짜. ISO datetime이면 날짜 부분만 사용")
     duration_minutes: int = Field(default=60, ge=30, le=480, description="회의 길이(분)")
-    workday_start: str = Field(default="09:00", description="허용 업무 시간 시작 HH:MM")
-    workday_end: str = Field(default="18:00", description="허용 업무 시간 종료 HH:MM")
+    workday_start: str = Field(
+        default="09:00",
+        description="허용 업무 시간 시작 HH:MM. 사용자가 시간 범위를 명시하면 그 시작 시각을 사용",
+    )
+    workday_end: str = Field(
+        default="18:00",
+        description="허용 업무 시간 종료 HH:MM. 사용자가 시간 범위를 명시하면 그 종료 시각을 사용",
+    )
     limit: int = Field(default=5, ge=1, le=20, description="최대 후보 수")
     busy_rows: list[dict[str, Any]] | None = Field(
         default=None,
@@ -328,7 +423,10 @@ class FindCommonAvailableSlotsInput(BaseModel):
 
 
 class DecideFinalSlotInput(BaseModel):
-    candidate_slots: list[Any] = Field(default_factory=list, description="find_common_available_slots 결과의 후보 목록")
+    candidate_slots: list[Any] = Field(
+        default_factory=list,
+        description="find_common_available_slots 결과에서 값과 순서를 바꾸지 않고 복사한 candidate_slots",
+    )
     selected_slot: Any | None = Field(default=None, description="LLM agent가 직접 고른 후보 객체")
     selected_index: int | None = Field(default=None, description="LLM agent가 직접 고른 candidate_slots index")
     final_slot: str | None = Field(
@@ -339,12 +437,18 @@ class DecideFinalSlotInput(BaseModel):
         default=None,
         description="후보 선택이 더 필요하면 true, final_slot을 확정했으면 false",
     )
-    member_names: list[str] | None = Field(default=None, description="회의 대상 멤버 목록")
+    member_names: list[str] | None = Field(
+        default=None,
+        description="find_common_available_slots 결과의 members를 '나'까지 포함해 그대로 복사한 목록",
+    )
     date_from: str | None = Field(default=None, description="요청 날짜 범위 시작")
     date_to: str | None = Field(default=None, description="요청 날짜 범위 종료")
     duration_minutes: int = Field(default=60, description="회의 길이(분)")
     reason: str | None = Field(default=None, description="최종 선택 또는 보류에 대한 사용자-facing 설명")
-    busy_rows: list[dict[str, Any]] | None = Field(default=None, description="최종 결정 근거로 남길 busy_rows")
+    busy_rows: list[dict[str, Any]] | None = Field(
+        default=None,
+        description="find_common_available_slots 결과에서 필드와 순서를 바꾸지 않고 복사한 busy_rows",
+    )
 
 
 class ProposeGroupScheduleInput(BaseModel):
@@ -360,7 +464,12 @@ class ProposeGroupScheduleInput(BaseModel):
 class AgentQueryInput(BaseModel):
     """하위 에이전트 위임 입력입니다."""
 
-    query: str
+    query: str = Field(
+        description=(
+            "하위 agent가 이 문자열 하나만 읽어도 실행할 수 있는 완결된 요청. 멤버·날짜·시간·작업 의도를 "
+            "원문에서 보존하고, clarification 후속 답변이면 앞선 미완성 요청과 합쳐 전달"
+        )
+    )
 
 
 def find_common_available_slots_dict(
@@ -377,12 +486,45 @@ def find_common_available_slots_dict(
 ) -> dict[str, Any]:
     """멤버별 busy-time rows와 LLM이 고른 후보 payload를 검증 결과로 바꿉니다."""
 
-    # TODO: 멤버 이름/날짜 범위를 정규화하고, busy_rows를 수집한 뒤 후보 검증 payload를 만드세요.
-    #   - normalize_external_member_names(...)로 멤버 이름을, normalize_date_bound(...)로 날짜를 정규화합니다.
-    #   - busy_rows가 None이면 collect_member_schedules.invoke({...})를 호출해 rows를 채웁니다.
-    #   - 검증 payload 생성은 find_common_available_slots_payload(...)에 넘깁니다. 이때 내 일정도 근거이므로
-    #     member_names에는 "나"를 함께 포함합니다.
-    ...
+    normalized_member_names = normalize_external_member_names(member_names)
+    external_member_names: list[str] = []
+    for name in normalized_member_names:
+        if name != "나" and name not in external_member_names:
+            external_member_names.append(name)
+
+    normalized_date_from = normalize_date_bound(date_from)
+    normalized_date_to = normalize_date_bound(date_to)
+    collected_busy_rows = busy_rows
+    if collected_busy_rows is None:
+        collected_payload = json.loads(
+            collect_member_schedules.invoke(
+                {
+                    "member_names": external_member_names,
+                    "date_from": normalized_date_from,
+                    "date_to": normalized_date_to,
+                }
+            )
+        )
+        if not isinstance(collected_payload, dict):
+            raise ValueError("collect_member_schedules 결과는 JSON object여야 합니다.")
+        if collected_payload.get("ok") is False:
+            raise RuntimeError(
+                str(collected_payload.get("error") or "collect_member_schedules failed")
+            )
+        collected_busy_rows = list(collected_payload.get("rows") or [])
+
+    return find_common_available_slots_payload(
+        member_names=["나", *external_member_names],
+        date_from=normalized_date_from,
+        date_to=normalized_date_to,
+        busy_rows=collected_busy_rows,
+        duration_minutes=duration_minutes,
+        workday_start=workday_start,
+        workday_end=workday_end,
+        limit=limit,
+        candidate_slots=candidate_slots,
+        llm_reason=llm_reason,
+    )
 
 
 @tool(description=FIND_COMMON_AVAILABLE_SLOTS_DESCRIPTION, args_schema=FindCommonAvailableSlotsInput)
@@ -400,8 +542,19 @@ def find_common_available_slots(
 ) -> str:
     """수집된 멤버 일정에서 LLM이 직접 고른 공통 가능 후보 시간을 검증합니다."""
 
-    # TODO: find_common_available_slots_dict(...) 결과를 JSON 문자열로 반환하세요.
-    ...
+    payload = find_common_available_slots_dict(
+        member_names=member_names,
+        date_from=date_from,
+        date_to=date_to,
+        duration_minutes=duration_minutes,
+        workday_start=workday_start,
+        workday_end=workday_end,
+        limit=limit,
+        busy_rows=busy_rows,
+        candidate_slots=candidate_slots,
+        llm_reason=llm_reason,
+    )
+    return json.dumps(payload, ensure_ascii=False)
 
 
 @tool(description=DECIDE_FINAL_SLOT_DESCRIPTION, args_schema=DecideFinalSlotInput)
@@ -420,10 +573,22 @@ def decide_final_slot(
 ) -> str:
     """LLM이 직접 고른 후보/최종 시간을 course repo payload로 기록합니다."""
 
-    # TODO: Kana agent가 고른 최종 시간 정보를 course repo JSON 계약에 맞춰 기록하세요.
-    #   - 직접 최종 시간을 고르지 말고 받은 인자를 그대로 decide_final_slot_payload(...)에 넘깁니다.
-    #   - 결과를 JSON 문자열로 반환합니다.
-    ...
+    payload = decide_final_slot_payload(
+        candidate_slots=candidate_slots,
+        selected_slot=selected_slot,
+        selected_index=selected_index,
+        final_slot=final_slot,
+        needs_agent_selection=needs_agent_selection,
+        member_names=member_names,
+        date_from=date_from,
+        date_to=date_to,
+        duration_minutes=duration_minutes,
+        reason=reason,
+        busy_rows=busy_rows,
+    )
+    # 빈 후보 목록도 "후보가 없었다"는 결정 근거이므로 key 자체를 보존합니다.
+    payload["candidate_slots"] = list(candidate_slots or [])
+    return json.dumps(payload, ensure_ascii=False)
 
 
 def kana_tools() -> list[Any]:
@@ -476,28 +641,661 @@ def propose_group_schedule(
     return json.dumps({"ok": True, "tool_name": "propose_group_schedule", "final_decision": payload}, ensure_ascii=False)
 
 
+_EXPLICIT_DATE_PATTERN = re.compile(r"(?:\d{4}년\s*\d{1,2}월\s*\d{1,2}일|\d{4}-\d{1,2}-\d{1,2})")
+_TIME_RANGE_PATTERN = re.compile(
+    r"(?:\d{1,2}(?::\d{2}|시)(?:\s*\d{1,2}분)?).*?부터.*?"
+    r"(?:\d{1,2}(?::\d{2}|시)(?:\s*\d{1,2}분)?).*?까지"
+)
+_EXPLICIT_WINDOW_PATTERN = re.compile(
+    r"(?<![\d:+-])(?P<start_hour>[01]?\d|2[0-3])"
+    r"(?::(?P<start_minute>[0-5]\d)|시(?:\s*(?P<start_korean_minute>[0-5]?\d)분)?)"
+    r"\s*부터\s*"
+    r"(?P<end_hour>[01]?\d|2[0-3])"
+    r"(?::(?P<end_minute>[0-5]\d)|시(?:\s*(?P<end_korean_minute>[0-5]?\d)분)?)"
+    r"\s*(?:사이|까지)"
+)
+
+
+def _nana_mutation_retry_plan(query: str) -> tuple[str, tuple[str, ...]] | None:
+    """명시 필드가 충분한 Nana mutation 요청만 보수적으로 재시도 대상으로 분류합니다."""
+
+    normalized = " ".join(str(query).split())
+    has_date = _EXPLICIT_DATE_PATTERN.search(normalized) is not None
+    has_time_range = _TIME_RANGE_PATTERN.search(normalized) is not None
+    if not has_date:
+        return None
+    if any(word in normalized for word in ("삭제", "지워", "제거")):
+        return (
+            "personal_delete_saved_schedules",
+            ("personal_list_saved_schedules", "personal_delete_saved_schedules"),
+        )
+    if any(word in normalized for word in ("수정", "변경", "옮겨", "바꿔")) and has_time_range:
+        return (
+            "personal_update_saved_schedule",
+            ("personal_list_saved_schedules", "personal_update_saved_schedule"),
+        )
+    if "할 일" in normalized or "할일" in normalized or "알림" in normalized or "리마인더" in normalized:
+        if any(word in normalized for word in ("저장", "등록", "추가", "기억")):
+            return (
+                "save_structured_request",
+                ("extract_schedule_request", "save_structured_request"),
+            )
+    is_personal_create = (
+        any(word in normalized for word in ("내 일정", "개인 일정"))
+        and any(word in normalized for word in ("등록", "저장", "추가", "생성", "잡아"))
+        and has_time_range
+        and "참고자료" not in normalized
+    )
+    if is_personal_create:
+        return (
+            "personal_create_schedule",
+            ("extract_schedule_request", "personal_create_schedule"),
+        )
+    return None
+
+
+def _nana_read_retry_tool(query: str) -> str | None:
+    """명시적인 Nana RAG 출처 요청을 읽기 전용 교정 재시도 대상으로 분류합니다."""
+
+    normalized = " ".join(str(query).split())
+    if any(word in normalized for word in ("기억해", "저장해", "등록해", "추가해")):
+        return None
+    if any(phrase in normalized for phrase in ("앱의 이전 일반 대화", "이전 일반 대화")):
+        return "search_conversation_messages"
+    if "저장된 요청" in normalized or "저장 기록" in normalized:
+        return "search_saved_requests"
+    if "참고자료" in normalized or "식별 코드" in normalized:
+        return "search_personal_references"
+    return None
+
+
+def _retry_tool_evidence(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """재시도에 넘길 앞선 tool 결과만 JSON 직렬화 가능한 형태로 보존합니다."""
+
+    return [
+        {"tool_name": event.get("tool_name"), "content": event.get("content")}
+        for event in events
+        if event.get("event") == "tool_result" and event.get("tool_name")
+    ]
+
+
+def _last_tool_result(events: list[dict[str, Any]], tool: str) -> dict[str, Any] | None:
+    for event in reversed(events):
+        if event.get("event") == "tool_result" and event.get("tool_name") == tool:
+            content = event.get("content")
+            return content if isinstance(content, dict) else None
+    return None
+
+
+def _last_tool_arguments(events: list[dict[str, Any]], tool: str) -> dict[str, Any] | None:
+    for event in reversed(events):
+        if event.get("event") == "tool_call" and event.get("tool_name") == tool:
+            arguments = event.get("arguments")
+            return arguments if isinstance(arguments, dict) else None
+    return None
+
+
+def _remaining_sequence(sequence: tuple[str, ...], events: list[dict[str, Any]]) -> tuple[str, ...]:
+    observed = {
+        str(event.get("tool_name"))
+        for event in events
+        if event.get("event") == "tool_result"
+        and event.get("tool_name")
+        and (not isinstance(event.get("content"), dict) or event["content"].get("ok") is not False)
+    }
+    remaining = tuple(name for name in sequence if name not in observed)
+    return remaining or sequence[-1:]
+
+
+def _tools_named(tools: list[Any], names: tuple[str, ...]) -> list[Any]:
+    by_name = {tool_name(item): item for item in tools}
+    return [by_name[name] for name in names if name in by_name]
+
+
+def _nana_retry_agent(tool_names: tuple[str, ...]) -> Any:
+    """교정 시도에서는 남은 Nana 단계 외의 도구를 노출하지 않습니다."""
+
+    return create_agent(
+        model=chat_model(),
+        tools=_tools_named(week04_tools(), tool_names),
+        system_prompt=(
+            "너는 Nana workflow의 누락된 단계만 한 번 수행하는 교정 agent다. 사용자 메시지에 적힌 "
+            "원래 요청과 앞선 tool 결과를 읽고, 제공된 tool을 명시된 순서대로 반드시 호출한다. "
+            "todo는 날짜와 제목만 있어도 저장할 수 있고 시작·종료 시각은 선택 값이다. reminder는 사용자가 "
+            "말한 날짜·시각을 사용하며 말하지 않은 선택 값은 None 또는 빈 목록으로 둔다. "
+            "extract_schedule_request는 얇은 첫 단계이므로 None 필드를 필수 값 누락으로 오해하지 말고 원래 "
+            "사용자 요청에서 kind, title, date, start_time을 직접 읽어 최종 저장 tool 인자로 채운다. "
+            "제공된 마지막 tool의 결과를 받기 전에는 질문하거나 자연어 최종 답변을 만들지 않는다."
+        ),
+    )
+
+
+def _kana_retry_agent(tool_names: tuple[str, ...]) -> Any:
+    """교정 시도에서는 필요한 Kana 완료 단계만 노출합니다."""
+
+    return create_agent(
+        model=chat_model(),
+        tools=_tools_named(kana_tools(), tool_names),
+        system_prompt=(
+            kana_system_prompt()
+            + "\n이번 실행은 누락되거나 잘못 전달된 workflow를 한 번 교정하는 실행이다. 앞선 tool 결과를 "
+            "그대로 이어받고 제공된 남은 tool 결과 전에는 자연어 최종 답변을 만들지 않는다."
+        ),
+    )
+
+
+def _explicit_time_window(query: str) -> tuple[str, str] | None:
+    match = _EXPLICIT_WINDOW_PATTERN.search(" ".join(str(query).split()))
+    if match is None:
+        return None
+
+    def as_time(hour_name: str, minute_name: str, korean_minute_name: str) -> str:
+        hour = int(match.group(hour_name))
+        minute = int(match.group(minute_name) or match.group(korean_minute_name) or 0)
+        return f"{hour:02d}:{minute:02d}"
+
+    return (
+        as_time("start_hour", "start_minute", "start_korean_minute"),
+        as_time("end_hour", "end_minute", "end_korean_minute"),
+    )
+
+
+def _kana_decision_retry_reason(query: str, events: list[dict[str, Any]]) -> str | None:
+    """Kana 최종 결정이 앞선 검증 결과와 사용자 범위를 보존했는지 확인합니다."""
+
+    find_result = _last_tool_result(events, "find_common_available_slots")
+    decide_result = _last_tool_result(events, "decide_final_slot")
+    if find_result is None:
+        return "find_common_available_slots 결과 누락"
+    if decide_result is None:
+        return "decide_final_slot 결과 누락"
+
+    for source_key, decision_key in (
+        ("members", "members"),
+        ("busy_rows", "busy_rows"),
+        ("candidate_slots", "candidate_slots"),
+    ):
+        if find_result.get(source_key) != decide_result.get(decision_key):
+            return f"find 결과의 {source_key}가 decide 결과에 보존되지 않음"
+
+    explicit_window = _explicit_time_window(query)
+    if explicit_window is not None:
+        find_arguments = _last_tool_arguments(events, "find_common_available_slots") or {}
+        if (
+            find_arguments.get("workday_start") != explicit_window[0]
+            or find_arguments.get("workday_end") != explicit_window[1]
+        ):
+            return "사용자 명시 허용 시간 범위 불일치"
+    if _kana_broad_range_has_empty_candidates(events):
+        return "여러 날짜 범위의 후보 생성 누락"
+    return None
+
+
+def _kana_broad_range_has_empty_candidates(events: list[dict[str, Any]]) -> bool:
+    find_result = _last_tool_result(events, "find_common_available_slots")
+    find_arguments = _last_tool_arguments(events, "find_common_available_slots") or {}
+    return bool(
+        isinstance(find_result, dict)
+        and find_result.get("candidate_slots") == []
+        and find_arguments.get("date_from")
+        and find_arguments.get("date_to")
+        and normalize_date_bound(str(find_arguments["date_from"]))
+        != normalize_date_bound(str(find_arguments["date_to"]))
+    )
+
+
+def _known_empty_schedule_lookup(events: list[dict[str, Any]]) -> bool:
+    """수정·삭제 선행 조회가 성공했고 후보가 명확히 비었는지 확인합니다."""
+
+    for event in reversed(events):
+        if event.get("event") != "tool_result" or event.get("tool_name") != "personal_list_saved_schedules":
+            continue
+        content = event.get("content")
+        return isinstance(content, dict) and content.get("ok") is not False and content.get("schedules") == []
+    return False
+
+
+def _nana_retry_instruction(
+    query: str,
+    sequence: tuple[str, ...],
+    events: list[dict[str, Any]],
+) -> str:
+    sequence_text = " -> ".join(sequence)
+    evidence = json.dumps(_retry_tool_evidence(events), ensure_ascii=False)
+    return (
+        f"원래 사용자 요청:\n{query}\n\n"
+        f"앞선 tool 결과(JSON):\n{evidence}\n\n"
+        "이전 실행이 필요한 mutation tool 결과 없이 종료되었습니다. 앞선 결과를 그대로 이어받아 같은 요청을 "
+        f"한 번만 다시 수행하세요. 이번 실행에서 아직 남은 필수 단계는 {sequence_text}입니다. "
+        "이미 완료된 단계를 불필요하게 반복하지 말고 남은 단계를 순서대로 끝까지 실행한 뒤, 마지막 mutation "
+        "tool의 성공 결과를 받은 뒤에만 완료 답변을 만드세요. 필수 값이 실제로 부족하면 추측하거나 "
+        "mutation하지 말고 부족한 값만 질문하세요."
+    )
+
+
+def _nana_read_retry_instruction(query: str, expected_tool: str) -> str:
+    return (
+        f"원래 사용자 요청:\n{query}\n\n"
+        "이전 실행이 요청에 명시된 검색 출처와 다른 tool을 사용했거나 검색 tool 없이 종료되었습니다. "
+        f"이 요청은 읽기 전용이므로 {expected_tool}을 정확히 한 번 호출해 결과를 받은 뒤 그 결과만으로 답하세요."
+    )
+
+
+def _kana_required_terminal_tool(query: str) -> str | None:
+    """필수 입력이 명확한 Kana 비교·결정 요청의 완료 tool을 판별합니다."""
+
+    normalized = " ".join(str(query).split())
+    has_date = _EXPLICIT_DATE_PATTERN.search(normalized) is not None
+    has_named_participants = (
+        re.search(r"나와\s*\S+", normalized) is not None
+        or re.search(r"\S+와\s+\S+가", normalized) is not None
+    )
+    if not has_date or not has_named_participants:
+        return None
+    if "시간 결정은 하지 마" in normalized or "일정을 비교" in normalized:
+        return "collect_member_schedules"
+    if "회의" in normalized and any(word in normalized for word in ("최종", "정해", "결정")):
+        return "decide_final_slot"
+    return None
+
+
+def _kana_retry_instruction(
+    query: str,
+    terminal_tool: str,
+    events: list[dict[str, Any]],
+) -> str:
+    if terminal_tool == "collect_member_schedules":
+        workflow = "collect_member_schedules를 호출해 비교 결과를 받은 뒤 답하세요. 시간 결정 tool은 호출하지 마세요."
+    else:
+        find_result = _last_tool_result(events, "find_common_available_slots")
+        explicit_window = _explicit_time_window(query)
+        find_arguments = _last_tool_arguments(events, "find_common_available_slots") or {}
+        window_mismatch = explicit_window is not None and (
+            find_arguments.get("workday_start") != explicit_window[0]
+            or find_arguments.get("workday_end") != explicit_window[1]
+        )
+        requires_refind = window_mismatch or _kana_broad_range_has_empty_candidates(events)
+        if find_result is not None and not requires_refind:
+            workflow = (
+                "앞선 find_common_available_slots를 다시 호출하지 말고 그 결과의 members, busy_rows, "
+                "candidate_slots를 정확히 복사해 decide_final_slot만 호출하세요. 후보가 없으면 빈 list와 "
+                "final_slot=null, needs_agent_selection=true로 호출하세요."
+            )
+        else:
+            workflow = (
+                "알맞은 일정 조회 결과를 busy_rows로 그대로 보존하고 candidate_slots list를 직접 만든 뒤 "
+                "find_common_available_slots -> decide_final_slot까지 끝내세요. 후보가 없더라도 빈 list와 "
+                "final_slot=null, needs_agent_selection=true로 decide_final_slot을 반드시 호출하세요."
+            )
+    evidence = json.dumps(_retry_tool_evidence(events), ensure_ascii=False)
+    explicit_window = _explicit_time_window(query)
+    window_instruction = ""
+    if explicit_window is not None:
+        window_instruction = (
+            f" 사용자 명시 허용 시간은 {explicit_window[0]}부터 {explicit_window[1]}까지이므로 "
+            f"find_common_available_slots의 workday_start={explicit_window[0]}, "
+            f"workday_end={explicit_window[1]}로 고정하고 범위 밖 후보를 만들지 마세요."
+        )
+    return (
+        f"원래 사용자 요청:\n{query}\n\n"
+        f"앞선 tool 결과(JSON):\n{evidence}\n\n"
+        "이전 실행이 Kana workflow의 필수 완료 단계 전에 종료되었습니다. 앞선 tool 결과의 rows, 후보, 멤버를 "
+        "생략하거나 고쳐 쓰지 말고 그대로 이어받아 같은 요청을 안전하게 한 번만 다시 수행하세요. "
+        + workflow
+        + window_instruction
+    )
+
+
 @tool(args_schema=AgentQueryInput)
 def nana_agent(query: str) -> str:
-    """개인 일정과 개인 RAG 작업을 프롬프트 기반 Nana 하위 에이전트에게 위임합니다."""
+    """개인 일정과 개인 RAG 작업을 self-contained query로 Nana에게 위임합니다.
 
-    # TODO: Week 4 도구를 가진 Nana 하위 agent를 실행하고 answer/trace/inner_tool_names를 반환하세요.
-    #   - _NANA_SUBAGENT가 None일 때만 create_agent(model=chat_model(), tools=week04_tools(),
-    #     system_prompt=nana_system_prompt())로 만들고 이후에는 재사용합니다.
-    #   - query를 user 메시지로 invoke하고, extract_agent_events(...)와 extract_final_text(...)로
-    #     trace와 answer를 뽑습니다.
-    #   - selected_agent, answer, trace, inner_tool_names를 담은 JSON 문자열을 반환합니다.
-    ...
+    query에는 원래 멤버·날짜·시간·생성/수정/삭제/검색 의도를 보존합니다. 명시 필드가
+    충분한 mutation 요청이 mutation tool 없이 끝나면, 이미 mutation이 실행되지 않았고
+    조회 후보가 명확히 빈 경우도 아닐 때에만 교정 지시로 안전하게 한 번 재시도합니다.
+    """
+
+    global _NANA_SUBAGENT
+    if _NANA_SUBAGENT is None:
+        _NANA_SUBAGENT = create_agent(
+            model=chat_model(),
+            tools=week04_tools(),
+            system_prompt=nana_system_prompt(),
+        )
+
+    result = _NANA_SUBAGENT.invoke(
+        {"messages": [{"role": "user", "content": query}]}
+    )
+    events = extract_agent_events(result)
+    retry_count = 0
+    effective_events = events
+    retry_plan = _nana_mutation_retry_plan(query)
+    if retry_plan is not None:
+        mutation_tool, required_sequence = retry_plan
+        observed_tools = {
+            event.get("tool_name")
+            for event in events
+            if event.get("event") == "tool_result"
+            and (not isinstance(event.get("content"), dict) or event["content"].get("ok") is not False)
+        }
+        lookup_is_empty = (
+            mutation_tool in {"personal_update_saved_schedule", "personal_delete_saved_schedules"}
+            and _known_empty_schedule_lookup(events)
+        )
+        if mutation_tool not in observed_tools and not lookup_is_empty:
+            retry_count = 1
+            remaining_sequence = _remaining_sequence(required_sequence, events)
+            retry_result = _nana_retry_agent(remaining_sequence).invoke(
+                {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": _nana_retry_instruction(query, remaining_sequence, events),
+                        }
+                    ]
+                }
+            )
+            retry_events = extract_agent_events(retry_result)
+            events = [*events, *retry_events]
+            effective_events = events
+            result = retry_result
+    else:
+        expected_read_tool = _nana_read_retry_tool(query)
+        if expected_read_tool is not None and expected_read_tool not in _tool_call_names(events):
+            retry_count = 1
+            retry_result = _nana_retry_agent((expected_read_tool,)).invoke(
+                {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": _nana_read_retry_instruction(query, expected_read_tool),
+                        }
+                    ]
+                }
+            )
+            retry_events = extract_agent_events(retry_result)
+            events = [*events, *retry_events]
+            # 잘못 선택한 첫 읽기 전용 검색은 상태를 바꾸지 않으며 교정 결과로 대체됩니다.
+            # 전체 시도는 trace/attempted_inner_tool_names에 남기되 계약 검증은 교정 시도를 봅니다.
+            effective_events = retry_events
+            result = retry_result
+    payload = {
+        "selected_agent": "nana_agent",
+        "answer": extract_final_text(result),
+        "trace": events,
+        "inner_tool_names": _tool_call_names(effective_events),
+        "attempted_inner_tool_names": _tool_call_names(events),
+        "retry_count": retry_count,
+    }
+    return json.dumps(payload, ensure_ascii=False)
 
 
 @tool(args_schema=AgentQueryInput)
 def kana_agent(query: str) -> str:
-    """그룹 일정 종합 작업을 프롬프트 기반 Kana 하위 에이전트에게 위임합니다."""
+    """외부 멤버 일정과 그룹 조율을 self-contained query로 Kana에게 위임합니다.
 
-    # TODO: Kana 하위 agent를 실행하고 trace에서 final_slot_payload/final_decision_payload를 끌어올려 반환하세요.
-    #   - _KANA_SUBAGENT를 kana_tools()와 kana_system_prompt()로 한 번만 만들고 재사용합니다.
-    #   - trace event의 content를 훑어 final_slot이 들어 있는 dict와 final_decision 값을 찾습니다.
-    #   - answer, trace, inner_tool_names, final_slot_payload, final_decision_payload를 JSON으로 반환합니다.
-    ...
+    query에는 외부 멤버·날짜 범위·회의 길이·조회/비교/최종 결정 의도를 보존합니다.
+    Supervisor는 외부 일정이나 그룹 조율을 직접 답하지 말고 이 wrapper를 호출합니다.
+    """
+
+    global _KANA_SUBAGENT
+    if _KANA_SUBAGENT is None:
+        _KANA_SUBAGENT = create_agent(
+            model=chat_model(),
+            tools=kana_tools(),
+            system_prompt=kana_system_prompt(),
+        )
+
+    result = _KANA_SUBAGENT.invoke(
+        {"messages": [{"role": "user", "content": query}]}
+    )
+    events = extract_agent_events(result)
+    retry_count = 0
+    terminal_tool = _kana_required_terminal_tool(query)
+    retry_reason: str | None = None
+    if terminal_tool == "decide_final_slot":
+        retry_reason = _kana_decision_retry_reason(query, events)
+    elif terminal_tool is not None and terminal_tool not in _tool_call_names(events):
+        retry_reason = f"{terminal_tool} 호출 누락"
+    if retry_reason is not None:
+        retry_count = 1
+        if terminal_tool == "collect_member_schedules":
+            retry_tools = ("collect_member_schedules",)
+        else:
+            find_result = _last_tool_result(events, "find_common_available_slots")
+            explicit_window = _explicit_time_window(query)
+            find_arguments = _last_tool_arguments(events, "find_common_available_slots") or {}
+            window_mismatch = explicit_window is not None and (
+                find_arguments.get("workday_start") != explicit_window[0]
+                or find_arguments.get("workday_end") != explicit_window[1]
+            )
+            requires_refind = window_mismatch or _kana_broad_range_has_empty_candidates(events)
+            if find_result is not None and not requires_refind:
+                retry_tools = ("decide_final_slot",)
+            elif any(
+                _last_tool_result(events, source_tool) is not None
+                for source_tool in ("collect_member_schedules", "extract_schedules_from_history")
+            ):
+                retry_tools = ("find_common_available_slots", "decide_final_slot")
+            else:
+                retry_tools = (
+                    "collect_member_schedules",
+                    "find_common_available_slots",
+                    "decide_final_slot",
+                )
+        retry_result = _kana_retry_agent(retry_tools).invoke(
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": (
+                            f"교정 사유: {retry_reason}\n\n"
+                            + _kana_retry_instruction(query, terminal_tool, events)
+                        ),
+                    }
+                ]
+            }
+        )
+        events = [*events, *extract_agent_events(retry_result)]
+        result = retry_result
+    final_slot_payload: dict[str, Any] | None = None
+    final_decision_payload: dict[str, Any] | None = None
+    for event in events:
+        content = event.get("content")
+        if not isinstance(content, dict):
+            continue
+        if event.get("tool_name") == "decide_final_slot" and "final_slot" in content:
+            final_slot_payload = content
+        if isinstance(content.get("final_decision"), dict):
+            final_decision_payload = content["final_decision"]
+
+    payload = {
+        "selected_agent": "kana_agent",
+        "answer": extract_final_text(result),
+        "trace": events,
+        "inner_tool_names": _tool_call_names(events),
+        "final_slot_payload": final_slot_payload,
+        "final_decision_payload": final_decision_payload,
+        "retry_count": retry_count,
+    }
+    return json.dumps(payload, ensure_ascii=False)
+
+
+_SUPERVISOR_REQUEST_KEYWORDS = (
+    "일정",
+    "회의",
+    "할 일",
+    "할일",
+    "알림",
+    "리마인더",
+    "참고자료",
+    "저장된 요청",
+    "이전 일반 대화",
+    "공유",
+    "바쁜",
+)
+
+
+def _message_text(message: Any) -> str:
+    if isinstance(message, dict):
+        return str(message.get("content") or "")
+    return str(getattr(message, "content", "") or "")
+
+
+def _requires_supervisor_delegation(messages: list[Any]) -> bool:
+    """일정·저장·RAG 범위 요청에만 Supervisor wrapper 재시도를 허용합니다."""
+
+    last_user_text = ""
+    for message in reversed(messages):
+        role = message.get("role") if isinstance(message, dict) else getattr(message, "type", None)
+        if role in {"user", "human"}:
+            last_user_text = _message_text(message)
+            break
+    return any(keyword in last_user_text for keyword in _SUPERVISOR_REQUEST_KEYWORDS)
+
+
+def _supervisor_wrapper_observed(result: dict[str, Any]) -> bool:
+    return any(
+        event.get("tool_name") in {"nana_agent", "kana_agent"}
+        for event in extract_agent_events(result)
+        if event.get("event") in {"tool_call", "tool_result"}
+    )
+
+
+def _last_user_text(messages: list[Any]) -> str:
+    for message in reversed(messages):
+        role = message.get("role") if isinstance(message, dict) else getattr(message, "type", None)
+        if role in {"user", "human"}:
+            return _message_text(message)
+    return ""
+
+
+def _app_tomorrow_iso() -> str:
+    return (date.fromisoformat(current_app_date_iso()) + timedelta(days=1)).isoformat()
+
+
+def _supervisor_retry_reason(result: dict[str, Any], messages: list[Any]) -> str | None:
+    """wrapper 선택과 self-contained query의 명시적 계약 위반만 재시도합니다."""
+
+    events = extract_agent_events(result)
+    wrapper_calls = [
+        event
+        for event in events
+        if event.get("event") == "tool_call"
+        and event.get("tool_name") in {"nana_agent", "kana_agent"}
+    ]
+    if not wrapper_calls:
+        if any(
+            event.get("event") == "tool_result"
+            and event.get("tool_name") in {"nana_agent", "kana_agent"}
+            for event in events
+        ):
+            return None
+        return "담당 wrapper 호출 누락"
+
+    call = wrapper_calls[-1]
+    selected_agent = call.get("tool_name")
+    arguments = call.get("arguments")
+    wrapper_query = str(arguments.get("query") or "") if isinstance(arguments, dict) else ""
+    original = _last_user_text(messages)
+
+    if "저장된 요청 기록" in original:
+        if selected_agent != "nana_agent":
+            return "저장된 요청 기록 검색은 nana_agent 담당"
+        if "저장된" not in wrapper_query or "검색" not in wrapper_query:
+            return "wrapper query에서 저장된 요청 기록이라는 검색 출처가 누락됨"
+
+    owner_match = re.search(r"(?P<owner>[^\s]+)의\s+.*바쁜 일정", original)
+    is_external_busy_lookup = bool(
+        owner_match and owner_match.group("owner") not in {"나", "내", "저", "제"}
+    )
+    if is_external_busy_lookup and selected_agent != "kana_agent":
+        return "외부 멤버의 바쁜 일정 조회는 kana_agent 담당"
+
+    if "내일" in original:
+        tomorrow = _app_tomorrow_iso()
+        if tomorrow not in wrapper_query:
+            return f"상대 날짜 내일을 절대 날짜 {tomorrow}로 변환하지 않음"
+    return None
+
+
+def _supervisor_retry_instruction(messages: list[Any], reason: str) -> str:
+    original = _last_user_text(messages)
+    correction = ""
+    if "저장된 요청 기록" in original:
+        correction = (
+            " nana_agent를 호출하고 query에 '앱에 저장된 요청 기록에서'라는 출처와 검색 의도를 보존하세요."
+        )
+    if "내일" in original:
+        correction += (
+            f" 외부 멤버 일정이므로 kana_agent를 호출하고 '내일'을 {_app_tomorrow_iso()}로 바꿔 "
+            "date_from과 date_to가 같은 날짜인 완결된 조회 요청을 전달하세요."
+        )
+    return (
+        f"직전 위임의 교정 사유: {reason}. 원래 사용자 요청은 '{original}'입니다. "
+        "담당 wrapper 하나를 정확히 한 번만 다시 호출하고 query를 self-contained하게 만드세요."
+        + correction
+    )
+
+
+class Week06SupervisorRetryAgent:
+    """wrapper 미호출만 안전하게 한 번 교정하는 Week 6 invoke adapter입니다."""
+
+    def __init__(self, agent: Any):
+        self._agent = agent
+
+    def invoke(self, payload: dict[str, Any], *args: Any, **kwargs: Any) -> dict[str, Any]:
+        result = self._agent.invoke(payload, *args, **kwargs)
+        messages = list(payload.get("messages") or [])
+        if not _requires_supervisor_delegation(messages):
+            if isinstance(result, dict):
+                result["supervisor_retry_count"] = 0
+            return result
+        retry_reason = _supervisor_retry_reason(result, messages)
+        if retry_reason is None:
+            if isinstance(result, dict):
+                result["supervisor_retry_count"] = 0
+            return result
+
+        retry_payload = dict(payload)
+        retry_payload["messages"] = [
+            *messages,
+            {
+                "role": "user",
+                "content": _supervisor_retry_instruction(messages, retry_reason),
+            },
+        ]
+        retry_result = self._agent.invoke(retry_payload, *args, **kwargs)
+        if isinstance(retry_result, dict):
+            retry_result["supervisor_retry_count"] = 1
+        return retry_result
+
+    def stream(self, payload: dict[str, Any], *args: Any, **kwargs: Any) -> Any:
+        """stream에서도 wrapper 미호출을 확인한 뒤 안전하게 한 번만 재시도합니다."""
+
+        collected_messages: list[Any] = []
+        for chunk in self._agent.stream(payload, *args, **kwargs):
+            collected_messages.extend(stream_chunk_messages(chunk))
+            yield chunk
+
+        messages = list(payload.get("messages") or [])
+        first_result = {"messages": collected_messages}
+        if _supervisor_wrapper_observed(first_result) or not _requires_supervisor_delegation(messages):
+            return
+
+        retry_payload = dict(payload)
+        retry_payload["messages"] = [
+            *messages,
+            {
+                "role": "user",
+                "content": (
+                    "직전 일정·저장·RAG 요청을 Supervisor가 직접 답하지 마세요. 역할 경계에 따라 "
+                    "nana_agent 또는 kana_agent 중 담당 wrapper 하나를 정확히 한 번 호출하세요. "
+                    "wrapper query는 직전 사용자 요청의 모든 조건을 보존한 self-contained 요청이어야 합니다."
+                ),
+            },
+        ]
+        yield from self._agent.stream(retry_payload, *args, **kwargs)
 
 
 def build_langchain_supervisor_agent() -> object:
@@ -505,10 +1303,12 @@ def build_langchain_supervisor_agent() -> object:
 
     global _SUPERVISOR_AGENT
     if _SUPERVISOR_AGENT is None:
-        _SUPERVISOR_AGENT = create_agent(
-            model=chat_model(),
-            tools=supervisor_tools(),
-            system_prompt=supervisor_system_prompt(),
+        _SUPERVISOR_AGENT = Week06SupervisorRetryAgent(
+            create_agent(
+                model=chat_model(),
+                tools=supervisor_tools(),
+                system_prompt=supervisor_system_prompt(),
+            )
         )
     return _SUPERVISOR_AGENT
 
