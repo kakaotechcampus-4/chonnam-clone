@@ -14,6 +14,7 @@ from fixed.external_people_store import (
     external_schedule_summary,
     normalize_external_member_names,
     normalize_external_schedule_date_bounds,
+    strip_parenthetical_text,
 )
 from fixed.llm import chat_model
 from fixed.mcp_client import (
@@ -283,6 +284,39 @@ def _structured_request_from_schedule_row(row: dict[str, Any]) -> StructuredRequ
     )
 
 
+def _my_schedule_notes(request: StructuredRequest) -> str:
+    """내 일정 row가 개인 일정인지, 참석자가 있는 그룹 일정인지 설명합니다."""
+
+    if request.kind != "group_schedule":
+        return "Nana 개인 일정"
+    members = [str(member).strip() for member in (request.members or []) if str(member).strip()]
+    return f"Nana 그룹 일정 · 참석자: {', '.join(members)}" if members else "Nana 그룹 일정"
+
+
+def _dedupe_schedule_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """같은 일정이 앱 DB와 공유 저장소 양쪽에서 들어와도 한 번만 남깁니다.
+
+    앱 DB에 저장된 내 일정은 공유 저장소에도 자동 동기화되므로, member_names에 "나"가
+    들어온 호출에서는 같은 일정이 두 경로로 들어온다. 앞에 오는 앱 DB row를 남긴다.
+
+    두 경로가 같은 일정을 서로 다르게 다듬기 때문에 값을 그대로 비교하면 안 된다.
+      - 공유 저장소는 제목에서 소괄호를 지우고 공백을 하나로 줄인다. 앱 DB는 원문을 둔다.
+      - 앱 DB 경로만 end_time "미정"을 실제 시간으로 바꾸는 경우가 있어 end_time은 키에서 뺀다.
+      - start_time이 비어 있으면 공유 저장소는 "미정"으로 저장하므로 같은 값으로 맞춘다.
+    """
+
+    deduped: dict[tuple[str, ...], dict[str, Any]] = {}
+    for row in rows:
+        key = (
+            str(row.get("member_name") or "").strip(),
+            str(row.get("date") or "").strip(),
+            str(row.get("start_time") or "").strip() or "미정",
+            strip_parenthetical_text(str(row.get("title") or "")),
+        )
+        deduped.setdefault(key, row)
+    return list(deduped.values())
+
+
 def _collect_member_schedules(
     *,
     member_names: list[str],
@@ -309,7 +343,7 @@ def _collect_member_schedules(
                 "date": structured.date,
                 "start_time": structured.start_time,
                 "end_time": structured.end_time,
-                "notes": None,
+                "notes": _my_schedule_notes(structured),
             }
         )
     external_payload = json.loads(
@@ -324,7 +358,7 @@ def _collect_member_schedules(
     )
     external_rows = external_payload.get("rows", [])
 
-    rows = [*my_rows, *external_rows]
+    rows = _dedupe_schedule_rows([*my_rows, *external_rows])
     return {"rows": rows, "schedule_summary": external_schedule_summary(rows)}
 
 
@@ -475,7 +509,10 @@ def week05_prompt_parts() -> list[str]:
             "대상이지 search_previous_conversations 대상이 아니다. conversation_id를 찾았으면 "
             "load_conversation_messages로 전체 메시지를 읽는다.\n"
             "(B) '철수는 이번 주에 언제 바빠?'처럼 특정 팀원 한두 명의 busy-time만 물으면 "
-            "extract_schedules_from_history를 바로 사용한다.\n"
+            "extract_schedules_from_history를 바로 사용한다. '이번 주'/'다음 주'처럼 상대적 기간 "
+            "표현이 나오면 extract_schedule_request로 구조화하지 말고(그 tool은 일정 저장/생성 요청 "
+            "구조화용이라 조회에는 맞지 않는다), 시스템 프롬프트에 있는 오늘 날짜를 기준으로 date_from/"
+            "date_to를 직접 계산해 바로 extract_schedules_from_history에 넘긴다.\n"
             "(C) '나랑 철수, 영희 다 같이 언제 비어?'처럼 나를 포함한 여러 명의 일정을 한 번에 봐야 하면 "
             "collect_member_schedules를 사용한다. 이 tool은 내 일정과 팀원 busy-time을 이미 합쳐서 주므로 "
             "extract_schedules_from_history와 별도로 내 일정을 다시 조회할 필요는 없다.\n"
